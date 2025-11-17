@@ -1,0 +1,22 @@
+{
+  "manifest_version": 2,
+  "name": "Info Density Analyzer",
+  "version": "1.0",
+  "description": "Analyze information density of the current page using a local FastAPI service.",
+  "browser_action": {
+    "default_title": "Analyze info density"
+  },
+"permissions": [
+  "activeTab",
+  "http://127.0.0.1:8000/*"
+],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"]
+    }
+  ]
+}
