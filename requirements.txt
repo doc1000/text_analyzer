@@ -1,5 +1,0 @@
-fastapi
-pydantic
-spacy
-uvicorn
-jupyter

@@ -1,5 +1,5 @@
-# save as main.py
-from fastapi import FastAPI
+# save as app/main.py
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import spacy
@@ -7,11 +7,16 @@ import spacy
 import gzip
 import math
 import uvicorn
-from .db import SessionLocal
+from sqlalchemy.orm import Session
+from .db import SessionLocal, init_db
+from .schemas import IngestPayload
+from . import models
 
 nlp = spacy.load("en_core_web_sm")
 
 app = FastAPI()
+
+init_db()
 
 def get_db():
     db = SessionLocal()
@@ -74,8 +79,36 @@ def analyze(data: Input):
         "score": score,
         "lexical_density": lexical_density,
         "specificity": specificity,
-        "compression_ratio": ratio
+        "compression_ratio": ratio,
+        "infoScore": score,
+        "aiScore": ratio
     }
+
+from . import models
+
+@app.post("/ingest")
+def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
+    # Use captured_at from payload if provided, else now
+    captured_at = payload.captured_at or datetime.utcnow()
+
+    doc = models.Document(
+        url=payload.url,
+        title=payload.title,
+        full_text=payload.text,
+        score_info=payload.score_info,
+        score_ai_slop=payload.score_ai_slop,
+        captured_at=captured_at,
+    )
+
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+
+    return {
+        "status": "ok",
+        "document_id": str(doc.id),
+    }
+
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt

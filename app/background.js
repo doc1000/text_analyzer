@@ -2,7 +2,6 @@
 
 async function analyzeCurrentTab(tab) {
   try {
-    // Ask content script for the page text
     const response = await browser.tabs.sendMessage(tab.id, {
       type: "collect-text"
     });
@@ -17,26 +16,30 @@ async function analyzeCurrentTab(tab) {
       return;
     }
 
-    // Send text to local FastAPI analyzer
-    const res = await fetch("http://localhost:8000/analyze", {
+    // Call your /analyzer endpoint (existing logic)
+    const res = await fetch("http://localhost:8000/analyzer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text })
     });
 
     if (!res.ok) {
-      throw new Error("Analyzer HTTP error: " + res.status);
+      const errText = await res.text();
+      await browser.tabs.sendMessage(tab.id, {
+        type: "show-error",
+        error: `Analyzer error: ${res.status} ${errText}`
+      });
+      return;
     }
 
     const result = await res.json();
 
-    // Send the result back to the content script to display
+    // Show overlay with result
     await browser.tabs.sendMessage(tab.id, {
       type: "show-result",
       result
     });
   } catch (e) {
-    console.error("Error analyzing page:", e);
     try {
       await browser.tabs.sendMessage(tab.id, {
         type: "show-error",
@@ -48,4 +51,37 @@ async function analyzeCurrentTab(tab) {
   }
 }
 
-browser.browserAction.onClicked.addListener(analyzeCurrentTab);
+async function sendToBackend(payload) {
+  try {
+    const res = await fetch("http://localhost:8000/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      console.error("Backend ingest error:", res.status, await res.text());
+    } else {
+      console.log("Ingest success:", await res.json());
+    }
+  } catch (err) {
+    console.error("Failed POST to backend:", err);
+  }
+}
+
+// SINGLE click handler
+browser.browserAction.onClicked.addListener(async (tab) => {
+  console.log("Trust Badger clicked on tab", tab.id);
+
+  // 1) Run analyzer flow
+  await analyzeCurrentTab(tab);
+
+  // 2) Get full capture payload for ingestion
+  try {
+    const response = await browser.tabs.sendMessage(tab.id, { type: "CAPTURE_PAGE" });
+    console.log("Payload from content script:", response);
+    await sendToBackend(response);
+  } catch (err) {
+    console.error("Error communicating with content script:", err);
+  }
+});
