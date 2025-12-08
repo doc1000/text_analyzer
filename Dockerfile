@@ -15,6 +15,8 @@ COPY app/requirements.txt /app/requirements.txt
 # Install Python deps
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+RUN python -m spacy download en_core_web_sm
+
 # Copy the app code
 COPY app /app/app
 
