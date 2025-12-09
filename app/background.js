@@ -1,18 +1,21 @@
-async function analyzeCurrentTab(tab) {
-  console.log("[TB] analyzeCurrentTab called for tab", tab.id);
+// background.js
+
+async function analyzeAndIngest(tab) {
+  console.log("[TB] analyzeAndIngest for tab", tab.id);
 
   try {
-    // 1) Ask content script for text
-    const response = await browser.tabs.sendMessage(tab.id, {
+    // 1) Ask content script for page text (and optionally title/url)
+    const pageData = await browser.tabs.sendMessage(tab.id, {
       type: "collect-text"
     });
 
-    console.log("[TB] collect-text response:", response);
+    const text = pageData && pageData.text ? pageData.text : "";
+    const url = pageData && pageData.url ? pageData.url : tab.url;
+    const title = pageData && pageData.title ? pageData.title : tab.title;
 
-    const text = response && response.text ? response.text : "";
+    console.log("[TB] collect-text response:", { textLength: text.length, url, title });
 
     if (!text || text.trim().length === 0) {
-      console.warn("[TB] No text returned from collect-text");
       await browser.tabs.sendMessage(tab.id, {
         type: "show-error",
         error: "No text content found on this page."
@@ -20,34 +23,63 @@ async function analyzeCurrentTab(tab) {
       return;
     }
 
-    // 2) POST to /analyzer – NOTE: endpoint name and payload shape
-    const res = await fetch("http://localhost:8000/analyzer", {
+    // 2) Call /analyzer with the text
+    const analyzerRes = await fetch("http://localhost:8000/analyzer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text })
     });
 
-    console.log("[TB] /analyzer status:", res.status);
+    console.log("[TB] /analyzer status:", analyzerRes.status);
 
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error("[TB] Analyzer error:", res.status, errText);
+    if (!analyzerRes.ok) {
+      const errText = await analyzerRes.text();
+      console.error("[TB] Analyzer error:", analyzerRes.status, errText);
       await browser.tabs.sendMessage(tab.id, {
         type: "show-error",
-        error: `Analyzer error: ${res.status} ${errText}`
+        error: `Analyzer error: ${analyzerRes.status} ${errText}`
       });
       return;
     }
 
-    const result = await res.json();
-    console.log("[TB] Analyzer result:", result);
+    const analyzerResult = await analyzerRes.json();
+    console.log("[TB] Analyzer result:", analyzerResult);
 
+    // 3) Show the pretty overlay using analyzerResult
     await browser.tabs.sendMessage(tab.id, {
       type: "show-result",
-      result
+      result: analyzerResult
     });
+
+    // 4) Build ingest payload that INCLUDES the scores from analyzer
+    const ingestPayload = {
+      url,
+      title,
+      text,
+      score_info: analyzerResult.infoScore,
+      score_ai_slop: analyzerResult.aiScore,
+      captured_at: new Date().toISOString()
+    };
+
+    console.log("[TB] ingest payload:", ingestPayload);
+
+    const ingestRes = await fetch("http://localhost:8000/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ingestPayload)
+    });
+
+    console.log("[TB] /ingest status:", ingestRes.status);
+
+    if (!ingestRes.ok) {
+      console.error("[TB] ingest error:", ingestRes.status, await ingestRes.text());
+    } else {
+      const ingestResult = await ingestRes.json();
+      console.log("[TB] ingest success:", ingestResult);
+    }
+
   } catch (e) {
-    console.error("[TB] analyzeCurrentTab exception:", e);
+    console.error("[TB] analyzeAndIngest exception:", e);
     try {
       await browser.tabs.sendMessage(tab.id, {
         type: "show-error",
@@ -59,40 +91,8 @@ async function analyzeCurrentTab(tab) {
   }
 }
 
-async function sendToBackend(payload) {
-  console.log("[TB] sendToBackend payload:", payload);
-  try {
-    const res = await fetch("http://localhost:8000/ingest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    console.log("[TB] /ingest status:", res.status);
-
-    if (!res.ok) {
-      console.error("[TB] Backend ingest error:", res.status, await res.text());
-    } else {
-      console.log("[TB] Ingest success:", await res.json());
-    }
-  } catch (err) {
-    console.error("[TB] Failed POST to backend:", err);
-  }
-}
-
-// Single click handler: analyze + ingest
+// SINGLE click handler
 browser.browserAction.onClicked.addListener(async (tab) => {
   console.log("[TB] Icon clicked on tab", tab.id);
-
-  // 1) Analyzer flow
-  await analyzeCurrentTab(tab);
-
-  // 2) Ingest flow
-  try {
-    const response = await browser.tabs.sendMessage(tab.id, { type: "CAPTURE_PAGE" });
-    console.log("[TB] CAPTURE_PAGE response:", response);
-    await sendToBackend(response);
-  } catch (err) {
-    console.error("[TB] Error during CAPTURE_PAGE:", err);
-  }
+  await analyzeAndIngest(tab);
 });
