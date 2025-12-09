@@ -21,6 +21,8 @@ services:
     restart: unless-stopped
     depends_on:
       - db
+    env_file:
+      - .env        # <-- this loads OPENAI_API_KEY and other secrets
     environment:
       # SQLAlchemy-style URL; adjust to your taste
       DATABASE_URL: postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb
