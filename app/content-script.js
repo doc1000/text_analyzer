@@ -9,8 +9,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "collect-text") {
     const text = extractPageText();
     console.log("[TB CS] collect-text returning", text.length, "chars");
-    sendResponse({ text });
-    return true; // async/sync ok
+
+    sendResponse({
+      text,
+      url: window.location.href,
+      title: document.title
+    });
+    return true;
   }
 
   if (message.type === "show-result") {
@@ -32,27 +37,6 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // allow other listeners to run
   return false;
-});
-
-// Handle CAPTURE_PAGE for ingest
-browser.runtime.onMessage.addListener((message, sender) => {
-  if (message.type === "CAPTURE_PAGE") {
-    console.log("[TB CS] CAPTURE_PAGE received");
-    const text = extractPageText();
-
-    // TODO: plug in your real scores; dummy for now
-    const infoScore = window.infoScore ?? null;
-    const aiScore = window.aiScore ?? null;
-
-    return Promise.resolve({
-      url: window.location.href,
-      title: document.title,
-      text,
-      score_info: infoScore,
-      score_ai_slop: aiScore,
-      captured_at: new Date().toISOString()
-    });
-  }
 });
 
 
