@@ -47,8 +47,8 @@ def test_db(db: Session = Depends(get_db)):
 class Input(BaseModel):
     text: str
 
-@app.post("/analyze")
-def analyze(data: Input):
+@app.post("/analyzer")
+def analyzer(data: Input):
     text = data.text
     doc = nlp(text)
     
