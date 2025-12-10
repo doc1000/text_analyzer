@@ -4,152 +4,375 @@
   <meta charset="UTF-8">
   <title>Trust Badger Vault</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 1.5rem; }
-    h1 { margin-bottom: 0.5rem; }
-    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; font-size: 0.9rem; }
-    th { background: #f4f4f4; text-align: left; }
-    .flex { display: flex; gap: 1rem; align-items: flex-start; }
-    .pane { flex: 1; }
-    textarea { width: 100%; height: 6rem; }
-    .hit { border: 1px solid #ddd; padding: 0.5rem; margin-bottom: 0.5rem; }
-    .hit-meta { font-size: 0.8rem; color: #555; margin-bottom: 0.25rem; }
-    .answer { padding: 0.75rem; background: #f8fafc; border: 1px solid #cbd5f5; margin-top: 0.5rem; }
-    .tag { font-size: 0.75rem; padding: 0.1rem 0.3rem; border-radius: 3px; background: #eee; margin-left: 0.25rem; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      font-size: 1.3rem;
+      margin: 0;
+    }
+
+    header .controls {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      font-size: 0.9rem;
+    }
+
+    header input[type="number"] {
+      width: 4rem;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    header button {
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    header button:hover {
+      background: #1f2937;
+    }
+
+    main {
+      padding: 0;
+      margin: 0;
+      height: calc(100vh - 60px);
+      display: flex;
+      flex-direction: row;
+    }
+
+    #bubble-container {
+      flex: 1;
+      position: relative;
+    }
+
+    #bubble-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: pointer;
+    }
+
+    #info-panel {
+      width: 320px;
+      max-width: 40vw;
+      border-left: 1px solid #1f2937;
+      padding: 0.75rem 0.9rem;
+      box-sizing: border-box;
+      font-size: 0.9rem;
+      background: #020617;
+      overflow-y: auto;
+    }
+
+    #info-panel h2 {
+      font-size: 1rem;
+      margin: 0 0 0.4rem 0;
+    }
+
+    #info-panel h3 {
+      font-size: 0.95rem;
+      margin: 0.6rem 0 0.3rem 0;
+    }
+
+    #info-panel p {
+      margin: 0 0 0.4rem 0;
+      line-height: 1.3;
+    }
+
+    #info-panel .meta {
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Tooltip */
+    #tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(15,23,42,0.95);
+      color: #e5e7eb;
+      padding: 0.3rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      border: 1px solid #4b5563;
+      z-index: 10;
+      opacity: 0;
+      transition: opacity 0.1s ease-out;
+      max-width: 260px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .hint {
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin-top: 0.3rem;
+    }
+
+    a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
-  <h1>Trust Badger Vault</h1>
-
-  <div class="flex">
-    <div class="pane">
-      <h2>Saved documents</h2>
-      <button id="refreshDocs">Refresh</button>
-      <table id="docsTable">
-        <thead>
-          <tr>
-            <th>Captured</th>
-            <th>Title</th>
-            <th>URL</th>
-            <th>Info score</th>
-            <th>AI slop</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+  <header>
+    <h1>Trust Badger · Topic Map</h1>
+    <div class="controls">
+      <span>Days:</span>
+      <input type="number" id="daysInput" value="30" min="1" max="365" />
+      <button id="reloadBtn">Reload</button>
+      <span class="hint">Click big bubbles to zoom · click document bubbles to open</span>
     </div>
+  </header>
 
-    <div class="pane">
-      <h2>Query</h2>
-      <textarea id="queryInput" placeholder="Ask something across your reading..."></textarea><br />
-      <label>
-        Top K: <input type="number" id="topK" value="5" min="1" max="20" />
-      </label>
-      <button id="runQuery">Search</button>
-
-      <div id="answerContainer"></div>
-      <div id="hitsContainer"></div>
+  <main>
+    <div id="bubble-container">
+      <svg id="bubble-svg"></svg>
+      <div id="tooltip"></div>
     </div>
-  </div>
+    <aside id="info-panel">
+      <h2>Topic Details</h2>
+      <p>Select a topic, subtopic, or document bubble to see more information.</p>
+      <div id="info-content"></div>
+    </aside>
+  </main>
+
+  <!-- D3 -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <script>
-    const API_BASE = "http://localhost:8000";
+    const API_BASE = "http://localhost:8000"; // adjust if needed
 
-    async function fetchDocuments() {
-      const res = await fetch(`${API_BASE}/documents`);
-      const docs = await res.json();
-      const tbody = document.querySelector("#docsTable tbody");
-      tbody.innerHTML = "";
+    const svg = d3.select("#bubble-svg");
+    const width = svg.node().clientWidth || 800;
+    const height = svg.node().clientHeight || 600;
 
-      docs.forEach(doc => {
-        const tr = document.createElement("tr");
+    const tooltip = d3.select("#tooltip");
+    const infoContent = document.getElementById("info-content");
 
-        const capturedTd = document.createElement("td");
-        capturedTd.textContent = new Date(doc.captured_at).toLocaleString();
+    const color = d3.scaleOrdinal(d3.schemeTableau10);
 
-        const titleTd = document.createElement("td");
-        titleTd.textContent = doc.title || "(no title)";
+    let rootNode;
+    let focusNode;
+    let view;
 
-        const urlTd = document.createElement("td");
-        const a = document.createElement("a");
-        a.href = doc.url;
-        a.target = "_blank";
-        a.textContent = "open";
-        urlTd.appendChild(a);
+    function updateInfoPanel(d) {
+      const data = d.data;
+      infoContent.innerHTML = "";
 
-        const infoTd = document.createElement("td");
-        infoTd.textContent = doc.score_info !== null ? doc.score_info.toFixed(3) : "";
+      const el = document.createElement("div");
 
-        const aiTd = document.createElement("td");
-        aiTd.textContent = doc.score_ai_slop !== null ? doc.score_ai_slop.toFixed(3) : "";
+      const title = document.createElement("h3");
+      title.textContent = data.name || "(no name)";
+      el.appendChild(title);
 
-        tr.appendChild(capturedTd);
-        tr.appendChild(titleTd);
-        tr.appendChild(urlTd);
-        tr.appendChild(infoTd);
-        tr.appendChild(aiTd);
-
-        tbody.appendChild(tr);
-      });
-    }
-
-    async function runQuery() {
-      const query = document.getElementById("queryInput").value.trim();
-      const topK = parseInt(document.getElementById("topK").value, 10);
-
-      if (!query) {
-        alert("Type a query first.");
-        return;
+      // Topic/subtopic summaries
+      if (data.summary) {
+        const summaryP = document.createElement("p");
+        summaryP.textContent = data.summary;
+        el.appendChild(summaryP);
       }
 
-      const res = await fetch(`${API_BASE}/query`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, top_k: topK, with_answer: true })
-      });
+      // Document metadata
+      if (data.url) {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const a = document.createElement("a");
+        a.href = data.url;
+        a.target = "_blank";
+        a.textContent = "Open document";
+        meta.appendChild(a);
 
+        if (data.score_info != null || data.score_ai_slop != null) {
+          const scores = document.createElement("div");
+          scores.textContent = ` info: ${data.score_info ?? ""} · ai slop: ${data.score_ai_slop ?? ""}`;
+          meta.appendChild(scores);
+        }
+
+        if (data.captured_at) {
+          const dt = document.createElement("div");
+          const dateStr = new Date(data.captured_at).toLocaleString();
+          dt.textContent = ` captured: ${dateStr}`;
+          meta.appendChild(dt);
+        }
+
+        el.appendChild(meta);
+      } else {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = "Aggregated topic / subtopic";
+        el.appendChild(meta);
+      }
+
+      infoContent.appendChild(el);
+    }
+
+    function showTooltip(event, d) {
+      const data = d.data;
+      let line = data.name || "";
+      tooltip.text(line);
+      const [x, y] = d3.pointer(event);
+      tooltip
+        .style("left", (x + 16) + "px")
+        .style("top", (y + 16) + "px")
+        .style("opacity", 1);
+    }
+
+    function hideTooltip() {
+      tooltip.style("opacity", 0);
+    }
+
+    function zoomTo(v) {
+      const k = width / (v[2] * 2);
+      view = v;
+      const transform = d => `translate(${(d.x - v[0]) * k + width / 2},${(d.y - v[1]) * k + height / 2})`;
+
+      node.attr("transform", transform);
+      circle.attr("r", d => d.r * k);
+    }
+
+    function zoom(d) {
+      focusNode = d;
+
+      const transition = svg.transition()
+        .duration(750)
+        .tween("zoom", () => {
+          const i = d3.interpolateZoom(view, [focusNode.x, focusNode.y, focusNode.r * 2]);
+          return t => zoomTo(i(t));
+        });
+
+      transition.selectAll("text.label")
+        .filter(function(n) { return n.parent === focusNode || this.style.display === "inline"; })
+        .style("opacity", n => n.parent === focusNode ? 1 : 0)
+        .on("end", function(n) {
+          this.style.display = n.parent === focusNode ? "inline" : "none";
+        });
+    }
+
+    let circle, node;
+
+    async function renderBubbleMap(days = 30) {
+      svg.selectAll("*").remove(); // clear
+      tooltip.style("opacity", 0);
+      infoContent.innerHTML = "<p>Loading topics…</p>";
+
+      const res = await fetch(`${API_BASE}/topics/hierarchy?days=${days}`);
       const data = await res.json();
 
-      const answerDiv = document.getElementById("answerContainer");
-      const hitsDiv = document.getElementById("hitsContainer");
-      answerDiv.innerHTML = "";
-      hitsDiv.innerHTML = "";
+      // Build hierarchy
+      const root = d3.hierarchy(data)
+        .sum(d => d.size || 1)
+        .sort((a, b) => (b.value || 0) - (a.value || 0));
 
-      if (data.answer) {
-        const box = document.createElement("div");
-        box.className = "answer";
-        box.textContent = data.answer;
-        answerDiv.appendChild(box);
-      }
+      const pack = d3.pack()
+        .size([width, height])
+        .padding(4);
 
-      data.hits.forEach((hit, idx) => {
-        const div = document.createElement("div");
-        div.className = "hit";
+      const packedRoot = pack(root);
+      rootNode = packedRoot;
+      focusNode = packedRoot;
+      view = [rootNode.x, rootNode.y, rootNode.r * 2];
 
-        const meta = document.createElement("div");
-        meta.className = "hit-meta";
-        meta.innerHTML = `
-          <strong>${idx + 1}.</strong>
-          ${hit.document_title || "(no title)"}
-          <span class="tag">dist: ${hit.distance.toFixed(3)}</span>
-          <span class="tag">info: ${hit.score_info?.toFixed?.(2) ?? ""}</span>
-          <a href="${hit.url}" target="_blank">open</a>
-        `;
+      const nodes = rootNode.descendants().filter(d => d.depth > 0); // skip root circle
 
-        const text = document.createElement("div");
-        text.textContent = hit.chunk_text;
+      // Groups for each node
+      node = svg.selectAll("g.node")
+        .data(nodes)
+        .join("g")
+        .attr("class", "node")
+        .attr("transform", d => `translate(${d.x},${d.y})`);
 
-        div.appendChild(meta);
-        div.appendChild(text);
-        hitsDiv.appendChild(div);
+      // Circles
+      circle = node.append("circle")
+        .attr("class", "bubble")
+        .attr("r", d => d.r)
+        .attr("fill", d => {
+          if (d.depth === 1) return color(d.data.topic_id || d.data.name);
+          if (d.depth === 2) return d3.color(color(d.parent.data.topic_id || d.parent.data.name)).brighter(0.5);
+          return "#0f172a";
+        })
+        .attr("fill-opacity", d => d.depth === 3 ? 0.5 : 0.9)
+        .attr("stroke", "#020617")
+        .attr("stroke-width", 1)
+        .on("mouseover", (event, d) => showTooltip(event, d))
+        .on("mouseout", hideTooltip)
+        .on("click", (event, d) => {
+          event.stopPropagation();
+          const hasChildren = !!d.children && d.children.length > 0;
+          if (hasChildren) {
+            zoom(d);
+            updateInfoPanel(d);
+          } else if (d.data.url) {
+            // Leaf doc node: open link
+            window.open(d.data.url, "_blank");
+            updateInfoPanel(d);
+          } else {
+            updateInfoPanel(d);
+          }
+        });
+
+      // Text labels (for topics/subtopics, not docs)
+      node.append("text")
+        .attr("class", "label")
+        .attr("text-anchor", "middle")
+        .attr("dy", "0.32em")
+        .style("pointer-events", "none")
+        .style("fill", "#e5e7eb")
+        .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.75rem")
+        .style("opacity", d => d.depth <= 2 ? 1 : 0)
+        .text(d => {
+          const name = d.data.name || "";
+          // Shorten long labels
+          return name.length > 22 ? name.slice(0, 20) + "…" : name;
+        });
+
+      // Initial zoom
+      zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
+      infoContent.innerHTML = "<p>Click a topic bubble to see details.</p>";
+
+      // Reset zoom on background click
+      svg.on("click", () => {
+        zoom(rootNode);
+        infoContent.innerHTML = "<p>Click a topic, subtopic, or document bubble to see details.</p>";
       });
     }
 
-    document.getElementById("refreshDocs").addEventListener("click", fetchDocuments);
-    document.getElementById("runQuery").addEventListener("click", runQuery);
+    // Controls
+    document.getElementById("reloadBtn").addEventListener("click", () => {
+      const days = parseInt(document.getElementById("daysInput").value, 10) || 30;
+      renderBubbleMap(days);
+    });
 
-    // initial load
-    fetchDocuments();
+    // Initial load
+    renderBubbleMap(30);
   </script>
 </body>
 </html>

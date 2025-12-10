@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from sklearn.metrics.pairwise import cosine_similarity
 import umap
-import hdbscan
+from sklearn.cluster import KMeans
 from openai import OpenAI
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
 
@@ -273,10 +273,31 @@ def compute_topics(
         )
         return TopicsResponse(time_range_days=days, topics=[single_topic])
 
-        # Build matrix of embeddings for deduped docs
+    # Build matrix of embeddings for deduped docs
     deduped_docs = [d for d in deduped_docs if d.id in doc_embeddings]
     if len(deduped_docs) < min_docs_for_clustering:
         # if embeddings filtered out too much
+        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
+        title, summary = _generate_title_and_summary(deduped_docs)
+        single_topic = Topic(
+            topic_id="T0",
+            title=title,
+            summary=summary,
+            documents_count=len(topic_docs),
+            subtopics=[
+                Subtopic(
+                    subtopic_id="T0-S0",
+                    title=title,
+                    summary=summary,
+                    documents=topic_docs,
+                )
+            ],
+        )
+        return TopicsResponse(time_range_days=days, topics=[single_topic])
+    # Build matrix of embeddings for deduped docs
+    deduped_docs = [d for d in deduped_docs if d.id in doc_embeddings]
+    if len(deduped_docs) < min_docs_for_clustering:
+        # embeddings filtered out too much
         topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
         title, summary = _generate_title_and_summary(deduped_docs)
         single_topic = Topic(
@@ -298,8 +319,8 @@ def compute_topics(
     X = np.stack([doc_embeddings[d.id] for d in deduped_docs], axis=0)
     n_docs = X.shape[0]
 
-    # ---------- NEW: handle small-N safely ----------
-    # For very small N, skip UMAP/HDBSCAN and treat as a single topic.
+    # ---------- small-N guard ----------
+    # For very small N, skip UMAP/clustering and treat as a single topic.
     if n_docs < 6:
         topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
         title, summary = _generate_title_and_summary(deduped_docs)
@@ -320,40 +341,50 @@ def compute_topics(
         return TopicsResponse(time_range_days=days, topics=[single_topic])
 
     # Make UMAP parameters respect dataset size
-    n_neighbors = max(2, min(15, n_docs - 1))
-    n_components = max(2, min(5, n_docs - 1))
+    const_max_neighbors = 15
+    const_max_components = 5
+
+    const_neighbors = max(2, min(const_max_neighbors, n_docs - 1))
+    const_components = max(2, min(const_max_components, n_docs - 1))
 
     # 5) UMAP dimensionality reduction
     reducer = umap.UMAP(
-        n_neighbors=n_neighbors,
+        n_neighbors=const_neighbors,
         min_dist=0.1,
-        n_components=n_components,
+        n_components=const_components,
         metric="cosine",
         random_state=42,
+        init="random",   # avoid spectral init / eigsh
     )
     X_reduced = reducer.fit_transform(X)
 
+    # ---------- Top-level clustering with KMeans ----------
 
-    # 6) Top-level clustering with HDBSCAN
-    clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=min_cluster_size,
-        metric="euclidean",
-        cluster_selection_method="eom",
+    def choose_k(num_docs: int) -> int:
+        # Heuristic: between 3 and 10 clusters depending on N
+        base = int(np.sqrt(num_docs / 2))
+        return max(3, min(10, base))
+
+    k_topics = choose_k(n_docs)
+
+    kmeans = KMeans(
+        n_clusters=k_topics,
+        random_state=42,
+        n_init="auto"
     )
-    labels = clusterer.fit_predict(X_reduced)
+    labels = kmeans.fit_predict(X_reduced)
 
-    # Labels: -1 = noise
-    unique_labels = sorted(set(labels))
-    topic_labels = [l for l in unique_labels if l != -1]
+    topic_labels = sorted(set(labels))  # e.g. [0,1,2,...]
 
     topics: List[Topic] = []
 
     # Map from original index to doc
     idx_to_doc = {i: d for i, d in enumerate(deduped_docs)}
 
-    # Helper to build subtopics via a second-level HDBSCAN
+    # Helper to build subtopics via a second-level KMeans
     def build_subtopics(topic_docs_indices: List[int], parent_topic_id: str, parent_title: str) -> List[Subtopic]:
-        if len(topic_docs_indices) < 5:
+        num_topic_docs = len(topic_docs_indices)
+        if num_topic_docs < 5:
             # Small topic: single subtopic with all docs
             docs_list = [idx_to_doc[i] for i in topic_docs_indices]
             docs_out = [TopicDoc.model_validate(d) for d in docs_list]
@@ -366,34 +397,23 @@ def compute_topics(
                 )
             ]
 
-        # Second-level clustering on reduced vectors for docs in this topic
+        # Second-level KMeans clustering on reduced vectors for docs in this topic
         X_topic = np.stack([X_reduced[i] for i in topic_docs_indices], axis=0)
-        sub_clusterer = hdbscan.HDBSCAN(
-            min_cluster_size=3,
-            metric="euclidean",
-            cluster_selection_method="eom",
-        )
-        sub_labels = sub_clusterer.fit_predict(X_topic)
-        unique_sub_labels = sorted(set(sub_labels))
+        # Choose a small k for subtopics, e.g. 2–4
+        def choose_k_sub(n: int) -> int:
+            return max(2, min(4, int(np.sqrt(n / 3)) or 2))
 
-        # If second-level clustering fails or trivial, fallback to one subtopic
-        if len(unique_sub_labels) <= 1:
-            docs_list = [idx_to_doc[i] for i in topic_docs_indices]
-            docs_out = [TopicDoc.model_validate(d) for d in docs_list]
-            return [
-                Subtopic(
-                    subtopic_id=f"{parent_topic_id}-S0",
-                    title=parent_title,
-                    summary=None,
-                    documents=docs_out,
-                )
-            ]
+        k_sub = choose_k_sub(num_topic_docs)
+
+        sub_kmeans = KMeans(
+            n_clusters=k_sub,
+            random_state=42,
+            n_init="auto"
+        )
+        sub_labels = sub_kmeans.fit_predict(X_topic)  # values 0..k_sub-1
 
         subtopics: List[Subtopic] = []
-        for s_label in unique_sub_labels:
-            if s_label == -1:
-                continue  # optional: skip noise here or bucket it
-
+        for s_label in sorted(set(sub_labels)):
             sub_indices = [topic_docs_indices[i] for i, sl in enumerate(sub_labels) if sl == s_label]
             docs_list = [idx_to_doc[i] for i in sub_indices]
             docs_out = [TopicDoc.model_validate(d) for d in docs_list]
@@ -429,7 +449,7 @@ def compute_topics(
         topic_doc_indices = [i for i, lbl in enumerate(labels) if lbl == cluster_label]
         docs_list = [idx_to_doc[i] for i in topic_doc_indices]
 
-        # Generate title & summary
+        # Generate title & summary for this top-level topic
         topic_title, topic_summary = _generate_title_and_summary(docs_list)
 
         subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title)
@@ -442,28 +462,6 @@ def compute_topics(
             subtopics=subtopics,
         )
         topics.append(topic)
-
-    # Optionally handle noise docs (label == -1) as a "Misc" topic
-    noise_indices = [i for i, lbl in enumerate(labels) if lbl == -1]
-    if noise_indices:
-        docs_list = [idx_to_doc[i] for i in noise_indices]
-        docs_out = [TopicDoc.model_validate(d) for d in docs_list]
-        misc_title, misc_summary = _generate_title_and_summary(docs_list)
-        misc_topic = Topic(
-            topic_id="T-misc",
-            title=misc_title or "Miscellaneous",
-            summary=misc_summary,
-            documents_count=len(docs_list),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T-misc-S0",
-                    title=misc_title or "Miscellaneous",
-                    summary=misc_summary,
-                    documents=docs_out,
-                )
-            ],
-        )
-        topics.append(misc_topic)
 
     return TopicsResponse(time_range_days=days, topics=topics)
 
