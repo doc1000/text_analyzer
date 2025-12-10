@@ -1,4 +1,5 @@
 # save as app/main.py
+## IMPORTS
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +16,7 @@ from . import models
 from .models import Chunk, Document
 from .helpers import chunk_text, get_embedding, EMBED_DIM, _answer_from_hits
 from .helpers import DocumentOut, QueryRequest, ChunkHit, QueryResponse
-from .topics import compute_topics, TopicsResponse
+from .topics import compute_topics, TopicsResponse, build_topics_hierarchy
 from datetime import datetime
 from typing import List
 from fastapi.staticfiles import StaticFiles
@@ -210,6 +211,15 @@ def get_topics(days: int = 30, db: Session = Depends(get_db)):
     Return hierarchical topics for documents in the last `days` days.
     """
     return compute_topics(db, days=days)
+
+@app.get("/topics/hierarchy")
+def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
+    """
+    Return a D3-friendly hierarchy representation of topics and subtopics
+    for the last `days` days of documents.
+    """
+    topics_resp = compute_topics(db, days=days)
+    return build_topics_hierarchy(topics_resp)
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt
