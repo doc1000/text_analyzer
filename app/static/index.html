@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Trust Badger Vault</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; }
+    h1 { margin-bottom: 0.5rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; font-size: 0.9rem; }
+    th { background: #f4f4f4; text-align: left; }
+    .flex { display: flex; gap: 1rem; align-items: flex-start; }
+    .pane { flex: 1; }
+    textarea { width: 100%; height: 6rem; }
+    .hit { border: 1px solid #ddd; padding: 0.5rem; margin-bottom: 0.5rem; }
+    .hit-meta { font-size: 0.8rem; color: #555; margin-bottom: 0.25rem; }
+    .answer { padding: 0.75rem; background: #f8fafc; border: 1px solid #cbd5f5; margin-top: 0.5rem; }
+    .tag { font-size: 0.75rem; padding: 0.1rem 0.3rem; border-radius: 3px; background: #eee; margin-left: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Trust Badger Vault</h1>
+
+  <div class="flex">
+    <div class="pane">
+      <h2>Saved documents</h2>
+      <button id="refreshDocs">Refresh</button>
+      <table id="docsTable">
+        <thead>
+          <tr>
+            <th>Captured</th>
+            <th>Title</th>
+            <th>URL</th>
+            <th>Info score</th>
+            <th>AI slop</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="pane">
+      <h2>Query</h2>
+      <textarea id="queryInput" placeholder="Ask something across your reading..."></textarea><br />
+      <label>
+        Top K: <input type="number" id="topK" value="5" min="1" max="20" />
+      </label>
+      <button id="runQuery">Search</button>
+
+      <div id="answerContainer"></div>
+      <div id="hitsContainer"></div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "http://localhost:8000";
+
+    async function fetchDocuments() {
+      const res = await fetch(`${API_BASE}/documents`);
+      const docs = await res.json();
+      const tbody = document.querySelector("#docsTable tbody");
+      tbody.innerHTML = "";
+
+      docs.forEach(doc => {
+        const tr = document.createElement("tr");
+
+        const capturedTd = document.createElement("td");
+        capturedTd.textContent = new Date(doc.captured_at).toLocaleString();
+
+        const titleTd = document.createElement("td");
+        titleTd.textContent = doc.title || "(no title)";
+
+        const urlTd = document.createElement("td");
+        const a = document.createElement("a");
+        a.href = doc.url;
+        a.target = "_blank";
+        a.textContent = "open";
+        urlTd.appendChild(a);
+
+        const infoTd = document.createElement("td");
+        infoTd.textContent = doc.score_info !== null ? doc.score_info.toFixed(3) : "";
+
+        const aiTd = document.createElement("td");
+        aiTd.textContent = doc.score_ai_slop !== null ? doc.score_ai_slop.toFixed(3) : "";
+
+        tr.appendChild(capturedTd);
+        tr.appendChild(titleTd);
+        tr.appendChild(urlTd);
+        tr.appendChild(infoTd);
+        tr.appendChild(aiTd);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function runQuery() {
+      const query = document.getElementById("queryInput").value.trim();
+      const topK = parseInt(document.getElementById("topK").value, 10);
+
+      if (!query) {
+        alert("Type a query first.");
+        return;
+      }
+
+      const res = await fetch(`${API_BASE}/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, top_k: topK, with_answer: true })
+      });
+
+      const data = await res.json();
+
+      const answerDiv = document.getElementById("answerContainer");
+      const hitsDiv = document.getElementById("hitsContainer");
+      answerDiv.innerHTML = "";
+      hitsDiv.innerHTML = "";
+
+      if (data.answer) {
+        const box = document.createElement("div");
+        box.className = "answer";
+        box.textContent = data.answer;
+        answerDiv.appendChild(box);
+      }
+
+      data.hits.forEach((hit, idx) => {
+        const div = document.createElement("div");
+        div.className = "hit";
+
+        const meta = document.createElement("div");
+        meta.className = "hit-meta";
+        meta.innerHTML = `
+          <strong>${idx + 1}.</strong>
+          ${hit.document_title || "(no title)"}
+          <span class="tag">dist: ${hit.distance.toFixed(3)}</span>
+          <span class="tag">info: ${hit.score_info?.toFixed?.(2) ?? ""}</span>
+          <a href="${hit.url}" target="_blank">open</a>
+        `;
+
+        const text = document.createElement("div");
+        text.textContent = hit.chunk_text;
+
+        div.appendChild(meta);
+        div.appendChild(text);
+        hitsDiv.appendChild(div);
+      });
+    }
+
+    document.getElementById("refreshDocs").addEventListener("click", fetchDocuments);
+    document.getElementById("runQuery").addEventListener("click", runQuery);
+
+    // initial load
+    fetchDocuments();
+  </script>
+</body>
+</html>

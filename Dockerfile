@@ -7,18 +7,17 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Workdir = project root inside container
+WORKDIR /code
 
-# Copy requirement file
-COPY app/requirements.txt /app/requirements.txt
-
-# Install Python deps
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Copy requirements and install first (for layer caching)
+COPY app/requirements.txt /code/requirements.txt
+RUN pip install --no-cache-dir -r /code/requirements.txt
 
 RUN python -m spacy download en_core_web_sm
 
 # Copy the app code
-COPY app /app/app
+COPY app /code/app
 
 # Expose FastAPI port
 EXPOSE 8000
