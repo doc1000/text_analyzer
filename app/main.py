@@ -7,6 +7,7 @@ import spacy
 import gzip
 import math
 import uvicorn
+import os
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from .db import SessionLocal, init_db
@@ -17,6 +18,7 @@ from .helpers import chunk_text, get_embedding, EMBED_DIM, _answer_from_hits
 from .helpers import DocumentOut, QueryRequest, ChunkHit, QueryResponse
 from datetime import datetime
 from typing import List
+from fastapi.staticfiles import StaticFiles
 
 
 nlp = spacy.load("en_core_web_sm")
@@ -203,6 +205,11 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
 
     return QueryResponse(answer=answer, hits=hits)
 
+# Path: /code/app/static inside container
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+#print("STATIC DIR:", STATIC_DIR)  # optional debug
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt

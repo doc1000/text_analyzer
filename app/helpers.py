@@ -23,7 +23,8 @@ class DocumentOut(BaseModel):
     captured_at: datetime
 
     class Config:
-        orm_mode = True
+        #orm_mode = True
+        from_attributes = True
         #model_config = ConfigDict(from_attributes=True)
 
 
