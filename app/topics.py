@@ -273,7 +273,7 @@ def compute_topics(
         )
         return TopicsResponse(time_range_days=days, topics=[single_topic])
 
-    # Build matrix of embeddings for deduped docs
+        # Build matrix of embeddings for deduped docs
     deduped_docs = [d for d in deduped_docs if d.id in doc_embeddings]
     if len(deduped_docs) < min_docs_for_clustering:
         # if embeddings filtered out too much
@@ -296,16 +296,43 @@ def compute_topics(
         return TopicsResponse(time_range_days=days, topics=[single_topic])
 
     X = np.stack([doc_embeddings[d.id] for d in deduped_docs], axis=0)
+    n_docs = X.shape[0]
 
-    # 5) UMAP dimensionality reduction (for clustering stability and future visualization)
+    # ---------- NEW: handle small-N safely ----------
+    # For very small N, skip UMAP/HDBSCAN and treat as a single topic.
+    if n_docs < 6:
+        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
+        title, summary = _generate_title_and_summary(deduped_docs)
+        single_topic = Topic(
+            topic_id="T0",
+            title=title,
+            summary=summary,
+            documents_count=len(topic_docs),
+            subtopics=[
+                Subtopic(
+                    subtopic_id="T0-S0",
+                    title=title,
+                    summary=summary,
+                    documents=topic_docs,
+                )
+            ],
+        )
+        return TopicsResponse(time_range_days=days, topics=[single_topic])
+
+    # Make UMAP parameters respect dataset size
+    n_neighbors = max(2, min(15, n_docs - 1))
+    n_components = max(2, min(5, n_docs - 1))
+
+    # 5) UMAP dimensionality reduction
     reducer = umap.UMAP(
-        n_neighbors=15,
+        n_neighbors=n_neighbors,
         min_dist=0.1,
-        n_components=5,
+        n_components=n_components,
         metric="cosine",
         random_state=42,
     )
     X_reduced = reducer.fit_transform(X)
+
 
     # 6) Top-level clustering with HDBSCAN
     clusterer = hdbscan.HDBSCAN(
@@ -439,3 +466,51 @@ def compute_topics(
         topics.append(misc_topic)
 
     return TopicsResponse(time_range_days=days, topics=topics)
+
+# ---------- convert TopicResponse into D3-friendly hierarchy ----------
+
+def build_topics_hierarchy(resp: TopicsResponse) -> dict:
+    """
+    Convert TopicsResponse into a D3-friendly hierarchy:
+    root -> topics -> subtopics -> documents
+    """
+    root = {
+        "name": "root",
+        "time_range_days": resp.time_range_days,
+        "children": []
+    }
+
+    for topic in resp.topics:
+        topic_node = {
+            "name": f"{topic.title} ({topic.documents_count})",
+            "topic_id": topic.topic_id,
+            "summary": topic.summary,
+            "children": []
+        }
+
+        for sub in topic.subtopics:
+            sub_node = {
+                "name": f"{sub.title} ({len(sub.documents)})",
+                "subtopic_id": sub.subtopic_id,
+                "summary": sub.summary,
+                "children": []
+            }
+
+            for doc in sub.documents:
+                doc_node = {
+                    "name": doc.title or "(no title)",
+                    "doc_id": str(doc.id),
+                    "url": doc.url,
+                    "score_info": doc.score_info,
+                    "score_ai_slop": doc.score_ai_slop,
+                    "captured_at": doc.captured_at.isoformat(),
+                    # D3 circle packing will use this as bubble size
+                    "size": 1
+                }
+                sub_node["children"].append(doc_node)
+
+            topic_node["children"].append(sub_node)
+
+        root["children"].append(topic_node)
+
+    return root
