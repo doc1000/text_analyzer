@@ -9,48 +9,14 @@ import math
 import uvicorn
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from pgvector.sqlalchemy import cosine_similarity
 from .db import SessionLocal, init_db
 from .schemas import IngestPayload
 from . import models
 from .models import Chunk, Document
 from .helpers import chunk_text, get_embedding, EMBED_DIM, _answer_from_hits
+from .helpers import DocumentOut, QueryRequest, ChunkHit, QueryResponse
 from datetime import datetime
 from typing import List
-
-## BaseModel Classes - could be moved
-class DocumentOut(BaseModel):
-    id: str
-    url: str
-    title: str | None
-    score_info: float | None
-    score_ai_slop: float | None
-    captured_at: datetime
-
-    class Config:
-        orm_mode = True
-
-
-class QueryRequest(BaseModel):
-    query: str
-    top_k: int = 5
-    with_answer: bool = True
-
-
-class ChunkHit(BaseModel):
-    document_id: str
-    document_title: str | None
-    url: str
-    score_info: float | None
-    score_ai_slop: float | None
-    chunk_index: int
-    chunk_text: str
-    distance: float
-
-
-class QueryResponse(BaseModel):
-    answer: str | None
-    hits: List[ChunkHit]
 
 
 nlp = spacy.load("en_core_web_sm")
@@ -200,12 +166,13 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     # 1) Embed the query
     q_emb = get_embedding(payload.query)
 
-    # 2) Vector search over chunks, joined to documents
-    similarity_expr  = cosine_similarity(Chunk.embedding, q_emb)
+    # 2) cosine distance → similarity
+    similarity_expr = 1 - Chunk.embedding.cosine_distance(q_emb)
 
     rows = (
         db.query(Chunk, Document, similarity_expr.label("similarity"))
         .join(Document, Chunk.document_id == Document.id)
+        .filter(Chunk.embedding != None)  # ← ignore NULL embeddings
         .order_by(similarity_expr.desc())
         .limit(payload.top_k)
         .all()
@@ -213,6 +180,10 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
 
     hits: List[ChunkHit] = []
     for chunk, doc, similarity in rows:
+        if similarity is None:
+            # extra safety, shouldn't hit if filter above works
+            continue
+
         hits.append(
             ChunkHit(
                 document_id=str(doc.id),
@@ -226,7 +197,6 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
             )
         )
 
-    # 3) Optionally call an LLM to synthesize an answer
     answer = None
     if payload.with_answer and hits:
         answer = _answer_from_hits(payload.query, hits)
