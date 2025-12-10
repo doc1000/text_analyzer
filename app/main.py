@@ -3,19 +3,19 @@ from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import spacy
-#import zlib
 import gzip
-import math
+#import math
 import uvicorn
 import os
 from sqlalchemy.orm import Session
-from sqlalchemy import select
-from .db import SessionLocal, init_db
+#from sqlalchemy import select
+from .db import init_db, get_db
 from .schemas import IngestPayload
 from . import models
 from .models import Chunk, Document
 from .helpers import chunk_text, get_embedding, EMBED_DIM, _answer_from_hits
 from .helpers import DocumentOut, QueryRequest, ChunkHit, QueryResponse
+from .topics import compute_topics, TopicsResponse
 from datetime import datetime
 from typing import List
 from fastapi.staticfiles import StaticFiles
@@ -26,13 +26,6 @@ nlp = spacy.load("en_core_web_sm")
 app = FastAPI()
 
 init_db()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # Allow extension + localhost
 app.add_middleware(
@@ -210,6 +203,13 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 #print("STATIC DIR:", STATIC_DIR)  # optional debug
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/topics", response_model=TopicsResponse)
+def get_topics(days: int = 30, db: Session = Depends(get_db)):
+    """
+    Return hierarchical topics for documents in the last `days` days.
+    """
+    return compute_topics(db, days=days)
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt
