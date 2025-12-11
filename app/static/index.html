@@ -32,13 +32,18 @@
       font-size: 0.9rem;
     }
 
-    header input[type="number"] {
-      width: 4rem;
+    header input[type="number"],
+    header select {
       padding: 0.1rem 0.3rem;
       border-radius: 4px;
       border: 1px solid #4b5563;
       background: #020617;
       color: #e5e7eb;
+      font-size: 0.85rem;
+    }
+
+    header input[type="number"] {
+      width: 4rem;
     }
 
     header button {
@@ -148,6 +153,14 @@
     <div class="controls">
       <span>Days:</span>
       <input type="number" id="daysInput" value="30" min="1" max="365" />
+
+      <!-- NEW: visualization mode selector -->
+      <span>Viz:</span>
+      <select id="vizMode">
+        <option value="classic" selected>Classic</option>
+        <option value="multicolor">Multicolored</option>
+      </select>
+
       <button id="reloadBtn">Reload</button>
       <span class="hint">Click big bubbles to zoom · click document bubbles to open</span>
     </div>
@@ -178,11 +191,17 @@
     const tooltip = d3.select("#tooltip");
     const infoContent = document.getElementById("info-content");
 
-    const color = d3.scaleOrdinal(d3.schemeTableau10);
+    const topicColorScale = d3.scaleOrdinal(d3.schemeTableau10);
 
     let rootNode;
     let focusNode;
     let view;
+
+    let nodeGroup;     // holds circle groups
+    let labelGroup;    // holds labels
+    let node;          // selection of g.node
+    let circle;        // selection of circles
+    let labels;        // selection of text labels
 
     function updateInfoPanel(d) {
       const data = d.data;
@@ -194,14 +213,12 @@
       title.textContent = data.name || "(no name)";
       el.appendChild(title);
 
-      // Topic/subtopic summaries
       if (data.summary) {
         const summaryP = document.createElement("p");
         summaryP.textContent = data.summary;
         el.appendChild(summaryP);
       }
 
-      // Document metadata
       if (data.url) {
         const meta = document.createElement("div");
         meta.className = "meta";
@@ -240,9 +257,11 @@
       let line = data.name || "";
       tooltip.text(line);
       const [x, y] = d3.pointer(event);
+      const containerRect = document.getElementById("bubble-container").getBoundingClientRect();
+
       tooltip
-        .style("left", (x + 16) + "px")
-        .style("top", (y + 16) + "px")
+        .style("left", (containerRect.left + x + 16) + "px")
+        .style("top", (containerRect.top + y + 16) + "px")
         .style("opacity", 1);
     }
 
@@ -250,13 +269,37 @@
       tooltip.style("opacity", 0);
     }
 
+    function findTopicAncestor(d) {
+      const anc = d.ancestors().find(a => a.depth === 1);
+      return anc || d;
+    }
+
+    // Same-family colors, darker at top, lighter down
+    function colorByTopicDepth(d) {
+      const topicNode = findTopicAncestor(d);
+      const baseName = topicNode.data.topic_id || topicNode.data.name || "default";
+      let base = topicColorScale(baseName);
+      let c = d3.color(base) || d3.color("#4b5563");
+
+      if (d.depth === 1) {
+        return c.formatHex();
+      } else if (d.depth === 2) {
+        return c.brighter(0.6).formatHex();
+      } else {
+        return c.brighter(1.2).formatHex();
+      }
+    }
+
     function zoomTo(v) {
       const k = width / (v[2] * 2);
       view = v;
-      const transform = d => `translate(${(d.x - v[0]) * k + width / 2},${(d.y - v[1]) * k + height / 2})`;
+
+      const transform = d =>
+        `translate(${(d.x - v[0]) * k + width / 2},${(d.y - v[1]) * k + height / 2})`;
 
       node.attr("transform", transform);
       circle.attr("r", d => d.r * k);
+      labels.attr("transform", transform);
     }
 
     function zoom(d) {
@@ -269,15 +312,54 @@
           return t => zoomTo(i(t));
         });
 
+      // NEW: when zoomed into a node, show labels for its children only (no label for the parent bubble)
       transition.selectAll("text.label")
-        .filter(function(n) { return n.parent === focusNode || this.style.display === "inline"; })
-        .style("opacity", n => n.parent === focusNode ? 1 : 0)
+        .style("opacity", n => (n.parent === d) ? 1 : 0)
         .on("end", function(n) {
-          this.style.display = n.parent === focusNode ? "inline" : "none";
+          this.style.display = (n.parent === d) ? "inline" : "none";
         });
     }
 
-    let circle, node;
+    // Multi-line wrapping helper
+    function wrapLabel(selection, maxChars) {
+      selection.each(function(d) {
+        const text = d3.select(this);
+        const full = text.text();
+        const words = full.split(/\s+/).filter(Boolean);
+
+        if (full.length <= maxChars || words.length <= 1) {
+          return;
+        }
+
+        text.text(null);
+
+        let line = [];
+        let lineNumber = 0;
+        const lineHeight = 1.1; // em
+        const y = 0;
+        const dy = parseFloat(text.attr("dy")) || 0;
+        let tspan = text.append("tspan")
+          .attr("x", 0)
+          .attr("y", y)
+          .attr("dy", dy + "em");
+
+        for (const word of words) {
+          line.push(word);
+          tspan.text(line.join(" "));
+          if (tspan.text().length > maxChars && line.length > 1) {
+            line.pop();
+            tspan.text(line.join(" "));
+            line = [word];
+            lineNumber += 1;
+            tspan = text.append("tspan")
+              .attr("x", 0)
+              .attr("y", y)
+              .attr("dy", (dy + lineNumber * lineHeight) + "em")
+              .text(word);
+          }
+        }
+      });
+    }
 
     async function renderBubbleMap(days = 30) {
       svg.selectAll("*").remove(); // clear
@@ -287,7 +369,6 @@
       const res = await fetch(`${API_BASE}/topics/hierarchy?days=${days}`);
       const data = await res.json();
 
-      // Build hierarchy
       const root = d3.hierarchy(data)
         .sum(d => d.size || 1)
         .sort((a, b) => (b.value || 0) - (a.value || 0));
@@ -301,25 +382,27 @@
       focusNode = packedRoot;
       view = [rootNode.x, rootNode.y, rootNode.r * 2];
 
-      const nodes = rootNode.descendants().filter(d => d.depth > 0); // skip root circle
+      const nodes = rootNode.descendants().filter(d => d.depth > 0); // skip root
 
-      // Groups for each node
-      node = svg.selectAll("g.node")
+      // Layers: circles then labels
+      nodeGroup = svg.append("g").attr("class", "nodes");
+      labelGroup = svg.append("g").attr("class", "labels");
+
+      node = nodeGroup.selectAll("g.node")
         .data(nodes)
         .join("g")
         .attr("class", "node")
         .attr("transform", d => `translate(${d.x},${d.y})`);
 
-      // Circles
       circle = node.append("circle")
         .attr("class", "bubble")
         .attr("r", d => d.r)
-        .attr("fill", d => {
-          if (d.depth === 1) return color(d.data.topic_id || d.data.name);
-          if (d.depth === 2) return d3.color(color(d.parent.data.topic_id || d.parent.data.name)).brighter(0.5);
-          return "#0f172a";
+        .attr("fill", d => colorByTopicDepth(d))
+        .attr("fill-opacity", d => {
+          if (d.depth === 1) return 0.9;
+          if (d.depth === 2) return 0.75;
+          return 0.6;
         })
-        .attr("fill-opacity", d => d.depth === 3 ? 0.5 : 0.9)
         .attr("stroke", "#020617")
         .attr("stroke-width", 1)
         .on("mouseover", (event, d) => showTooltip(event, d))
@@ -331,7 +414,6 @@
             zoom(d);
             updateInfoPanel(d);
           } else if (d.data.url) {
-            // Leaf doc node: open link
             window.open(d.data.url, "_blank");
             updateInfoPanel(d);
           } else {
@@ -339,40 +421,73 @@
           }
         });
 
-      // Text labels (for topics/subtopics, not docs)
-      node.append("text")
+      // Labels: separate layer, styled to pop on any background
+      labels = labelGroup.selectAll("text.label")
+        .data(nodes)
+        .join("text")
         .attr("class", "label")
         .attr("text-anchor", "middle")
-        .attr("dy", "0.32em")
+        // Shift baseline upward so labels sit closer to the top of circles
+        .attr("dy", d => d.depth === 1 ? "-0.6em" : "-0.4em")
+        .attr("transform", d => `translate(${d.x},${d.y})`)
         .style("pointer-events", "none")
-        .style("fill", "#e5e7eb")
+        // Inverted colors: dark text with light outline
+        .style("fill", "#020617")          // dark fill
+        .style("stroke", "#f9fafb")        // light outline
+        .style("stroke-width", d => d.depth === 1 ? 2 : 1.5)
+        .style("paint-order", "stroke fill") // draw outline first, then fill
         .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.75rem")
-        .style("opacity", d => d.depth <= 2 ? 1 : 0)
+        // Initial: show only top-level topic labels
+        .style("display", d => d.depth === 1 ? "inline" : "none")
+        .style("opacity", d => d.depth === 1 ? 1 : 0)
         .text(d => {
-          const name = d.data.name || "";
-          // Shorten long labels
-          return name.length > 22 ? name.slice(0, 20) + "…" : name;
+          const raw = d.data.name || "";
+          // Remove trailing " (number)" from the label, e.g. "Topic Name (7)" -> "Topic Name"
+          return raw.replace(/\s*\(\d+\)\s*$/, "");
         });
 
-      // Initial zoom
-      zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
-      infoContent.innerHTML = "<p>Click a topic bubble to see details.</p>";
+      // Wrap labels to multiple lines if needed
+      labels.call(wrapLabel, 16);
 
-      // Reset zoom on background click
+      // Ensure labels are above nodes
+      labelGroup.raise();
+
+
+      zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
+      infoContent.innerHTML = "<p>Click a topic bubble to see details. Zoom in to see subtopics.</p>";
+
+      // Reset zoom & labels on background click: restore top-level labels only
       svg.on("click", () => {
-        zoom(rootNode);
+        focusNode = rootNode;
+        const transition = svg.transition()
+          .duration(750)
+          .tween("zoom", () => {
+            const i = d3.interpolateZoom(view, [rootNode.x, rootNode.y, rootNode.r * 2]);
+            return t => zoomTo(i(t));
+          });
+
+        transition.selectAll("text.label")
+          .style("opacity", d => d.depth === 1 ? 1 : 0)
+          .on("end", function(d) {
+            this.style.display = d.depth === 1 ? "inline" : "none";
+          });
+
         infoContent.innerHTML = "<p>Click a topic, subtopic, or document bubble to see details.</p>";
       });
     }
 
-    // Controls
-    document.getElementById("reloadBtn").addEventListener("click", () => {
-      const days = parseInt(document.getElementById("daysInput").value, 10) || 30;
-      renderBubbleMap(days);
-    });
+    const daysInput = document.getElementById("daysInput");
+    const reloadBtn = document.getElementById("reloadBtn");
+    if (reloadBtn) {
+      reloadBtn.addEventListener("click", () => {
+        const days = parseInt(daysInput.value, 10) || 30;
+        renderBubbleMap(days);
+      });
+    }
 
-    // Initial load
     renderBubbleMap(30);
   </script>
+
+
 </body>
 </html>
