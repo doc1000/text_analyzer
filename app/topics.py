@@ -4,7 +4,6 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple
 from uuid import UUID
-
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -13,50 +12,92 @@ import umap
 from sklearn.cluster import KMeans
 from openai import OpenAI
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
-
-from pydantic import BaseModel, Field
-
+from .config import PREFERENCES
 from .models import Document, Chunk
-
-# ---------- Pydantic response models ----------
-
-class TopicDoc(BaseModel):
-    id: UUID
-    title: str | None
-    url: str
-    score_info: float | None = None
-    score_ai_slop: float | None = None
-    captured_at: datetime
-
-    class Config:
-        from_attributes = True  # Pydantic v2
-
-
-class Subtopic(BaseModel):
-    subtopic_id: str
-    title: str
-    summary: str | None = None
-    documents: List[TopicDoc]
-
-
-class Topic(BaseModel):
-    topic_id: str
-    title: str
-    summary: str | None = None
-    documents_count: int
-    subtopics: List[Subtopic]
-
-
-class TopicsResponse(BaseModel):
-    time_range_days: int = Field(..., description="Number of days used for the time window")
-    topics: List[Topic]
-
+from .schemas import (         # whatever pydantic models you use
+    Topic,
+    Subtopic,
+    TopicDoc,
+    TopicsResponse,
+)
 
 # ---------- OpenAI client ----------
 _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Simple in-memory cache for topics per (days, max_captured_at)
 _topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
 
+# ---------- Dimensionality reduction ----------
+
+def reduce_embeddings(X: np.ndarray) -> np.ndarray:
+    """
+    Reduce embeddings according to preferences:
+    - 'umap': UMAP with sane bounds and random init
+    - 'none': return X unchanged
+    """
+    cfg = PREFERENCES.clustering
+    n_docs = X.shape[0]
+
+    if cfg.dim_reducer == "none":
+        return X
+
+    # UMAP
+    const_neighbors = max(2, min(cfg.max_neighbors, n_docs - 1))
+    const_components = max(2, min(cfg.max_components, n_docs - 1))
+
+    reducer = umap.UMAP(
+        n_neighbors=const_neighbors,
+        min_dist=0.1,
+        n_components=const_components,
+        metric="cosine",
+        random_state=cfg.random_state,
+        init="random",  # avoid spectral/eigsh issues
+    )
+    return reducer.fit_transform(X)
+
+
+# ---------- Clustering ----------
+
+def _choose_k(num_docs: int, k_min: int, k_max: int) -> int:
+    # Simple heuristic: sqrt-like scaling with clamps
+    base = int(np.sqrt(num_docs / 2))
+    return max(k_min, min(k_max, base))
+
+
+def _cluster_kmeans(X: np.ndarray) -> np.ndarray:
+    """
+    KMeans clustering: return labels array of shape (n_samples,)
+    """
+    cfg = PREFERENCES.clustering
+    n_docs = X.shape[0]
+    k_topics = _choose_k(n_docs, cfg.k_topics_min, cfg.k_topics_max)
+
+    kmeans = KMeans(
+        n_clusters=k_topics,
+        random_state=cfg.random_state,
+        n_init="auto",
+    )
+    return kmeans.fit_predict(X)
+
+
+def cluster_embeddings(X: np.ndarray) -> np.ndarray:
+    """
+    Main clustering entry point. Uses preferences to decide:
+    - whether to run UMAP first for clustering
+    - which clustering algorithm to use (currently KMeans).
+    """
+    cfg = PREFERENCES.clustering
+
+    # Decide which space to cluster in
+    if cfg.use_umap_for_clustering:
+        X_cluster = reduce_embeddings(X)
+    else:
+        X_cluster = X
+
+    if cfg.cluster_algo == "kmeans":
+        return _cluster_kmeans(X_cluster)
+
+    # Fallback / future expansion
+    raise ValueError(f"Unsupported cluster_algo: {cfg.cluster_algo}")
 
 def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
     """
@@ -84,9 +125,9 @@ def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
         "SUMMARY: <summary text>\n\n"
         f"DOCUMENTS:\n{context}"
     )
-
+    model_name = PREFERENCES.models.llm_model
     resp = _client.chat.completions.create(
-        model="gpt-4.1-nano",
+        model=model_name,
         messages=[{"role": "user", "content": prompt}],
     )
     text = resp.choices[0].message.content.strip()
@@ -223,6 +264,8 @@ def compute_topics(
     """
     Main entry point to compute topics for the last `days` days.
     """
+    cfg = PREFERENCES.clustering
+    min_docs_for_clustering = cfg.min_docs_for_clustering
 
     # 1) Select recent documents
     cutoff = datetime.utcnow() - timedelta(days=days)
@@ -322,7 +365,7 @@ def compute_topics(
 
     # ---------- small-N guard ----------
     # For very small N, skip UMAP/clustering and treat as a single topic.
-    if n_docs < 6:
+    if n_docs < min_docs_for_clustering:
         topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
         title, summary = _generate_title_and_summary(deduped_docs)
         single_topic = Topic(
@@ -341,51 +384,23 @@ def compute_topics(
         )
         return TopicsResponse(time_range_days=days, topics=[single_topic])
 
-    # Make UMAP parameters respect dataset size
-    const_max_neighbors = 15
-    const_max_components = 5
 
-    const_neighbors = max(2, min(const_max_neighbors, n_docs - 1))
-    const_components = max(2, min(const_max_components, n_docs - 1))
+ # 2) For visualization, always reduce to 2D/low-D (UMAP or none)
+    X_vis = reduce_embeddings(X)   # uses cfg.dim_reducer; can be X unchanged
+    # You'll use X_vis later to place document points if you want per-doc coordinates.
 
-    # 5) UMAP dimensionality reduction
-    reducer = umap.UMAP(
-        n_neighbors=const_neighbors,
-        min_dist=0.1,
-        n_components=const_components,
-        metric="cosine",
-        random_state=42,
-        init="random",   # avoid spectral init / eigsh
-    )
-    X_reduced = reducer.fit_transform(X)
-
-    # ---------- Top-level clustering with KMeans ----------
-
-    def choose_k(num_docs: int) -> int:
-        # Heuristic: between 3 and 10 clusters depending on N
-        base = int(np.sqrt(num_docs / 2))
-        return max(3, min(10, base))
-
-    k_topics = choose_k(n_docs)
-
-    kmeans = KMeans(
-        n_clusters=k_topics,
-        random_state=42,
-        n_init="auto"
-    )
-    labels = kmeans.fit_predict(X_reduced)
+    # 3) For clustering, maybe use the same reduced space, maybe not
+    labels = cluster_embeddings(X)
 
     topic_labels = sorted(set(labels))  # e.g. [0,1,2,...]
-
     topics: List[Topic] = []
-
     # Map from original index to doc
     idx_to_doc = {i: d for i, d in enumerate(deduped_docs)}
 
     # Helper to build subtopics via a second-level KMeans
     def build_subtopics(topic_docs_indices: List[int], parent_topic_id: str, parent_title: str) -> List[Subtopic]:
         num_topic_docs = len(topic_docs_indices)
-        if num_topic_docs < 5:
+        if num_topic_docs < min_docs_for_clustering:
             # Small topic: single subtopic with all docs
             docs_list = [idx_to_doc[i] for i in topic_docs_indices]
             docs_out = [TopicDoc.model_validate(d) for d in docs_list]
@@ -399,17 +414,20 @@ def compute_topics(
             ]
 
         # Second-level KMeans clustering on reduced vectors for docs in this topic
-        X_topic = np.stack([X_reduced[i] for i in topic_docs_indices], axis=0)
+        cfg = PREFERENCES.clustering
+        X_topic = np.stack([X[i] for i in topic_docs_indices], axis=0)
         # Choose a small k for subtopics, e.g. 2–4
         def choose_k_sub(n: int) -> int:
-            return max(2, min(4, int(np.sqrt(n / 3)) or 2))
+            return max(
+                cfg.k_sub_min,
+                min(cfg.k_sub_max, int(np.sqrt(n / 3)) or cfg.k_sub_min),
+            )
 
         k_sub = choose_k_sub(num_topic_docs)
-
         sub_kmeans = KMeans(
             n_clusters=k_sub,
-            random_state=42,
-            n_init="auto"
+            random_state=cfg.random_state,
+            n_init="auto",
         )
         sub_labels = sub_kmeans.fit_predict(X_topic)  # values 0..k_sub-1
 
