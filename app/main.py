@@ -16,7 +16,13 @@ from . import models
 from .models import Chunk, Document
 from .helpers import chunk_text, get_embedding, EMBED_DIM, _answer_from_hits
 from .helpers import DocumentOut, QueryRequest, ChunkHit, QueryResponse
-from .topics import compute_topics, TopicsResponse, build_topics_hierarchy
+from .topics import (
+    compute_topics,
+    TopicsResponse,
+    build_topics_hierarchy,
+    get_topics_with_cache,
+)
+
 from datetime import datetime
 from typing import List
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +33,9 @@ nlp = spacy.load("en_core_web_sm")
 app = FastAPI()
 
 init_db()
+
+def clear_topics_cache():
+    _topics_cache.clear()
 
 # Allow extension + localhost
 app.add_middleware(
@@ -210,7 +219,7 @@ def get_topics(days: int = 30, db: Session = Depends(get_db)):
     """
     Return hierarchical topics for documents in the last `days` days.
     """
-    return compute_topics(db, days=days)
+    return get_topics_with_cache(db, days=days)
 
 @app.get("/topics/hierarchy")
 def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
@@ -218,7 +227,7 @@ def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
     Return a D3-friendly hierarchy representation of topics and subtopics
     for the last `days` days of documents.
     """
-    topics_resp = compute_topics(db, days=days)
+    topics_resp = get_topics_with_cache(db, days=days)
     return build_topics_hierarchy(topics_resp)
 
 if __name__ == "__main__":
