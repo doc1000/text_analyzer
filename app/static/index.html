@@ -8,7 +8,7 @@
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       margin: 0;
       padding: 0;
-      background: #0f172a;
+      background: #020617;
       color: #e5e7eb;
     }
 
@@ -37,7 +37,7 @@
       padding: 0.1rem 0.3rem;
       border-radius: 4px;
       border: 1px solid #4b5563;
-      background: #020617;
+      background: #1e2546;
       color: #e5e7eb;
       font-size: 0.85rem;
     }
@@ -71,6 +71,7 @@
     #bubble-container {
       flex: 1;
       position: relative;
+      background: #e5e9f1;
     }
 
     #bubble-svg {
@@ -403,8 +404,8 @@
           if (d.depth === 2) return 0.75;
           return 0.6;
         })
-        .attr("stroke", "#020617")
-        .attr("stroke-width", 1)
+        .attr("stroke", "rgba(0,0,0,0.15)")
+        .attr("stroke-width", 0.5)
         .on("mouseover", (event, d) => showTooltip(event, d))
         .on("mouseout", hideTooltip)
         .on("click", (event, d) => {
@@ -428,15 +429,16 @@
         .attr("class", "label")
         .attr("text-anchor", "middle")
         // Shift baseline upward so labels sit closer to the top of circles
-        .attr("dy", d => d.depth === 1 ? "-0.6em" : "-0.4em")
+        .attr("dy", d => d.depth === 1 ? "-0.9em" : "-0.9em")
         .attr("transform", d => `translate(${d.x},${d.y})`)
         .style("pointer-events", "none")
         // Inverted colors: dark text with light outline
-        .style("fill", "#020617")          // dark fill
-        .style("stroke", "#f9fafb")        // light outline
+        //.style("fill", "#f9fafb")          // dark fill #020617
+        .style("fill", "#020617")          // dark fill #020617
+        //.style("stroke", "#020617")        // light outline #f9fafb
         .style("stroke-width", d => d.depth === 1 ? 2 : 1.5)
         .style("paint-order", "stroke fill") // draw outline first, then fill
-        .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.75rem")
+        .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.9rem")
         // Initial: show only top-level topic labels
         .style("display", d => d.depth === 1 ? "inline" : "none")
         .style("opacity", d => d.depth === 1 ? 1 : 0)

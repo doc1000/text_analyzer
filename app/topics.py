@@ -53,8 +53,9 @@ class TopicsResponse(BaseModel):
 
 
 # ---------- OpenAI client ----------
-
 _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Simple in-memory cache for topics per (days, max_captured_at)
+_topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
 
 
 def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
@@ -464,6 +465,31 @@ def compute_topics(
         topics.append(topic)
 
     return TopicsResponse(time_range_days=days, topics=topics)
+
+def get_topics_with_cache(db: Session, days: int = 30) -> TopicsResponse:
+    """
+    Lightweight in-process cache for topics:
+    - Keyed by (days, max_captured_at)
+    - If no new documents since last compute, reuse cached TopicsResponse
+    """
+
+    # 1) Figure out the most recent document timestamp
+    max_captured_at = db.query(func.max(Document.captured_at)).scalar()
+    cache_key = (days, max_captured_at)
+
+    # 2) Return cached if we have it
+    cached = _topics_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    # 3) Otherwise compute and store
+    topics_resp = compute_topics(db, days=days)
+
+    # Optional: you can clear old entries if you want to keep cache tiny
+    # For now we just store and let Python manage the small dict.
+    _topics_cache[cache_key] = topics_resp
+
+    return topics_resp
 
 # ---------- convert TopicResponse into D3-friendly hierarchy ----------
 
