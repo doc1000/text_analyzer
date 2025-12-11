@@ -27,7 +27,7 @@
 
     header .controls {
       display: flex;
-      gap: 0.5rem;
+      gap: 0.75rem;
       align-items: center;
       font-size: 0.9rem;
     }
@@ -60,18 +60,57 @@
       background: #1f2937;
     }
 
+    /* Tabs */
+
+    .tabs {
+      display: flex;
+      gap: 0.3rem;
+    }
+
+    .tab-btn {
+      padding: 0.25rem 0.7rem;
+      border-radius: 999px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .tab-btn.active {
+      background: #e5e7eb;
+      color: #020617;
+      border-color: #e5e7eb;
+    }
+
     main {
       padding: 0;
       margin: 0;
       height: calc(100vh - 60px);
       display: flex;
+      flex-direction: column;
+    }
+
+    .page {
+      flex: 1;
+      display: none;
+      width: 100%;
+    }
+
+    .page.active {
+      display: flex;
+    }
+
+    /* Topics page layout */
+
+    #page-topics {
       flex-direction: row;
     }
 
     #bubble-container {
       flex: 1;
       position: relative;
-      background: #e5e9f1;
+      background: #e5e9f1; /* your lighter background */
     }
 
     #bubble-svg {
@@ -114,6 +153,7 @@
     }
 
     /* Tooltip */
+
     #tooltip {
       position: absolute;
       pointer-events: none;
@@ -146,37 +186,179 @@
     a:hover {
       text-decoration: underline;
     }
+
+    /* Query page */
+
+    #page-query {
+      flex-direction: column;
+    }
+
+    #query-panel {
+      flex: 1;
+      padding: 1rem 1.5rem;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+
+    #query-panel h2 {
+      font-size: 1.1rem;
+      margin: 0 0 0.4rem 0;
+    }
+
+    #query-panel p {
+      margin: 0 0 0.6rem 0;
+      font-size: 0.85rem;
+      color: #9ca3af;
+    }
+
+    #queryInput {
+      width: 100%;
+      min-height: 90px;
+      max-height: 220px;
+      padding: 0.6rem;
+      box-sizing: border-box;
+      border-radius: 6px;
+      border: 1px solid #374151;
+      background: #020617;
+      color: #e5e7eb;
+      resize: vertical;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+
+    #query-controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 0.6rem;
+      font-size: 0.85rem;
+    }
+
+    #query-controls input[type="number"] {
+      width: 3rem;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    #queryBtn {
+      padding: 0.25rem 0.7rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    #queryBtn:hover {
+      background: #1f2937;
+    }
+
+    #answerContainer {
+      margin-bottom: 0.6rem;
+    }
+
+    .answer-box {
+      padding: 0.75rem;
+      background: #0b1120;
+      border-radius: 6px;
+      border: 1px solid #1d4ed8;
+      font-size: 0.9rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+
+    #hitsContainer .hit {
+      border-radius: 6px;
+      border: 1px solid #1f2937;
+      padding: 0.5rem 0.6rem;
+      margin-bottom: 0.4rem;
+      background: #020617;
+      font-size: 0.82rem;
+    }
+
+    #hitsContainer .hit-meta {
+      font-size: 0.78rem;
+      color: #9ca3af;
+      margin-bottom: 0.25rem;
+    }
+
+    #hitsContainer .hit-text {
+      font-size: 0.83rem;
+      line-height: 1.3;
+    }
+
+    .tag {
+      font-size: 0.72rem;
+      padding: 0.05rem 0.3rem;
+      border-radius: 999px;
+      background: #111827;
+      border: 1px solid #374151;
+      margin-left: 0.2rem;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Trust Badger · Topic Map</h1>
+    <h1>Trust Badger</h1>
     <div class="controls">
+      <div class="tabs">
+        <button id="tabTopics" class="tab-btn active">Topics Map</button>
+        <button id="tabQuery" class="tab-btn">Query</button>
+      </div>
+
       <span>Days:</span>
       <input type="number" id="daysInput" value="30" min="1" max="365" />
 
-      <!-- NEW: visualization mode selector -->
       <span>Viz:</span>
       <select id="vizMode">
-        <option value="classic" selected>Classic</option>
-        <option value="multicolor">Multicolored</option>
+        <option value="circles" selected>Circles</option>
+        <!-- option value="multicolor">Multicolored</option-->
       </select>
 
       <button id="reloadBtn">Reload</button>
-      <span class="hint">Click big bubbles to zoom · click document bubbles to open</span>
+      <span class="hint" id="headerHint">Click big bubbles to zoom · click document bubbles to open</span>
     </div>
   </header>
 
   <main>
-    <div id="bubble-container">
-      <svg id="bubble-svg"></svg>
-      <div id="tooltip"></div>
-    </div>
-    <aside id="info-panel">
-      <h2>Topic Details</h2>
-      <p>Select a topic, subtopic, or document bubble to see more information.</p>
-      <div id="info-content"></div>
-    </aside>
+    <!-- PAGE 1: Topics Map -->
+    <section id="page-topics" class="page active">
+      <div id="bubble-container">
+        <svg id="bubble-svg"></svg>
+        <div id="tooltip"></div>
+      </div>
+      <aside id="info-panel">
+        <h2>Topic Details</h2>
+        <p>Select a topic, subtopic, or document bubble to see more information.</p>
+        <div id="info-content"></div>
+      </aside>
+    </section>
+
+    <!-- PAGE 2: Query -->
+    <section id="page-query" class="page">
+      <div id="query-panel">
+        <h2>Ask your vault</h2>
+        <p>Query across your captured documents using semantic search and optional answer synthesis.</p>
+
+        <textarea id="queryInput" placeholder="Ask something across your reading, e.g. 'What are the main themes in my recent security-related articles?'"></textarea>
+
+        <div id="query-controls">
+          <label>
+            Top K:
+            <input type="number" id="topK" value="5" min="1" max="20" />
+          </label>
+          <button id="queryBtn">Search</button>
+          <span class="hint">Ctrl+Enter to run query</span>
+        </div>
+
+        <div id="answerContainer"></div>
+        <div id="hitsContainer"></div>
+      </div>
+    </section>
   </main>
 
   <!-- D3 -->
@@ -184,6 +366,34 @@
 
   <script>
     const API_BASE = "http://localhost:8000"; // adjust if needed
+
+    // -------- SPA TAB LOGIC --------
+    const tabTopics = document.getElementById("tabTopics");
+    const tabQuery = document.getElementById("tabQuery");
+    const pageTopics = document.getElementById("page-topics");
+    const pageQuery = document.getElementById("page-query");
+    const headerHint = document.getElementById("headerHint");
+
+    function showPage(page) {
+      if (page === "topics") {
+        pageTopics.classList.add("active");
+        pageQuery.classList.remove("active");
+        tabTopics.classList.add("active");
+        tabQuery.classList.remove("active");
+        headerHint.textContent = "Click big bubbles to zoom · click document bubbles to open";
+      } else {
+        pageTopics.classList.remove("active");
+        pageQuery.classList.add("active");
+        tabTopics.classList.remove("active");
+        tabQuery.classList.add("active");
+        headerHint.textContent = "Ask questions over your saved documents";
+      }
+    }
+
+    tabTopics.addEventListener("click", () => showPage("topics"));
+    tabQuery.addEventListener("click", () => showPage("query"));
+
+    // -------- TOPICS MAP (D3) --------
 
     const svg = d3.select("#bubble-svg");
     const width = svg.node().clientWidth || 800;
@@ -313,7 +523,7 @@
           return t => zoomTo(i(t));
         });
 
-      // NEW: when zoomed into a node, show labels for its children only (no label for the parent bubble)
+      // when zoomed into a node, show labels for its children only
       transition.selectAll("text.label")
         .style("opacity", n => (n.parent === d) ? 1 : 0)
         .on("end", function(n) {
@@ -422,7 +632,7 @@
           }
         });
 
-      // Labels: separate layer, styled to pop on any background
+      // Labels: separate layer, black text, no outline
       labels = labelGroup.selectAll("text.label")
         .data(nodes)
         .join("text")
@@ -432,19 +642,13 @@
         .attr("dy", d => d.depth === 1 ? "-0.9em" : "-0.9em")
         .attr("transform", d => `translate(${d.x},${d.y})`)
         .style("pointer-events", "none")
-        // Inverted colors: dark text with light outline
-        //.style("fill", "#f9fafb")          // dark fill #020617
-        .style("fill", "#020617")          // dark fill #020617
-        //.style("stroke", "#020617")        // light outline #f9fafb
-        .style("stroke-width", d => d.depth === 1 ? 2 : 1.5)
-        .style("paint-order", "stroke fill") // draw outline first, then fill
+        .style("fill", "#020617")          // blackish text as requested
         .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.9rem")
         // Initial: show only top-level topic labels
         .style("display", d => d.depth === 1 ? "inline" : "none")
         .style("opacity", d => d.depth === 1 ? 1 : 0)
         .text(d => {
           const raw = d.data.name || "";
-          // Remove trailing " (number)" from the label, e.g. "Topic Name (7)" -> "Topic Name"
           return raw.replace(/\s*\(\d+\)\s*$/, "");
         });
 
@@ -453,7 +657,6 @@
 
       // Ensure labels are above nodes
       labelGroup.raise();
-
 
       zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
       infoContent.innerHTML = "<p>Click a topic bubble to see details. Zoom in to see subtopics.</p>";
@@ -487,9 +690,119 @@
       });
     }
 
+    // Initial topics load
     renderBubbleMap(30);
+
+    // -------- QUERY PAGE LOGIC --------
+
+    const queryInput = document.getElementById("queryInput");
+    const topKInput = document.getElementById("topK");
+    const queryBtn = document.getElementById("queryBtn");
+    const answerContainer = document.getElementById("answerContainer");
+    const hitsContainer = document.getElementById("hitsContainer");
+
+    async function runQuery() {
+      const query = (queryInput.value || "").trim();
+      const topK = parseInt(topKInput.value, 10) || 5;
+
+      if (!query) {
+        alert("Type a question first.");
+        return;
+      }
+
+      answerContainer.innerHTML = "";
+      hitsContainer.innerHTML = "<p class='hint'>Searching…</p>";
+
+      try {
+        const res = await fetch(`${API_BASE}/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query,
+            top_k: topK,
+            with_answer: true
+          })
+        });
+
+        const data = await res.json();
+
+        hitsContainer.innerHTML = "";
+
+        if (data.answer) {
+          const box = document.createElement("div");
+          box.className = "answer-box";
+          box.textContent = data.answer;
+          answerContainer.innerHTML = "";
+          answerContainer.appendChild(box);
+        } else {
+          answerContainer.innerHTML = "<p class='hint'>No synthesized answer.</p>";
+        }
+
+        if (!data.hits || data.hits.length === 0) {
+          hitsContainer.innerHTML = "<p class='hint'>No matching chunks found.</p>";
+          return;
+        }
+
+        data.hits.forEach((hit, idx) => {
+          const div = document.createElement("div");
+          div.className = "hit";
+
+          const meta = document.createElement("div");
+          meta.className = "hit-meta";
+
+          const link = document.createElement("a");
+          link.href = hit.url;
+          link.target = "_blank";
+          link.textContent = hit.document_title || "(no title)";
+
+          const simTag = document.createElement("span");
+          simTag.className = "tag";
+          const simVal = hit.similarity ?? hit.distance;
+          if (simVal != null) {
+            simTag.textContent = simVal.toFixed ? `sim: ${simVal.toFixed(3)}` : `sim: ${simVal}`;
+          } else {
+            simTag.textContent = "sim: n/a";
+          }
+
+          const infoTag = document.createElement("span");
+          infoTag.className = "tag";
+          if (hit.score_info != null) {
+            infoTag.textContent = `info: ${hit.score_info.toFixed(2)}`;
+          } else {
+            infoTag.textContent = "info: n/a";
+          }
+
+          meta.innerHTML = `<strong>${idx + 1}.</strong> `;
+          meta.appendChild(link);
+          meta.appendChild(simTag);
+          meta.appendChild(infoTag);
+
+          const text = document.createElement("div");
+          text.className = "hit-text";
+          text.textContent = hit.chunk_text;
+
+          div.appendChild(meta);
+          div.appendChild(text);
+          hitsContainer.appendChild(div);
+        });
+
+      } catch (err) {
+        console.error("Query error:", err);
+        hitsContainer.innerHTML = "<p class='hint'>Error during query. See console.</p>";
+      }
+    }
+
+    if (queryBtn) {
+      queryBtn.addEventListener("click", runQuery);
+    }
+
+    if (queryInput) {
+      queryInput.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          runQuery();
+        }
+      });
+    }
   </script>
-
-
 </body>
 </html>
