@@ -4,6 +4,7 @@ from typing import List
 import spacy
 import os
 from openai import OpenAI
+from .config import PREFERENCES
 from uuid import UUID
 from pydantic import BaseModel
 from datetime import datetime
@@ -82,15 +83,18 @@ EMBED_DIM = 1536  # keep in sync with DB/vector size
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def get_embedding(text: str)  -> List[float]:
+def get_embedding(text: str) -> List[float]:
     """
-    Calls OpenAI's embedding model and returns a 1536-dimensional vector.
+    Get a single embedding vector for a text using the configured model.
     """
-    response = client.embeddings.create(
-        model="text-embedding-3-small",   # or "text-embedding-3-large"
-        input=text
+    model_name = PREFERENCES.models.embedding_model
+
+    # You can adjust depending on which OpenAI API you use
+    resp = client.embeddings.create(
+        model=model_name,
+        input=text,
     )
-    return response.data[0].embedding
+    return resp.data[0].embedding
 
 def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
     context = "\n\n".join(
