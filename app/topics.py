@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from sklearn.metrics.pairwise import cosine_similarity
 import umap
+from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from openai import OpenAI
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
@@ -27,39 +28,55 @@ _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 _topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
 
 # ---------- Dimensionality reduction ----------
-
 def reduce_embeddings(X: np.ndarray) -> np.ndarray:
     """
     Reduce embeddings according to preferences:
+    - 'pca': PCA with bounded components
     - 'umap': UMAP with sane bounds and random init
     - 'none': return X unchanged
     """
     cfg = PREFERENCES.clustering
-    n_docs = X.shape[0]
+    n_docs, dim = X.shape
 
     if cfg.dim_reducer == "none":
         return X
 
-    # UMAP
-    const_neighbors = max(2, min(cfg.max_neighbors, n_docs - 1))
-    const_components = max(2, min(cfg.max_components, n_docs - 1))
+    # Decide how many components we can reasonably take
+    max_components = max(2, cfg.max_components)
+    n_components = min(max_components, dim, n_docs)
 
-    reducer = umap.UMAP(
-        n_neighbors=const_neighbors,
-        min_dist=0.1,
-        n_components=const_components,
-        metric="cosine",
-        random_state=cfg.random_state,
-        init="random",  # avoid spectral/eigsh issues
-    )
-    return reducer.fit_transform(X)
+    # If we can't get at least 2 components, just return X as-is
+    if n_components < 2:
+        return X
 
+    if cfg.dim_reducer == "pca":
+        pca = PCA(
+            n_components=n_components,
+            random_state=cfg.random_state,
+        )
+        return pca.fit_transform(X)
+
+    if cfg.dim_reducer == "umap":
+        const_neighbors = max(2, min(cfg.max_neighbors, n_docs - 1))
+
+        reducer = umap.UMAP(
+            n_neighbors=const_neighbors,
+            min_dist=0.1,
+            n_components=n_components,
+            metric="cosine",
+            random_state=cfg.random_state,
+            init="random",  # avoids spectral init / eigsh issues
+        )
+        return reducer.fit_transform(X)
+
+    # Fallback if someone puts an unexpected value in config
+    return X
 
 # ---------- Clustering ----------
-
 def _choose_k(num_docs: int, k_min: int, k_max: int) -> int:
     # Simple heuristic: sqrt-like scaling with clamps
-    base = int(np.sqrt(num_docs / 2))
+    #base = int(np.sqrt(num_docs / 2))
+    base = int(np.sqrt(num_docs * 2)) #prev clamp was too restrictive, putting together docs not that similar
     return max(k_min, min(k_max, base))
 
 
@@ -88,7 +105,7 @@ def cluster_embeddings(X: np.ndarray) -> np.ndarray:
     cfg = PREFERENCES.clustering
 
     # Decide which space to cluster in
-    if cfg.use_umap_for_clustering:
+    if cfg.use_reducer_for_clustering:
         X_cluster = reduce_embeddings(X)
     else:
         X_cluster = X
@@ -420,7 +437,7 @@ def compute_topics(
         def choose_k_sub(n: int) -> int:
             return max(
                 cfg.k_sub_min,
-                min(cfg.k_sub_max, int(np.sqrt(n / 3)) or cfg.k_sub_min),
+                min(cfg.k_sub_max, int(np.sqrt(n )) or cfg.k_sub_min), #n/3 too restrictive
             )
 
         k_sub = choose_k_sub(num_topic_docs)
@@ -509,6 +526,8 @@ def get_topics_with_cache(db: Session, days: int = 30) -> TopicsResponse:
 
     return topics_resp
 
+def clear_topics_cache():
+    _topics_cache.clear()
 # ---------- convert TopicResponse into D3-friendly hierarchy ----------
 
 def build_topics_hierarchy(resp: TopicsResponse) -> dict:

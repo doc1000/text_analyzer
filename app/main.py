@@ -21,6 +21,7 @@ from .topics import (
     TopicsResponse,
     build_topics_hierarchy,
     get_topics_with_cache,
+    clear_topics_cache,
 )
 
 from datetime import datetime
@@ -33,9 +34,6 @@ nlp = spacy.load("en_core_web_sm")
 app = FastAPI()
 
 init_db()
-
-def clear_topics_cache():
-    _topics_cache.clear()
 
 # Allow extension + localhost
 app.add_middleware(
@@ -229,6 +227,10 @@ def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
     """
     topics_resp = get_topics_with_cache(db, days=days)
     return build_topics_hierarchy(topics_resp)
+
+@app.get("/topics/clear_cache")
+def clear_cache():
+    clear_topics_cache()
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt
