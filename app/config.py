@@ -19,28 +19,28 @@ ChatModel = Literal[
 ]
 # may need to add something to make sure that EMBED_DIM is consistent
 
-DimReducer = Literal["umap", "none"]
+DimReducer = Literal["pca","umap", "none"]
 ClusterAlgo = Literal["kmeans"]  # easy to add "hdbscan" later if you want
 
 
 @dataclass
 class ClusteringConfig:
-    dim_reducer: DimReducer = "umap"
-    use_umap_for_clustering: bool = True  # if False, cluster in original embedding space
+    dim_reducer: DimReducer = "pca"   # "pca", "umap", or "none"
+    use_reducer_for_clustering: bool = True  # was use_umap_for_clustering
     cluster_algo: ClusterAlgo = "kmeans"
     min_docs_for_clustering: int = 6
-    max_neighbors: int = 15
-    max_components: int = 5
+    max_neighbors: int = 15          # still used if you pick UMAP
+    max_components: int = 20
     random_state: int = 42
-    k_topics_min: int = 3
+    k_topics_min: int = 2
     k_topics_max: int = 10
-    k_sub_min: int = 2
+    k_sub_min: int = 1
     k_sub_max: int = 4
 
 
 @dataclass
 class ModelConfig:
-    embedding_model: EmbeddingModel = "text-embedding-3-large"
+    embedding_model: EmbeddingModel = "text-embedding-3-small"
     llm_model: ChatModel = "gpt-4.1-nano"
 
 
