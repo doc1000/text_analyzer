@@ -1,17 +1,16 @@
 # save as app/main.py
 ## IMPORTS
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import spacy
 import gzip
-#import math
 import uvicorn
 import os
 from sqlalchemy.orm import Session
-#from sqlalchemy import select
+from sqlalchemy import asc
 from .db import init_db, get_db
-from .schemas import IngestPayload
+from .schemas import IngestPayload, DocumentDetailResponse
 from . import models
 from .models import Chunk, Document
 from .helpers import chunk_text, get_embedding, EMBED_DIM, _answer_from_hits
@@ -157,12 +156,6 @@ def list_documents(
     )
     return docs
 
-@app.get("/documents/{doc_id}", response_model=DocumentOut)
-def get_document(doc_id: str, db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == doc_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return doc
 
 @app.post("/query", response_model=QueryResponse)
 def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
@@ -231,6 +224,31 @@ def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
 @app.get("/topics/clear_cache")
 def clear_cache():
     clear_topics_cache()
+
+@app.get("/documents/{document_id}", response_model=DocumentDetailResponse)
+def get_document_detail(document_id: str, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Reconstruct full captured text from chunks (ordered)
+    chunks = (
+        db.query(Chunk)
+        .filter(Chunk.document_id == doc.id)
+        .order_by(asc(Chunk.chunk_index))
+        .all()
+    )
+    full_text = "\n\n".join([c.chunk_text for c in chunks]) if chunks else ""
+
+    return DocumentDetailResponse(
+        id=str(doc.id),
+        url=doc.url,
+        title=doc.title,
+        captured_at=doc.captured_at,
+        score_info=doc.score_info,
+        score_ai_slop=doc.score_ai_slop,
+        text=full_text,
+    )
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt

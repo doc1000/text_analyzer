@@ -1,9 +1,8 @@
 # app/schemas.py
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
-from typing import List
 
 # --- Ingest payload from extension ---
 class IngestPayload(BaseModel):
@@ -46,3 +45,12 @@ class Topic(BaseModel):
 class TopicsResponse(BaseModel):
     time_range_days: int = Field(..., description="Number of days used for the time window")
     topics: List[Topic]
+
+class DocumentDetailResponse(BaseModel):
+    id: str
+    url: str
+    title: Optional[str] = None
+    captured_at: Optional[datetime] = None
+    score_info: Optional[float] = None
+    score_ai_slop: Optional[float] = None
+    text: str
