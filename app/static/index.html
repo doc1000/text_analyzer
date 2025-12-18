@@ -359,6 +359,23 @@
         <div id="hitsContainer"></div>
       </div>
     </section>
+
+    <!-- PAGE 3: Reader -->
+    <section id="page-reader" class="page">
+      <div id="reader-panel" style="flex:1; padding: 1rem 1.5rem; overflow-y:auto;">
+        <div style="display:flex; gap: 0.75rem; align-items:center; margin-bottom: 0.75rem;">
+          <button id="readerBackBtn" class="tab-btn">← Back</button>
+          <div style="font-size: 0.95rem; color:#9ca3af;">Document Reader</div>
+        </div>
+
+        <h2 id="readerTitle" style="margin:0 0 0.4rem 0;"></h2>
+
+        <div id="readerMeta" style="color:#9ca3af; font-size:0.85rem; margin-bottom: 0.8rem;"></div>
+
+        <div id="readerBody" style="white-space: pre-wrap; line-height: 1.45; font-size: 0.95rem; color:#e5e7eb;"></div>
+      </div>
+    </section>
+
   </main>
 
   <!-- D3 -->
@@ -375,20 +392,27 @@
     const headerHint = document.getElementById("headerHint");
 
     function showPage(page) {
+      pageTopics.classList.remove("active");
+      pageQuery.classList.remove("active");
+      document.getElementById("page-reader").classList.remove("active");
+
+      tabTopics.classList.remove("active");
+      tabQuery.classList.remove("active");
+
       if (page === "topics") {
         pageTopics.classList.add("active");
-        pageQuery.classList.remove("active");
         tabTopics.classList.add("active");
-        tabQuery.classList.remove("active");
         headerHint.textContent = "Click big bubbles to zoom · click document bubbles to open";
-      } else {
-        pageTopics.classList.remove("active");
+      } else if (page === "query") {
         pageQuery.classList.add("active");
-        tabTopics.classList.remove("active");
         tabQuery.classList.add("active");
         headerHint.textContent = "Ask questions over your saved documents";
+      } else if (page === "reader") {
+        document.getElementById("page-reader").classList.add("active");
+        headerHint.textContent = "Reading a saved capture";
       }
     }
+
 
     tabTopics.addEventListener("click", () => showPage("topics"));
     tabQuery.addEventListener("click", () => showPage("query"));
@@ -531,46 +555,68 @@
         });
     }
 
+    // Shorten label helper
+    function shortLabel(text, maxLen = 18) {
+      if (!text) return "";
+      if (text.length <= maxLen) return text;
+      return text.slice(0, maxLen - 1) + "…";
+    }
+
     // Multi-line wrapping helper
-    function wrapLabel(selection, maxChars) {
-      selection.each(function(d) {
-        const text = d3.select(this);
-        const full = text.text();
-        const words = full.split(/\s+/).filter(Boolean);
+    function wrapLabel(selection, maxCharsPerLine = 14, maxLines = 3) {
+      selection.each(function () {
+        const textSel = d3.select(this);
+        const fullText = textSel.text();
 
-        if (full.length <= maxChars || words.length <= 1) {
-          return;
-        }
+        if (!fullText) return;
 
-        text.text(null);
+        textSel.text(null);
 
-        let line = [];
-        let lineNumber = 0;
-        const lineHeight = 1.1; // em
-        const y = 0;
-        const dy = parseFloat(text.attr("dy")) || 0;
-        let tspan = text.append("tspan")
-          .attr("x", 0)
-          .attr("y", y)
-          .attr("dy", dy + "em");
+        const words = fullText.split(/\s+/);
+        let lines = [];
+        let currentLine = "";
 
-        for (const word of words) {
-          line.push(word);
-          tspan.text(line.join(" "));
-          if (tspan.text().length > maxChars && line.length > 1) {
-            line.pop();
-            tspan.text(line.join(" "));
-            line = [word];
-            lineNumber += 1;
-            tspan = text.append("tspan")
-              .attr("x", 0)
-              .attr("y", y)
-              .attr("dy", (dy + lineNumber * lineHeight) + "em")
-              .text(word);
+        function pushLine(line) {
+          if (lines.length < maxLines) {
+            lines.push(line);
           }
         }
+
+        for (let word of words) {
+          // Hard split long words
+          while (word.length > maxCharsPerLine) {
+            pushLine(word.slice(0, maxCharsPerLine));
+            word = word.slice(maxCharsPerLine);
+          }
+
+          if (currentLine.length === 0) {
+            currentLine = word;
+          } else if ((currentLine.length + 1 + word.length) <= maxCharsPerLine) {
+            currentLine += " " + word;
+          } else {
+            pushLine(currentLine);
+            currentLine = word;
+          }
+
+          if (lines.length >= maxLines) break;
+        }
+
+        if (lines.length < maxLines && currentLine) {
+          pushLine(currentLine);
+        }
+
+        const dy = parseFloat(textSel.attr("dy")) || 0;
+        const lineHeight = 1.1;
+
+        lines.forEach((line, i) => {
+          textSel.append("tspan")
+            .attr("x", 0)
+            .attr("dy", i === 0 ? `${dy}em` : `${lineHeight}em`)
+            .text(line);
+        });
       });
     }
+
 
     async function renderBubbleMap(days = 30) {
       svg.selectAll("*").remove(); // clear
@@ -624,10 +670,15 @@
           if (hasChildren) {
             zoom(d);
             updateInfoPanel(d);
+          } else if (d.data.doc_id) {
+            openReader(d.data.doc_id);
+            updateInfoPanel(d); // optional
           } else if (d.data.url) {
+            // fallback if old data doesn’t have doc_id
             window.open(d.data.url, "_blank");
             updateInfoPanel(d);
-          } else {
+          }
+ else {
             updateInfoPanel(d);
           }
         });
@@ -648,12 +699,17 @@
         .style("display", d => d.depth === 1 ? "inline" : "none")
         .style("opacity", d => d.depth === 1 ? 1 : 0)
         .text(d => {
-          const raw = d.data.name || "";
-          return raw.replace(/\s*\(\d+\)\s*$/, "");
+          const raw = (d.data.name || "").replace(/\s*\(\d+\)\s*$/, "");
+          return shortLabel(raw, d.depth === 1 ? 36 : 24);
         });
 
       // Wrap labels to multiple lines if needed
-      labels.call(wrapLabel, 16);
+      labels.call(d => wrapLabel(
+        d,
+        d.depth === 1 ? 18 : 12,   // chars per line
+        d.depth === 1 ? 3 : 3     // max lines
+      ));
+
 
       // Ensure labels are above nodes
       labelGroup.raise();
@@ -803,6 +859,50 @@
         }
       });
     }
+  
+    // -------- READER PAGE HELPERS --------
+    const readerTitle = document.getElementById("readerTitle");
+    const readerMeta = document.getElementById("readerMeta");
+    const readerBody = document.getElementById("readerBody");
+    const readerBackBtn = document.getElementById("readerBackBtn");
+
+    // simple history stack so Back returns where you were
+    let lastPage = "topics";
+
+    async function openReader(docId) {
+      lastPage = pageTopics.classList.contains("active") ? "topics" : "query";
+      showPage("reader");
+
+      readerTitle.textContent = "Loading…";
+      readerMeta.textContent = "";
+      readerBody.textContent = "";
+
+      const res = await fetch(`${API_BASE}/documents/${docId}`);
+      if (!res.ok) {
+        readerTitle.textContent = "Error";
+        readerBody.textContent = `Failed to load document ${docId}`;
+        return;
+      }
+
+      const doc = await res.json();
+
+      readerTitle.textContent = doc.title || "(no title)";
+
+      const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
+      const info = (doc.score_info != null) ? doc.score_info.toFixed(2) : "n/a";
+      const slop = (doc.score_ai_slop != null) ? doc.score_ai_slop.toFixed(2) : "n/a";
+
+      readerMeta.innerHTML = `
+        <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
+        <div>Captured: ${captured}</div>
+        <div>info: ${info} · ai slop: ${slop}</div>
+      `;
+
+      readerBody.textContent = doc.text || "";
+    }
+
+    readerBackBtn.addEventListener("click", () => showPage(lastPage));
+
   </script>
 </body>
 </html>
