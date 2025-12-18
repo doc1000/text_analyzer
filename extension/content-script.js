@@ -65,7 +65,8 @@ function showResultOverlay(result) {
   const spec = (result.specificity ?? 0).toFixed(3);
   const ratio = (result.compression_ratio ?? 0).toFixed(2);
 
-  overlay.innerHTML = `
+  
+  overlay.textContent = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
       <strong style="font-size:14px;">Info Density</strong>
       <button id="info-density-close"
@@ -93,38 +94,85 @@ function showResultOverlay(result) {
   }
 }
 
-function showErrorOverlay(errorText) {
-  const existing = document.getElementById("info-density-overlay");
-  if (existing) existing.remove();
+function makeOverlayHeader(titleText) {
+  const header = document.createElement("div");
+  header.style.display = "flex";
+  header.style.justifyContent = "space-between";
+  header.style.alignItems = "center";
+  header.style.marginBottom = "4px";
 
-  const overlay = document.createElement("div");
-  overlay.id = "info-density-overlay";
-  overlay.style.position = "fixed";
-  overlay.style.top = "10px";
-  overlay.style.right = "10px";
-  overlay.style.zIndex = "999999";
-  overlay.style.background = "rgba(128, 0, 0, 0.9)";
-  overlay.style.color = "#fff";
-  overlay.style.padding = "10px 14px";
-  overlay.style.borderRadius = "8px";
-  overlay.style.fontFamily = "system-ui, sans-serif";
-  overlay.style.fontSize = "12px";
-  overlay.style.maxWidth = "260px";
-  overlay.style.boxShadow = "0 4px 10px rgba(0,0,0,0.4)";
+  const title = document.createElement("strong");
+  title.textContent = titleText;
+  header.appendChild(title);
 
-  overlay.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-      <strong>Error</strong>
-      <button id="info-density-close"
-              style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;">✕</button>
-    </div>
-    <div>${errorText}</div>
-  `;
+  const btn = document.createElement("button");
+  btn.id = "info-density-close";
+  btn.type = "button";
+  btn.textContent = "✕";
+  btn.style.background = "none";
+  btn.style.border = "none";
+  btn.style.color = "#fff";
+  btn.style.fontSize = "14px";
+  btn.style.cursor = "pointer";
+  header.appendChild(btn);
 
-  document.body.appendChild(overlay);
+  return header;
+}
 
-  const btn = document.getElementById("info-density-close");
-  if (btn) {
-    btn.addEventListener("click", () => overlay.remove());
-  }
+function showErrorOverlay(overlay, errorText) {
+  overlay.replaceChildren(); // clear
+  const header = makeOverlayHeader("Error");
+  header.style.marginBottom = "2px";
+
+  const body = document.createElement("div");
+  body.textContent = String(errorText ?? "");
+
+  overlay.append(header, body);
+}
+
+function showScoreOverlay(overlay, { score, lexical, spec, ratio }) {
+  overlay.replaceChildren(); // clear
+  const header = makeOverlayHeader("Info Density");
+  header.querySelector("strong").style.fontSize = "14px";
+
+  const scoreRow = document.createElement("div");
+  scoreRow.style.marginBottom = "6px";
+
+  const scoreBig = document.createElement("span");
+  scoreBig.style.fontSize = "24px";
+  scoreBig.style.fontWeight = "bold";
+  scoreBig.textContent = String(score);
+
+  const scoreDenom = document.createElement("span");
+  scoreDenom.style.fontSize = "11px";
+  scoreDenom.style.opacity = "0.7";
+  scoreDenom.textContent = "/100";
+
+  scoreRow.append(scoreBig, document.createTextNode(" "), scoreDenom);
+
+  const stats = document.createElement("div");
+  stats.style.fontSize = "12px";
+  stats.style.lineHeight = "1.4";
+
+  const mkLine = (label, value) => {
+    const line = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = label + ":";
+    line.append(strong, document.createTextNode(" " + String(value)));
+    return line;
+  };
+
+  stats.append(
+    mkLine("Lexical density", lexical),
+    mkLine("Specificity", spec),
+    mkLine("Compression ratio", ratio)
+  );
+
+  const footer = document.createElement("div");
+  footer.style.marginTop = "6px";
+  footer.style.fontSize = "11px";
+  footer.style.opacity = "0.8";
+  footer.textContent = "Higher scores ≈ more specific, information-dense text.";
+
+  overlay.append(header, scoreRow, stats, footer);
 }
