@@ -1,0 +1,13 @@
+**/.git/**
+**/.github/**
+**/node_modules/**
+**/dist/**
+**/build/**
+**/*.map
+**/*.ts
+**/*.tsx
+**/*.log
+**/web-ext-artifacts/**
+**/.vscode/**
+**/.idea/**
+**/tests/**

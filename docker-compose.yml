@@ -30,7 +30,7 @@ services:
       # DATABASE_URL: postgres://badger:badgerpass@db:5432/badgerdb
     ports:
       - "8000:8000"  # FastAPI on localhost:8000
-    # Optional: if you want live code reload while developing
+    restart: unless-stopped
     volumes:
       - ./app:/code/app
 
