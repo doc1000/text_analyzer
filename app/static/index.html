@@ -524,9 +524,17 @@
         return c.brighter(1.2).formatHex();
       }
     }
-
+    
+    const BUBBLE_SCALE = 2.0; // tweak 1.5–2.0 to taste
+    
     function zoomTo(v) {
-      const k = width / (v[2] * 2);
+      // Use both width and height to keep aspect reasonable,
+      // then bump up by BUBBLE_SCALE so circles are larger on screen.
+      const baseK = Math.min(
+        width / (v[2] * 2),
+        height / (v[2] * 2)
+      );
+      const k = baseK * BUBBLE_SCALE;
       view = v;
 
       const transform = d =>
@@ -548,11 +556,28 @@
         });
 
       // when zoomed into a node, show labels for its children only
-      transition.selectAll("text.label")
-        .style("opacity", n => (n.parent === d) ? 1 : 0)
-        .on("end", function(n) {
-          this.style.display = (n.parent === d) ? "inline" : "none";
-        });
+        transition.selectAll("text.label")
+          .style("opacity", n => {
+            // Always show top-level topics
+            if (n.depth === 1) return 0.7;
+
+            // At root, show depth 2 labels as well
+            if (focusNode === rootNode && n.depth === 2) return 1;
+
+            // When zoomed into a topic/subtopic, show its children
+            if (n.parent === focusNode) return 1;
+
+            return 0;
+          })
+          .on("end", function (n) {
+            const show =
+              (n.depth === 1) ||
+              (focusNode === rootNode && n.depth === 2) ||
+              (n.parent === focusNode);
+
+            this.style.display = show ? "inline" : "none";
+          });
+
     }
 
     // Shorten label helper
@@ -632,7 +657,7 @@
 
       const pack = d3.pack()
         .size([width, height])
-        .padding(4);
+        .padding(3);
 
       const packedRoot = pack(root);
       rootNode = packedRoot;
@@ -696,8 +721,8 @@
         .style("fill", "#020617")          // blackish text as requested
         .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.9rem")
         // Initial: show only top-level topic labels
-        .style("display", d => d.depth === 1 ? "inline" : "none")
         .style("opacity", d => d.depth === 1 ? 1 : 0)
+        .style("display", d => d.depth === 1 ? "inline" : "none")
         .text(d => {
           const raw = (d.data.name || "").replace(/\s*\(\d+\)\s*$/, "");
           return shortLabel(raw, d.depth === 1 ? 36 : 24);
