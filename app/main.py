@@ -165,10 +165,19 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     # 2) cosine distance → similarity
     similarity_expr = 1 - Chunk.embedding.cosine_distance(q_emb)
 
-    rows = (
+    # base query: chunks with non-null embeddings joined to documents
+    base_query = (
         db.query(Chunk, Document, similarity_expr.label("similarity"))
         .join(Document, Chunk.document_id == Document.id)
         .filter(Chunk.embedding != None)  # ← ignore NULL embeddings
+    )
+
+    # 2b) Optional scoping by document IDs
+    if payload.doc_ids:
+        base_query = base_query.filter(Document.id.in_(payload.doc_ids))
+
+    rows = (
+        base_query
         .order_by(similarity_expr.desc())
         .limit(payload.top_k)
         .all()
@@ -198,6 +207,7 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
         answer = _answer_from_hits(payload.query, hits)
 
     return QueryResponse(answer=answer, hits=hits)
+
 
 # Path: /code/app/static inside container
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")

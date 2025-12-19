@@ -1,6 +1,6 @@
 ## \app\helpers.py
 
-from typing import List
+from typing import List, Optional
 import spacy
 import os
 from openai import OpenAI
@@ -33,6 +33,7 @@ class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
     with_answer: bool = True
+    doc_ids: Optional[List[str]] = None
 
 
 class ChunkHit(BaseModel):
