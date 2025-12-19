@@ -1,6 +1,6 @@
 # app/schemas.py
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 from uuid import UUID
 
@@ -9,6 +9,8 @@ class IngestPayload(BaseModel):
     url: str
     title: Optional[str] = None
     text: str
+    mode: Literal["page", "selection", "note"] = "page"
+    tags: Optional[List[str]] = None
     score_info: Optional[float] = None
     score_ai_slop: Optional[float] = None
     captured_at: Optional[datetime] = None

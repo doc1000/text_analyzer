@@ -1,23 +1,28 @@
 {
   "manifest_version": 2,
   "name": "Trust Badger",
-  "version": "0.1",
-  "description": "Scores info content and sends to backend.",
+  "version": "0.4.0",
+  "description": "Capture and analyze your reading with Trust Badger",
   "permissions": [
     "activeTab",
     "tabs",
-    "<all_urls>"
+    "<all_urls>",
+    "contextMenus",
+    "storage",
+    "http://localhost:8000/*"
   ],
   "background": {
     "scripts": ["background.js"]
   },
   "browser_action": {
-    "default_title": "Trust Badger"
+    "default_title": "Trust Badger",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content-script.js"]
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
     }
   ],
   "browser_specific_settings": {

@@ -5,7 +5,20 @@ function extractPageText() {
 // Handle analyzer-related messages + overlay
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[TB CS] message received:", message);
+  
+  if (message && message.type === "TB_GET_SELECTION_CONTEXT") {
+      const selection = window.getSelection();
+      const selectionText = selection ? selection.toString() : "";
 
+      sendResponse({
+        selectionText,
+        url: window.location.href,
+        title: document.title || ""
+      });
+
+      // indicate we will respond synchronously
+      return true;
+  }
   if (message.type === "collect-text") {
     const text = extractPageText();
     console.log("[TB CS] collect-text returning", text.length, "chars");
@@ -20,8 +33,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "show-result") {
     console.log("[TB CS] show-result:", message.result);
-    showResultOverlay(message.result);
+    //showResultOverlay(message.result);  //this was hanging, not as useful with popup console
     // alert("Analyzer result:\n\n" + JSON.stringify(message.result, null, 2));
+    return false;
   }
 
   if (message.type === "show-error") {
@@ -176,3 +190,6 @@ function showScoreOverlay(overlay, { score, lexical, spec, ratio }) {
 
   overlay.append(header, scoreRow, stats, footer);
 }
+
+
+
