@@ -2,10 +2,10 @@
 
 const browserAPI = typeof browser !== "undefined" ? browser : chrome;
 
-const headerInput = document.getElementById("tb-header");
-const bodyInput = document.getElementById("tb-body");
-const tagsInput = document.getElementById("tb-tags");
-const tieUrlCheckbox = document.getElementById("tb-tie-url");
+const headerInput = document.getElementById("vb-header");
+const bodyInput = document.getElementById("vb-body");
+const tagsInput = document.getElementById("vb-tags");
+const tieUrlCheckbox = document.getElementById("vb-tie-url");
 const btnSave = document.getElementById("btn-save");
 const btnFullPage = document.getElementById("btn-fullpage");
 const statusEl = document.getElementById("status");
@@ -22,10 +22,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     browserAPI.tabs.sendMessage(
       tabId,
-      { type: "TB_GET_SELECTION_CONTEXT" },
+      { type: "VB_GET_SELECTION_CONTEXT" },
       (response) => {
         if (browserAPI.runtime.lastError) {
-          console.warn("[TB popup] Error getting selection:", browserAPI.runtime.lastError);
+          console.warn("[VB popup] Error getting selection:", browserAPI.runtime.lastError);
           return;
         }
         if (!response) return;
@@ -69,10 +69,10 @@ function sendNoteCapture() {
 
   browserAPI.runtime.sendMessage(
     {
-      type: "TB_CAPTURE_SNIPPET",
+      type: "VB_CAPTURE_SNIPPET",
       payload: {
         mode: "note",
-        url: currentPageUrl,
+        url: tieToUrl ? currentPageUrl : "",
         pageTitle: currentPageTitle,
         headerText,
         selectionText,
@@ -82,7 +82,7 @@ function sendNoteCapture() {
     },
     (response) => {
       if (browserAPI.runtime.lastError) {
-        console.warn("[TB popup] Capture error:", browserAPI.runtime.lastError);
+        console.warn("[VB popup] Capture error:", browserAPI.runtime.lastError);
         setStatus("Error sending capture.", true);
         return;
       }
@@ -98,10 +98,10 @@ function sendNoteCapture() {
 function sendFullPageCapture() {
   setStatus("Capturing full page…");
   browserAPI.runtime.sendMessage(
-    { type: "TB_CAPTURE_FULL_PAGE" },
+    { type: "VB_CAPTURE_FULL_PAGE" },
     (response) => {
       if (browserAPI.runtime.lastError) {
-        console.warn("[TB popup] Full-page capture error:", browserAPI.runtime.lastError);
+        console.warn("[VB popup] Full-page capture error:", browserAPI.runtime.lastError);
         setStatus("Error capturing page.", true);
         return;
       }

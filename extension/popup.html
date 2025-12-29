@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Trust Badger Capture</title>
+  <title>VaultBubble Capture</title>
   <style>
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -84,20 +84,20 @@
   </style>
 </head>
 <body>
-  <h1>Trust Badger Capture</h1>
+  <h1>VaultBubble Capture</h1>
 
-  <label for="tb-header">Header / notes</label>
-  <textarea id="tb-header" placeholder="Your note or title for this capture..."></textarea>
+  <label for="vb-header">Header / notes</label>
+  <textarea id="vb-header" placeholder="Your note or title for this capture..."></textarea>
 
-  <label for="tb-body">Selected text (optional)</label>
-  <textarea id="tb-body" placeholder="Highlight text on the page, then open this popup. You can also paste or type here."></textarea>
+  <label for="vb-body">Selected text (optional)</label>
+  <textarea id="vb-body" placeholder="Highlight text on the page, then open this popup. You can also paste or type here."></textarea>
 
-  <label for="tb-tags">Tags (comma-separated)</label>
-  <input id="tb-tags" type="text" placeholder="research, security, idea" />
+  <label for="vb-tags">Tags (comma-separated)</label>
+  <input id="vb-tags" type="text" placeholder="research, security, idea" />
 
   <div id="url-row">
-    <input type="checkbox" id="tb-tie-url" checked />
-    <label for="tb-tie-url">Tie to page URL</label>
+    <input type="checkbox" id="vb-tie-url" checked />
+    <label for="vb-tie-url">Tie to page URL</label>
   </div>
 
   <div id="buttons">
@@ -106,6 +106,34 @@
   </div>
 
   <div id="status"></div>
+
+  <details id="disclosure" style="margin-top:0.7rem;font-size:0.72rem;color:#9ca3af;">
+    <summary style="cursor:pointer; color:#a5b4fc;">
+      How does VaultBubble work?
+    </summary>
+
+    <div style="margin-top:0.45rem; line-height:1.35;">
+      <p style="margin:0 0 0.45rem 0;">
+        VaultBubble helps you save webpages, text, and notes for your own reference.
+      </p>
+
+      <p style="margin:0 0 0.45rem 0;">
+        To help organize and structure saved content, VaultBubble may send selected text and page URLs to off-site
+        services that perform automated analysis. These services are asked not to use your data for training or
+        other secondary purposes.
+      </p>
+
+      <p style="margin:0 0 0.45rem 0;">
+        VaultBubble does not sell or share your data for economic benefit. Saved content is stored locally on your
+        device unless you choose to connect a VaultBubble account, in which case it is stored under your account.
+      </p>
+
+      <p style="margin:0;">
+        Any metrics or estimates produced are heuristic and informational only. They do not measure accuracy,
+        truthfulness, credibility, or trustworthiness.
+      </p>
+    </div>
+  </details>
 
   <script src="popup.js"></script>
 </body>
