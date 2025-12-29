@@ -4,9 +4,9 @@ function extractPageText() {
 
 // Handle analyzer-related messages + overlay
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("[TB CS] message received:", message);
+  console.log("[VB CS] message received:", message);
   
-  if (message && message.type === "TB_GET_SELECTION_CONTEXT") {
+  if (message && message.type === "VB_GET_SELECTION_CONTEXT") {
       const selection = window.getSelection();
       const selectionText = selection ? selection.toString() : "";
 
@@ -21,7 +21,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "collect-text") {
     const text = extractPageText();
-    console.log("[TB CS] collect-text returning", text.length, "chars");
+    console.log("[VB CS] collect-text returning", text.length, "chars");
 
     sendResponse({
       text,
@@ -32,20 +32,20 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "show-result") {
-    console.log("[TB CS] show-result:", message.result);
+    console.log("[VB CS] show-result:", message.result);
     //showResultOverlay(message.result);  //this was hanging, not as useful with popup console
     // alert("Analyzer result:\n\n" + JSON.stringify(message.result, null, 2));
     return false;
   }
 
   if (message.type === "show-error") {
-    console.log("[TB CS] show-error:", message.error);
+    console.log("[VB CS] show-error:", message.error);
     showErrorOverlay(message.error);
     // alert("Analyzer error:\n\n" + message.error);
   }
 
   if (message.type === "show-loading") {
-    console.log("[TB CS] show-loading:", message.message);
+    console.log("[VB CS] show-loading:", message.message);
     // TODO: your overlay code here
   }
 

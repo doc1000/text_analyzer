@@ -6,7 +6,7 @@ const API_BASE = "http://localhost:8000"; // adjust if needed
 // ---------------- FULL PAGE ANALYZE + INGEST ---------------- //
 
 async function analyzeAndIngest(tab) {
-  console.log("[TB] analyzeAndIngest for tab", tab.id);
+  console.log("[VB] analyzeAndIngest for tab", tab.id);
 
   try {
     // 1) Ask content script for page text (and optionally title/url)
@@ -18,7 +18,7 @@ async function analyzeAndIngest(tab) {
     const url = pageData && pageData.url ? pageData.url : tab.url;
     const title = pageData && pageData.title ? pageData.title : tab.title;
 
-    console.log("[TB] collect-text response:", {
+    console.log("[VB] collect-text response:", {
       textLength: text.length,
       url,
       title
@@ -39,11 +39,11 @@ async function analyzeAndIngest(tab) {
       body: JSON.stringify({ text })
     });
 
-    console.log("[TB] /analyzer status:", analyzerRes.status);
+    console.log("[VB] /analyzer status:", analyzerRes.status);
 
     if (!analyzerRes.ok) {
       const errText = await analyzerRes.text();
-      console.error("[TB] Analyzer error:", analyzerRes.status, errText);
+      console.error("[VB] Analyzer error:", analyzerRes.status, errText);
       await browserAPI.tabs.sendMessage(tab.id, {
         type: "show-error",
         error: `Analyzer error: ${analyzerRes.status} ${errText}`
@@ -52,7 +52,7 @@ async function analyzeAndIngest(tab) {
     }
 
     const analyzerResult = await analyzerRes.json();
-    console.log("[TB] Analyzer result:", analyzerResult);
+    console.log("[VB] Analyzer result:", analyzerResult);
 
     // 3) Show the pretty overlay using analyzerResult
     await browserAPI.tabs.sendMessage(tab.id, {
@@ -72,7 +72,7 @@ async function analyzeAndIngest(tab) {
       tags: null
     };
 
-    console.log("[TB] ingest payload:", ingestPayload);
+    console.log("[VB] ingest payload:", ingestPayload);
 
     const ingestRes = await fetch(`${API_BASE}/ingest`, {
       method: "POST",
@@ -80,34 +80,34 @@ async function analyzeAndIngest(tab) {
       body: JSON.stringify(ingestPayload)
     });
 
-    console.log("[TB] /ingest status:", ingestRes.status);
+    console.log("[VB] /ingest status:", ingestRes.status);
 
     if (!ingestRes.ok) {
       console.error(
-        "[TB] ingest error:",
+        "[VB] ingest error:",
         ingestRes.status,
         await ingestRes.text()
       );
     } else {
       const ingestResult = await ingestRes.json().catch(() => null);
-      console.log("[TB] ingest success:", ingestResult);
+      console.log("[VB] ingest success:", ingestResult);
     }
   } catch (e) {
-    console.error("[TB] analyzeAndIngest exception:", e);
+    console.error("[VB] analyzeAndIngest exception:", e);
     try {
       await browserAPI.tabs.sendMessage(tab.id, {
         type: "show-error",
         error: e.toString()
       });
     } catch (inner) {
-      console.error("[TB] Failed to send error to tab:", inner);
+      console.error("[VB] Failed to send error to tab:", inner);
     }
   }
 }
 
 // Toolbar icon click = full-page capture
 browserAPI.browserAction.onClicked.addListener(async (tab) => {
-  console.log("[TB] Icon clicked on tab", tab.id);
+  console.log("[VB] Icon clicked on tab", tab.id);
   await analyzeAndIngest(tab);
 });
 
@@ -117,26 +117,26 @@ browserAPI.browserAction.onClicked.addListener(async (tab) => {
 browserAPI.runtime.onInstalled.addListener(() => {
   try {
     browserAPI.contextMenus.create({
-      id: "tb-save-selection",
-      title: "Save selection to Trust Badger",
+      id: "vb-save-selection",
+      title: "Save selection to VaultBubble",
       contexts: ["selection"]
     });
   } catch (e) {
-    console.warn("[TB] contextMenus.create failed (may already exist):", e);
+    console.warn("[VB] contextMenus.create failed (may already exist):", e);
   }
 });
 
 browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== "tb-save-selection" || !tab || !tab.id) return;
+  if (info.menuItemId !== "vb-save-selection" || !tab || !tab.id) return;
 
   try {
     // Ask content script in that tab for selection + page info
     const response = await browserAPI.tabs.sendMessage(tab.id, {
-      type: "TB_GET_SELECTION_CONTEXT"
+      type: "VB_GET_SELECTION_CONTEXT"
     });
 
     if (!response || !response.selectionText) {
-      console.warn("[TB] No selection text to save from context menu");
+      console.warn("[VB] No selection text to save from context menu");
       return;
     }
 
@@ -164,7 +164,7 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
       captured_at: new Date().toISOString()
     };
 
-    console.log("[TB] Quick-capture payload:", payload);
+    console.log("[VB] Quick-capture payload:", payload);
 
     const ingestRes = await fetch(`${API_BASE}/ingest`, {
       method: "POST",
@@ -172,19 +172,19 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
       body: JSON.stringify(payload)
     });
 
-    console.log("[TB] /ingest (quick selection) status:", ingestRes.status);
+    console.log("[VB] /ingest (quick selection) status:", ingestRes.status);
     if (!ingestRes.ok) {
       console.error(
-        "[TB] ingest error (quick selection):",
+        "[VB] ingest error (quick selection):",
         ingestRes.status,
         await ingestRes.text()
       );
     } else {
       const ingestResult = await ingestRes.json().catch(() => null);
-      console.log("[TB] ingest success (quick selection):", ingestResult);
+      console.log("[VB] ingest success (quick selection):", ingestResult);
     }
   } catch (e) {
-    console.error("[TB] context menu quick-capture exception:", e);
+    console.error("[VB] context menu quick-capture exception:", e);
   }
 });
 
@@ -195,7 +195,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) return false;
 
   // Popup-triggered note capture
-  if (message.type === "TB_CAPTURE_SNIPPET") {
+  if (message.type === "VB_CAPTURE_SNIPPET") {
     const {
       mode,          // "note"
       url,
@@ -256,7 +256,7 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       captured_at: new Date().toISOString()
     };
 
-    console.log("[TB] Popup snippet payload:", payload);
+    console.log("[VB] Popup snippet payload:", payload);
 
     fetch(`${API_BASE}/ingest`, {
       method: "POST",
@@ -265,11 +265,11 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then((r) => r.json().catch(() => null))
       .then((data) => {
-        console.log("[TB] /ingest response (popup capture):", data);
+        console.log("[VB] /ingest response (popup capture):", data);
         sendResponse({ ok: true, data });
       })
       .catch((err) => {
-        console.error("[TB] /ingest error (popup capture):", err);
+        console.error("[VB] /ingest error (popup capture):", err);
         sendResponse({ ok: false, error: String(err) });
       });
 
@@ -277,10 +277,10 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Popup-triggered full-page capture
-  if (message.type === "TB_CAPTURE_FULL_PAGE") {
+  if (message.type === "VB_CAPTURE_FULL_PAGE") {
     browserAPI.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
       if (tabs && tabs[0]) {
-        console.log("[TB] Popup requested full-page capture for tab", tabs[0].id);
+        console.log("[VB] Popup requested full-page capture for tab", tabs[0].id);
         await analyzeAndIngest(tabs[0]);
       }
       sendResponse({ ok: true });

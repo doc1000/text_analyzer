@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "Trust Badger",
-  "version": "0.4.0",
-  "description": "Capture and analyze your reading with Trust Badger",
+  "name": "VaultBubble",
+  "version": "0.5.0",
+  "description": "Capture and organize selected text, full pages, notes, and tags",
   "permissions": [
     "activeTab",
     "tabs",
@@ -14,9 +14,18 @@
   "background": {
     "scripts": ["background.js"]
   },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
   "browser_action": {
-    "default_title": "Trust Badger",
-    "default_popup": "popup.html"
+    "default_title": "VaultBubble",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
   },
   "content_scripts": [
     {
@@ -27,7 +36,7 @@
   ],
   "browser_specific_settings": {
   "gecko": {
-    "id": "trustbadger@energyalgorithms.net",
+    "id": "vaultbubble@energyalgorithms.net",
     "data_collection_permissions": {
       "required": [
         "websiteContent",
@@ -38,6 +47,6 @@
       ]
     }
   }
+  }
 }
 
-}
