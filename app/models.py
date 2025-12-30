@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 from pgvector.sqlalchemy import Vector  # pip install pgvector
+from .config import PREFERENCES
 
 Base = declarative_base()
 
@@ -30,7 +31,8 @@ class Chunk(Base):
     chunk_text = Column(Text, nullable=False)
 
     # match your pgvector dimension, e.g. 1536
-    embedding = Column(Vector(1536), nullable=True)
+    EMBED_DIM = PREFERENCES.models.embedding_dim
+    embedding = Column(Vector(EMBED_DIM), nullable=True)
 
     score_info = Column(Float, nullable=True)
     score_ai_slop = Column(Float, nullable=True)

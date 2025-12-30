@@ -4,11 +4,12 @@ from typing import List, Optional
 import spacy
 import os
 from openai import OpenAI
+import json
+import urllib.request
 from .config import PREFERENCES
 from uuid import UUID
 from pydantic import BaseModel
 from datetime import datetime
-
 nlp = spacy.load("en_core_web_sm")
 
 MAX_CHARS_PER_CHUNK = 1000  # tune this as you like
@@ -80,22 +81,76 @@ def chunk_text(text: str) -> List[str]:
     return chunks
 
 
-EMBED_DIM = 1536  # keep in sync with DB/vector size
+EMBED_DIM = PREFERENCES.models.embedding_dim  # keep in sync with DB/vector size
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+def _openai_chat(prompt: str) -> str:
+    model_name = PREFERENCES.models.llm_model
+    resp = _client.chat.completions.create(
+        model=model_name,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.choices[0].message.content.strip()
+
+def _ollama_chat(prompt: str) -> str:
+    base = PREFERENCES.models.ollama.base_url.rstrip("/")
+    model = PREFERENCES.models.ollama.chat_model
+    url = f"{base}/api/chat"
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    # Ollama returns message content under data["message"]["content"]
+    return (data.get("message", {}) or {}).get("content", "").strip()
+
+def _ollama_embed(text: str) -> List[float]:
+    base = PREFERENCES.models.ollama.base_url.rstrip("/")
+    model = PREFERENCES.models.ollama.embed_model
+    url = f"{base}/api/embeddings"
+    payload = {"model": model, "prompt": text}
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    vec = data["embedding"]
+
+    if len(vec) != EMBED_DIM:
+        raise ValueError(f"Embedding dim mismatch: got {len(vec)} expected {EMBED_DIM} (model={model})")
+
+    return vec
+
 def get_embedding(text: str) -> List[float]:
     """
-    Get a single embedding vector for a text using the configured model.
+    Get a single embedding vector for a text using the configured provider.
     """
-    model_name = PREFERENCES.models.embedding_model
+    if getattr(PREFERENCES.models, "provider", "openai") == "ollama":
+        return _ollama_embed(text)
 
-    # You can adjust depending on which OpenAI API you use
-    resp = client.embeddings.create(
-        model=model_name,
-        input=text,
-    )
-    return resp.data[0].embedding
+    # OpenAI fallback (your existing behavior)
+    model_name = PREFERENCES.models.embedding_model
+    resp = client.embeddings.create(model=model_name, input=text)
+    vec = resp.data[0].embedding
+    if len(vec) != EMBED_DIM:
+        raise ValueError(f"Embedding dim mismatch: got {len(vec)} expected {EMBED_DIM} (model={model_name})")
+    return vec
 
 def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
     context = "\n\n".join(
@@ -109,8 +164,12 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
         f"Context:\n{context}"
     )
 
-    resp = client.chat.completions.create(
-        model="gpt-4.1-nano", #"gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return resp.choices[0].message.content.strip()
+    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+
+    if model_provider == "ollama":
+        text = _ollama_chat(prompt)
+    else:
+        text = _openai_chat(prompt)
+    return text
+
+

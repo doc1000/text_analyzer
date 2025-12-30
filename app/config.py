@@ -1,14 +1,17 @@
 # app/config.py
 from dataclasses import dataclass, field
 from typing import Literal, Optional
-
+import os
 # You can extend these later or load them from JSON if you want.
 # For now: one central place to tweak your internal tools.
+Provider = Literal["openai", "ollama"]
 
 EmbeddingModel = Literal[
     "text-embedding-3-large",
     "text-embedding-3-small",
 ]
+
+#EmbeddingDimension = Literal[384]  # keep in sync with DB/vector size
 
 ChatModel = Literal[
     "gpt-4.1-nano",
@@ -37,11 +40,19 @@ class ClusteringConfig:
     k_sub_min: int = 1
     k_sub_max: int = 4
 
+@dataclass
+class OllamaConfig:
+    base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b")
+    embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "all-minilm")
 
 @dataclass
 class ModelConfig:
-    embedding_model: EmbeddingModel = "text-embedding-3-small"
-    llm_model: ChatModel = "gpt-4.1-nano"
+    provider: Provider = os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
+    embedding_model: EmbeddingModel = os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
+    embedding_dim: int = os.getenv("EMBED_DIM_V2", 1536)
+    llm_model: ChatModel = os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 
 @dataclass

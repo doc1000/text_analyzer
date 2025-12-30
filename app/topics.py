@@ -21,6 +21,7 @@ from .schemas import (         # whatever pydantic models you use
     TopicDoc,
     TopicsResponse,
 )
+from .helpers import _openai_chat, _ollama_chat
 
 # ---------- OpenAI client ----------
 _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -142,12 +143,13 @@ def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
         "SUMMARY: <summary text>\n\n"
         f"DOCUMENTS:\n{context}"
     )
-    model_name = PREFERENCES.models.llm_model
-    resp = _client.chat.completions.create(
-        model=model_name,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = resp.choices[0].message.content.strip()
+    
+    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+
+    if model_provider == "ollama":
+        text = _ollama_chat(prompt)
+    else:
+        text = _openai_chat(prompt)
 
     title = "Untitled Topic"
     summary = ""

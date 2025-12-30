@@ -266,6 +266,14 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
         text=full_text,
     )
 
+@app.get("/embedding_length")
+def get_embedding_length(prompt: str = "this is a test"):
+    """
+    return embedding length
+    """
+    emb = len(get_embedding(prompt))
+    return {"len": emb}
+
 if __name__ == "__main__":
 	#pip install -r requirements.txt
 	uvicorn.run(app, host="127.0.0.1", port=8000)
