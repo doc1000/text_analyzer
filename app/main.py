@@ -1,14 +1,19 @@
 # save as app/main.py
 ## IMPORTS
 from fastapi import FastAPI, Depends, HTTPException
-from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
+from pydantic import BaseModel
 import spacy
 import gzip
 import uvicorn
 import os
+from datetime import datetime
+from typing import List
 from sqlalchemy.orm import Session
 from sqlalchemy import asc
+#Internal imports
 from .db import init_db, get_db
 from .schemas import IngestPayload, DocumentDetailResponse
 from . import models
@@ -23,16 +28,17 @@ from .topics import (
     clear_topics_cache,
 )
 
-from datetime import datetime
-from typing import List
-from fastapi.staticfiles import StaticFiles
+
 
 
 nlp = spacy.load("en_core_web_sm")
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
 
-init_db()
+app = FastAPI(lifespan=lifespan)
 
 # Allow extension + localhost
 app.add_middleware(
