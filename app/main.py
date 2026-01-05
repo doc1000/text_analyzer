@@ -4,6 +4,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+import asyncio
 from pydantic import BaseModel
 import spacy
 import gzip
@@ -17,25 +18,34 @@ from sqlalchemy import asc
 from .db import init_db, get_db
 from .schemas import IngestPayload, DocumentDetailResponse
 from . import models
-from .models import Chunk, Document
-from .helpers import chunk_text, get_embedding, EMBED_DIM, _answer_from_hits
-from .helpers import DocumentOut, QueryRequest, ChunkHit, QueryResponse
+from .models import Document
+from .helpers import (get_embedding,
+    _answer_from_hits,DocumentOut, QueryRequest, ChunkHit,
+    QueryResponse, EMBED_TABLE, fill_empty_embed_docs
+)
 from .topics import (
-    compute_topics,
     TopicsResponse,
     build_topics_hierarchy,
     get_topics_with_cache,
     clear_topics_cache,
 )
-
+from .config import PREFERENCES
 
 
 
 nlp = spacy.load("en_core_web_sm")
 
+async def _fill_embeddings_async():
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None,
+        fill_empty_embed_docs,
+    )
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    asyncio.create_task(_fill_embeddings_async())
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -56,7 +66,7 @@ def health():
 @app.get("/test-db")
 def test_db(db: Session = Depends(get_db)):
     # quick sanity query
-    result = db.execute("SELECT 1;")
+    result = db.execute(text('SELECT 1;'))
     return {"db_ok": bool(list(result))}
 
 class Input(BaseModel):
@@ -117,7 +127,11 @@ def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
 
     db.add(doc)
     db.flush() # get doc.id without committing yet
+    
 
+    chunk_len = embed_doc_chunks(payload.text)
+    
+    _ = """
     # 2) Chunk full text
     chunks = chunk_text(payload.text)
 
@@ -139,12 +153,12 @@ def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
         db.add(chunk)
     # Commit everything
     db.commit()
-    db.refresh(doc)
+    db.refresh(doc)"""
 
     return {
         "status": "ok",
         "document_id": str(doc.id),
-        "num_chunks": len(chunks),
+        "num_chunks": int(chunk_len),
     }
 
 @app.get("/documents", response_model=List[DocumentOut])
@@ -169,13 +183,13 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     q_emb = get_embedding(payload.query)
 
     # 2) cosine distance → similarity
-    similarity_expr = 1 - Chunk.embedding.cosine_distance(q_emb)
+    similarity_expr = 1 - EMBED_TABLE.embedding.cosine_distance(q_emb)
 
     # base query: chunks with non-null embeddings joined to documents
     base_query = (
-        db.query(Chunk, Document, similarity_expr.label("similarity"))
-        .join(Document, Chunk.document_id == Document.id)
-        .filter(Chunk.embedding != None)  # ← ignore NULL embeddings
+        db.query(EMBED_TABLE, Document, similarity_expr.label("similarity"))
+        .join(Document, EMBED_TABLE.document_id == Document.id)
+        .filter(EMBED_TABLE.embedding != None)  # ← ignore NULL embeddings
     )
 
     # 2b) Optional scoping by document IDs
@@ -222,14 +236,14 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/topics", response_model=TopicsResponse)
-def get_topics(days: int = 30, db: Session = Depends(get_db)):
+def get_topics(days: int = 10, db: Session = Depends(get_db)):
     """
     Return hierarchical topics for documents in the last `days` days.
     """
     return get_topics_with_cache(db, days=days)
 
 @app.get("/topics/hierarchy")
-def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
+def get_topics_hierarchy(days: int = 10, db: Session = Depends(get_db)):
     """
     Return a D3-friendly hierarchy representation of topics and subtopics
     for the last `days` days of documents.
@@ -249,9 +263,9 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
 
     # Reconstruct full captured text from chunks (ordered)
     chunks = (
-        db.query(Chunk)
-        .filter(Chunk.document_id == doc.id)
-        .order_by(asc(Chunk.chunk_index))
+        db.query(EMBED_TABLE)
+        .filter(EMBED_TABLE.document_id == doc.id)
+        .order_by(asc(EMBED_TABLE.chunk_index))
         .all()
     )
     full_text = "\n\n".join([c.chunk_text for c in chunks]) if chunks else ""
@@ -266,13 +280,15 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
         text=full_text,
     )
 
-@app.get("/embedding_length")
+@app.get("/model_configs")
 def get_embedding_length(prompt: str = "this is a test"):
     """
     return embedding length
     """
     emb = len(get_embedding(prompt))
-    return {"len": emb}
+    return {"len": emb,
+             "embed model":PREFERENCES.models.embedding_model,
+            "chat model": PREFERENCES.models.llm_model}
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt

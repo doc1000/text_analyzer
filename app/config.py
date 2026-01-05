@@ -8,7 +8,9 @@ Provider = Literal["openai", "ollama"]
 
 EmbeddingModel = Literal[
     "text-embedding-3-large",
-    "text-embedding-3-small",
+    "text-embedding-3-small", #1536?
+    "bge-m3", #1024
+    "all-minilm" #324
 ]
 
 #EmbeddingDimension = Literal[384]  # keep in sync with DB/vector size
@@ -19,6 +21,9 @@ ChatModel = Literal[
     "gpt-4.1",
     "gpt-4o-mini",
     "gpt-4o",
+    "gemma3:1b-it-q4_K_M", # supposed to be low latency, light
+    "phi3.5-mini-q4km", # midsize - mid CPU latency, mid performance
+    "llama3.2:3b", #a bit big for CPU"
 ]
 # may need to add something to make sure that EMBED_DIM is consistent
 
@@ -43,15 +48,15 @@ class ClusteringConfig:
 @dataclass
 class OllamaConfig:
     base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b")
-    embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "all-minilm")
+    chat_model: str = "gemma3:1b-it-q4_K_M" #os.getenv("OLLAMA_CHAT_MODEL","gemma3:1b-it-q4_K_M")
+    embed_model: str = "all-minilm" #os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
 
 @dataclass
 class ModelConfig:
-    provider: Provider = os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
-    embedding_model: EmbeddingModel = os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
-    embedding_dim: int = os.getenv("EMBED_DIM_V2", 1536)
-    llm_model: ChatModel = os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
+    provider: Provider = "ollama" #os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
+    embedding_model: EmbeddingModel = OllamaConfig.embed_model #"text-embedding-3-small" #os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
+    #embedding_dim: int = 384 #os.getenv("EMBED_DIM_V2", 1536)
+    llm_model: ChatModel = OllamaConfig.chat_model #"gpt-4.1-nano" #os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 

@@ -14,19 +14,22 @@ from sklearn.cluster import KMeans
 from openai import OpenAI
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
 from .config import PREFERENCES
-from .models import Document, Chunk
+from .models import Document, get_or_create_embedding_class
+from .db import get_db
 from .schemas import (         # whatever pydantic models you use
     Topic,
     Subtopic,
     TopicDoc,
     TopicsResponse,
 )
-from .helpers import _openai_chat, _ollama_chat
+from .helpers import _openai_chat, _ollama_chat, get_embedding, EMBED_TABLE
 
 # ---------- OpenAI client ----------
 _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Simple in-memory cache for topics per (days, max_captured_at)
 _topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
+
+
 
 # ---------- Dimensionality reduction ----------
 def reduce_embeddings(X: np.ndarray) -> np.ndarray:
@@ -182,7 +185,7 @@ def canonicalize_url(url: str) -> str:
 
 
 # ---------- Embeddings aggregation ----------
-
+import ast
 def compute_document_embeddings(
     db: Session,
     docs: List[Document],
@@ -196,18 +199,21 @@ def compute_document_embeddings(
         return {}
 
     doc_ids = [d.id for d in docs]
+    emb_dim = len(get_embedding("dimension probe"))
+    print(f"embedding_dimensions: {emb_dim}")
 
     chunks = (
-        db.query(Chunk)
-        .filter(Chunk.document_id.in_(doc_ids))
-        .filter(Chunk.embedding != None)  # only chunks with embeddings
+        db.query(EMBED_TABLE)
+        .filter(EMBED_TABLE.document_id.in_(doc_ids))
+        .filter(EMBED_TABLE.embedding != None)  # only chunks with embeddings
         .all()
     )
-
+    
     by_doc: Dict[UUID, List[np.ndarray]] = {}
     for ch in chunks:
         # pgvector returns something list-like; convert to numpy array
-        vec = np.array(ch.embedding, dtype=np.float32)
+        lst = ast.literal_eval(ch.embedding)
+        vec = np.array(lst, dtype=np.float32)
         by_doc.setdefault(ch.document_id, []).append(vec)
 
     doc_embeds: Dict[UUID, np.ndarray] = {}
