@@ -274,22 +274,31 @@ SENTENCE_TABLE = get_or_create_embedding_class(
         chunk_type = "sent"
     )
 
-def fill_empty_embed_docs():
+def fill_empty_embed_docs(embed_type: Literal["chunk","sent"]="chunk"):
     #pull documents that do not have chunks with current embeddings
-    #1) pull name of table assigned to current embedding
-    #   create table if not exists
 
     # pull documents that do not have embeddings in batches
     # use ORM syntax
+    if embed_type == "chunk":
+        target_table=EMBED_TABLE
+        parent_table = Document
+        parent_id=target_table.document_id
+        parent_text=parent_table.full_text
+    if embed_type == "sent":
+        target_table=SENTENCE_TABLE
+        parent_table = EMBED_TABLE
+        parent_id=target_table.chunk_id
+        parent_text=parent_table.chunk_text
+    
     db_gen = get_db()
     db: Session = next(db_gen)
     subq = (
-        db.query(EMBED_TABLE.id)
-        .filter(EMBED_TABLE.document_id == Document.id)
+        db.query(target_table.id)
+        .filter(parent_id == parent_table.id)
         .exists()
     )
     query = (
-        db.query(Document.id, Document.full_text)
+        db.query(parent_table.id, parent_text)
         .filter(~subq)  # ← find NULL embeddings
         .limit(100)
     )
@@ -301,7 +310,7 @@ def fill_empty_embed_docs():
         for doc in rows:
             #   create and load embeddings for each document
             #try:
-            embed_doc_chunks(doc)
+            embed_doc_chunks(doc,chunk_type=embed_type)
             #except Exception as e:
                 
 

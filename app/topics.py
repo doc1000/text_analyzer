@@ -164,7 +164,7 @@ def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
         "num_predict": 32
     }
     if model_provider == "ollama":
-        text = _ollama_chat(prompt, ollama_title_defaults)
+        text = _ollama_chat(prompt, ollama_title_options)
     else:
         text = _openai_chat(prompt)
 
@@ -198,6 +198,24 @@ def canonicalize_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), clean_query, parts.fragment))
 
 
+def normalize_embedding(emb):
+    # Already a numpy array
+    if isinstance(emb, np.ndarray):
+        return emb
+
+    # Already a (Python) list/tuple of numbers
+    if isinstance(emb, (list, tuple)):
+        return np.array(emb, dtype=float)
+
+    # String that needs parsing
+    if isinstance(emb, str):
+        parsed = ast.literal_eval(emb)
+        return np.array(parsed, dtype=float)
+
+    raise TypeError(f"Unexpected embedding type: {type(emb)}")
+
+
+
 # ---------- Embeddings aggregation ----------
 import ast
 def compute_document_embeddings(
@@ -226,8 +244,9 @@ def compute_document_embeddings(
     by_doc: Dict[UUID, List[np.ndarray]] = {}
     for ch in chunks:
         # pgvector returns something list-like; convert to numpy array
-        lst = ast.literal_eval(ch.embedding)
-        vec = np.array(lst, dtype=np.float32)
+        vec = normalize_embedding(ch.embedding)
+        #lst = ast.literal_eval(ch.embedding)
+        #vec = np.array(lst, dtype=np.float32)
         by_doc.setdefault(ch.document_id, []).append(vec)
 
     doc_embeds: Dict[UUID, np.ndarray] = {}
