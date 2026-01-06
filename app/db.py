@@ -1,17 +1,17 @@
 # app/db.py
 import os
-import time
-from typing import Optional, Tuple
+#import time
+#from typing import Optional, Tuple
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
-from .models import Base, register_embedding_model, create_embedding_table_class
-from .config import PREFERENCES
+from sqlalchemy.orm import sessionmaker #, Session
+from .models import Base
+#from .config import PREFERENCES
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+EMBED_TABLE = {}
 def ensure_schemas():
     with engine.connect() as conn:
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS embedding"))
@@ -29,10 +29,8 @@ def init_db():
     Each embedding model gets its own table under the embedding schema and a row in embedding.embedding_model.
     Your config.py can pick the model, look up the meta row, and you can map table_location back to the corresponding dynamic class if needed (e.g., via a registry dict keyed by (model_name, version)).
     """
-    with Session(engine) as session:
-        register_embedding_model(session, "bge-small-en", "v1.5", 512)
-        register_embedding_model(session, "text-embedding-3-small", "v1", 1536)
-        register_embedding_model(session, "bge-m3", "v1", 1024)
+    #with Session(engine) as session:
+    #    register_embedding_model(session, "bge-small-en", "v1.5", 512)
 
 def get_db():
     db = SessionLocal()
@@ -40,7 +38,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 
 

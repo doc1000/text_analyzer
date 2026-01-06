@@ -11,8 +11,9 @@ from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import Session
 import re
 from datetime import datetime
-from pgvector.sqlalchemy import Vector  # pip install pgvector
-from .config import PREFERENCES
+from typing import Literal
+from pgvector.sqlalchemy import Vector as pgVector # pip install pgvector
+#from .config import PREFERENCES
 
 Base = declarative_base()
 
@@ -26,26 +27,7 @@ class Document(Base):
     score_info = Column(Float, nullable=True)
     score_ai_slop = Column(Float, nullable=True)
     captured_at = Column(DateTime, default=datetime.utcnow)
-_ = """
-class Chunk(Base):
-    __tablename__ = "chunks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(UUID(as_uuid=True),
-                         ForeignKey("documents.id", ondelete="CASCADE"),
-                         nullable=False)
-    chunk_index = Column(Integer, nullable=False)
-    chunk_text = Column(Text, nullable=False)
-
-    # match your pgvector dimension, e.g. 1536
-    EMBED_DIM = 1536 #PREFERENCES.models.embedding_dim
-    embedding = Column(Vector(EMBED_DIM), nullable=True)
-
-    score_info = Column(Float, nullable=True)
-    score_ai_slop = Column(Float, nullable=True)
-
-# ... keep your existing engine / SessionLocal / init_db / get_db as-is ...
-"""
 
 class EmbeddingModel(Base):
     __tablename__ = "embedding_model"
@@ -66,14 +48,28 @@ class EmbeddingModel(Base):
         "eager_defaults": True,
     }
 
+from sqlalchemy.types import UserDefinedType
+from pgvector.sqlalchemy import Vector as PgVector  # name it PgVector to avoid clash
+
 class Vector(UserDefinedType):
-    cache_ok = True # tell SQLAlchemy it’s safe to cache
+    cache_ok = True
+
     def __init__(self, dim: int):
         self.dim = dim
+        # use the pgvector type internally
+        self._inner = PgVector(dim)
 
     def get_col_spec(self, **kw):
-        # e.g. "vector(512)"
-        return f"vector({self.dim})"
+        # delegate to pgvector’s type, which emits "vector(<dim>)"
+        return self._inner.compile(kw.get("dialect")) if kw.get("dialect") else f"vector({self.dim})"
+
+    # Optional: bind/column expression passthrough if you need them
+    def bind_processor(self, dialect):
+        return self._inner.bind_processor(dialect)
+
+    def result_processor(self, dialect, coltype):
+        return self._inner.result_processor(dialect, coltype)
+
 
 def make_safe_table_name(model_name: str, version: str, dim: int) -> str:
     base = f"{model_name}_{version}_{dim}"
@@ -115,8 +111,19 @@ def register_embedding_model(
     return meta
 
 
-def get_or_create_embedding_class(model_name: str, version: str, dim: int, db: "get_db()"):
-    table_name = make_safe_table_name(model_name, version, dim)  # -> "all_minilm_v1_384"
+def get_or_create_embedding_class(model_name: str, version: str,
+     dim: int, db: "get_db()",chunk_type: Literal["chunk","sent"] = "chunk"):
+    """get or create the chunk or sentence embeddings table.  will be model name for chunks
+    will append sent_ to model name for sentences"""
+
+    
+    if chunk_type == "chunk":
+        model_prefixed=model_name
+    else:
+        model_prefixed = chunk_type + "_" + model_name
+        chunk_table = make_safe_table_name(model_name, version, dim)
+    
+    table_name = make_safe_table_name(model_prefixed, version, dim)  # -> "all_minilm_v1_384"
     full_key = f"embedding.{table_name}"  # schema-qualified key in metadata.tables
 
     # If table already exists in metadata, reuse it
@@ -139,19 +146,11 @@ def get_or_create_embedding_class(model_name: str, version: str, dim: int, db: "
     # Otherwise define a new mapped class + table
     # (only runs the first time for this name)
 
-
-    class Vector(UserDefinedType):
-        cache_ok = True
-        def __init__(self, dim: int):
-            self.dim = dim
-        def get_col_spec(self, **kw):
-            return f"vector({self.dim})"
-
     class_name = f"Embedding_{table_name}"
+    
     attrs = {
         "__tablename__": table_name,
         "__table_args__": (
-            # schema
             {"schema": "embedding"},
         ),
         "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
@@ -167,6 +166,25 @@ def get_or_create_embedding_class(model_name: str, version: str, dim: int, db: "
             nullable=False,
         ),
     }
+    if chunk_type == "sent":
+        attrs = {
+            "__tablename__": table_name,
+            "__table_args__": (
+                {"schema": "embedding"},
+            ),
+            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            "chunk_id": Column(UUID(as_uuid=True),
+                            ForeignKey(f"embedding.{chunk_table}.id", ondelete="CASCADE"),
+                            nullable=False),
+            "sent_index": Column(Integer, nullable=False),
+            "sent_text": Column(Text, nullable=False),
+            "embedding": Column(Vector(dim), nullable=False),
+            "created_at": Column(
+                DateTime(timezone=True),
+                server_default=text("now()"),
+                nullable=False,
+            ),
+        }
 
     cls = type(class_name, (Base,), attrs)
 

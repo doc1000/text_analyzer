@@ -1,6 +1,6 @@
 ## \app\helpers.py
 
-from typing import List, Optional
+from typing import List, Optional, Literal
 import spacy
 import os
 from openai import OpenAI
@@ -15,7 +15,8 @@ from datetime import datetime
 nlp = spacy.load("en_core_web_sm")
 from .models import Document, get_or_create_embedding_class
 
-MAX_CHARS_PER_CHUNK = 1000  # tune this as you like
+MAX_CHARS_PER_CHUNK = 1024  # tune this as you like
+MAX_CHARS_PER_SENTENCE = 170  # typical sentence is 75-100, academic 150
 
 ## BaseModel Classes - could be moved
 ## DocumentOut, QueryRequest, ChunkHit, QueryResponse
@@ -78,29 +79,31 @@ def split_doc_sentences(doc, max_tokens=MAX_CHARS_PER_CHUNK):
             yield from split_long_sentence(s, max_tokens)
 
 
-def chunk_text(text: str) -> List[str]:
+def chunk_text(text: str, max_char: int = MAX_CHARS_PER_CHUNK) -> List[str]:
     """
     Very simple sentence-based chunker: walks spaCy sentences
     and groups them up to ~MAX_CHARS_PER_CHUNK.
     """
     doc = nlp(text)
-    doc = list(split_doc_sentences(doc, max_tokens=MAX_CHARS_PER_CHUNK))
+    doc = list(split_doc_sentences(doc, max_tokens=max_char))
     chunks: List[str] = []
     current: List[str] = []
     current_len = 0
 
     for s in doc: #.sents:
         #s = sent.text.strip()
+
         if not s:
             continue
 
-        if current_len + len(s) > MAX_CHARS_PER_CHUNK and current:
+        if current_len + len(s) > max_char and current:
             chunks.append(" ".join(current))
             current = [s]
             current_len = len(s)
         else:
             current.append(s)
             current_len += len(s) + 1
+        
 
     if current:
         chunks.append(" ".join(current))
@@ -117,7 +120,15 @@ def _openai_chat(prompt: str) -> str:
     )
     return resp.choices[0].message.content.strip()
 
-def _ollama_chat(prompt: str) -> str:
+
+
+ollama_chat_defaults = {
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "num_predict": 256
+  }
+
+def _ollama_chat(prompt: str, options: dict=ollama_chat_defaults) -> str:
     base = PREFERENCES.models.ollama.base_url.rstrip("/")
     model = PREFERENCES.models.ollama.chat_model
     url = f"{base}/api/chat"
@@ -126,6 +137,7 @@ def _ollama_chat(prompt: str) -> str:
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
+        "options": options
     }
 
     req = urllib.request.Request(
@@ -151,7 +163,7 @@ def _post_json(url: str, payload: dict, timeout: int = 60) -> dict:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-OLLAMA_EMBED_CHAR_LIMIT = int(os.getenv("OLLAMA_EMBED_CHAR_LIMIT", "12000"))
+OLLAMA_EMBED_CHAR_LIMIT = int(os.getenv("OLLAMA_EMBED_CHAR_LIMIT", "1000"))
 
 def _clean_embed_input(text: str) -> str:
     if text is None:
@@ -254,6 +266,14 @@ EMBED_TABLE = get_or_create_embedding_class(
         db=get_db()
     )
 
+SENTENCE_TABLE = get_or_create_embedding_class(
+        model_name=EMBED_MODEL,
+        version="v1",
+        dim=EMBED_DIM,
+        db=get_db(),
+        chunk_type = "sent"
+    )
+
 def fill_empty_embed_docs():
     #pull documents that do not have chunks with current embeddings
     #1) pull name of table assigned to current embedding
@@ -285,35 +305,62 @@ def fill_empty_embed_docs():
             #except Exception as e:
                 
 
-def embed_doc_chunks(doc:Document):
-    # create temp table class for structured loading
+def embed_doc_chunks(doc:Document | type[EMBED_TABLE],
+    chunk_type: Literal["chunk","sent"]="chunk"):
     db_gen = get_db()
     db: Session = next(db_gen)
     # 2) Chunk full text
-    chunks = chunk_text(doc.full_text)
+    if chunk_type == "chunk":
+        max_char = MAX_CHARS_PER_CHUNK
+        text_input = doc.full_text
+    if chunk_type == "sent":
+        max_char = MAX_CHARS_PER_SENTENCE
+        text_input = doc.chunk_text
+
+    chunks = chunk_text(text_input, max_char=max_char)
 
     # 3) For each chunk, compute embedding and create Chunk row
     for idx, chunk_text_value in enumerate(chunks):
         print(f"chunk {idx} length: {len(chunk_text_value)}")
         try:
             embedding = get_embedding(chunk_text_value)
-            chunk = EMBED_TABLE(
-                document_id=doc.id,
-                chunk_index=idx,
-                chunk_text=chunk_text_value,
-                embedding=embedding
-            )
-            db.add(chunk)
         except Exception as e: #NotImplementedError:
             embedding = None  # let you develop embeddings later
             # Continue on error; you can change to `raise` if you prefer strict fail-fast
-            preview = (doc.full_text or "")[:200].replace("\n", " ")
-            print(f"[migrate_embeddings][WARN] chunk {doc.id} failed: {e} (len={len(doc.full_text or '')}) preview='{preview}'")
+            preview = (text_input or "")[:200].replace("\n", " ")
+            print(f"[migrate_embeddings][WARN] chunk {doc.id} failed: {e} (len={len(text_input or '')}) preview='{preview}'")
+
+        if chunk_type == "chunk":
+            try:
+                chunk = EMBED_TABLE(
+                    document_id=doc.id,
+                    chunk_index=idx,
+                    chunk_text=chunk_text_value,
+                    embedding=embedding
+                )
+                db.add(chunk)
+                db.commit() 
+                embed_doc_chunks(chunk,
+                    chunk_type="sent")
+            except Exception as e:
+                print(e)
+        else:
+            try:
+                chunk = SENTENCE_TABLE(
+                    chunk_id=doc.id,
+                    sent_index=idx,
+                    sent_text=chunk_text_value,
+                    embedding=embedding
+                )
+                db.add(chunk)
+                db.commit()
+            except Exception as e:
+                print(e)
 
     # Commit everything
-    db.commit()
+   
+    #db.commit()
     return len(chunks)
-
 
 def new_embedding_model_example():
     # Example: after containers are up and DB is reachable

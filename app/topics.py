@@ -124,6 +124,7 @@ def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
     """
     Use OpenAI to generate a short title and 2–3 sentence summary for a cluster.
     """
+    #if True: #test to check speed
     if not docs:
         return "Miscellaneous", "Mixed documents."
 
@@ -136,21 +137,34 @@ def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
 
     context = "\n\n".join(snippets)
 
-    prompt = (
+    prompt_old = (
         "You are helping categorize a cluster of documents. "
         "Based on the titles and snippets below, create:\n"
         "1) A SHORT topic title (max 5 words)\n"
-        "2) A concise 2-3 sentence summary of the main theme.\n\n"
+        #"2) A concise 2-3 sentence summary of the main theme.\n\n"
         "Respond in the format:\n"
         "TITLE: <short title>\n"
-        "SUMMARY: <summary text>\n\n"
+        "SUMMARY: \n"#<summary text>\n\n"
         f"DOCUMENTS:\n{context}"
     )
     
-    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+    prompt = (
+        "You are helping categorize a cluster of documents. "
+        "Based on the titles and snippets below, create:\n"
+        "1) A SHORT topic title (max 10 words)\n"
+        "Respond in the format:\n"
+        "TITLE: <short title>\n"
+        f"DOCUMENTS:\n{context}"
+    )
 
+    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+    ollama_title_options = {
+        "temperature": 0.3,
+        "top_p": 0.8,
+        "num_predict": 32
+    }
     if model_provider == "ollama":
-        text = _ollama_chat(prompt)
+        text = _ollama_chat(prompt, ollama_title_defaults)
     else:
         text = _openai_chat(prompt)
 

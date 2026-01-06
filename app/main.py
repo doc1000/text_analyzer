@@ -19,7 +19,7 @@ from .db import init_db, get_db
 from .schemas import IngestPayload, DocumentDetailResponse
 from . import models
 from .models import Document
-from .helpers import (get_embedding,
+from .helpers import (get_embedding,embed_doc_chunks,
     _answer_from_hits,DocumentOut, QueryRequest, ChunkHit,
     QueryResponse, EMBED_TABLE, fill_empty_embed_docs
 )
@@ -126,34 +126,11 @@ def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
     )
 
     db.add(doc)
-    db.flush() # get doc.id without committing yet
-    
-
-    chunk_len = embed_doc_chunks(payload.text)
-    
-    _ = """
-    # 2) Chunk full text
-    chunks = chunk_text(payload.text)
-
-    # 3) For each chunk, compute embedding and create Chunk row
-    for idx, chunk_text_value in enumerate(chunks):
-        try:
-            embedding = get_embedding(chunk_text_value)
-        except NotImplementedError:
-            embedding = None  # let you develop embeddings later
-
-        chunk = Chunk(
-            document_id=doc.id,
-            chunk_index=idx,
-            chunk_text=chunk_text_value,
-            embedding=embedding,
-            score_info=payload.score_info,
-            score_ai_slop=payload.score_ai_slop,
-        )
-        db.add(chunk)
-    # Commit everything
+    #db.flush() # get doc.id without committing yet
     db.commit()
-    db.refresh(doc)"""
+
+    chunk_len = embed_doc_chunks(doc)
+    #db.commit()
 
     return {
         "status": "ok",
