@@ -12,8 +12,9 @@ import uvicorn
 import os
 from datetime import datetime
 from typing import List
+import numpy as np
 from sqlalchemy.orm import Session
-from sqlalchemy import asc
+from sqlalchemy import asc, func, text
 #Internal imports
 from .db import init_db, get_db
 from .schemas import IngestPayload, DocumentDetailResponse
@@ -158,8 +159,12 @@ def list_documents(
 def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     # 1) Embed the query
     q_emb = get_embedding(payload.query)
+    # Convert to numpy array for pgvector compatibility
+    q_emb = np.array(q_emb, dtype=np.float32)
 
     # 2) cosine distance → similarity
+    # Use pgvector's cosine distance operator (<=>) directly
+    # cosine_distance returns distance (0=same, 1=opposite), so similarity = 1 - distance
     similarity_expr = 1 - EMBED_TABLE.embedding.cosine_distance(q_emb)
 
     # base query: chunks with non-null embeddings joined to documents
@@ -171,7 +176,25 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
 
     # 2b) Optional scoping by document IDs
     if payload.doc_ids:
-        base_query = base_query.filter(Document.id.in_(payload.doc_ids))
+        # Convert string UUIDs to UUID objects for proper filtering
+        # Filter out invalid UUIDs gracefully
+        from uuid import UUID
+        uuid_list = []
+        invalid_ids = []
+        for doc_id in payload.doc_ids:
+            try:
+                uuid_list.append(UUID(doc_id))
+            except (ValueError, TypeError):
+                invalid_ids.append(doc_id)
+        
+        if invalid_ids:
+            # Log warning but continue with valid UUIDs
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Invalid UUIDs in doc_ids, ignoring: {invalid_ids}")
+        
+        if uuid_list:
+            base_query = base_query.filter(Document.id.in_(uuid_list))
 
     rows = (
         base_query

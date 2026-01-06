@@ -51,8 +51,26 @@ class EmbeddingModel(Base):
 from sqlalchemy.types import UserDefinedType
 from pgvector.sqlalchemy import Vector as PgVector  # name it PgVector to avoid clash
 
+
+class VectorComparator(UserDefinedType.Comparator):
+    """Comparator that exposes pgvector distance methods."""
+
+    def cosine_distance(self, other):
+        """Cosine distance: 1 - cosine_similarity. Range [0, 2]."""
+        return self.op('<=>', return_type=Float)(other)
+
+    def l2_distance(self, other):
+        """Euclidean (L2) distance."""
+        return self.op('<->', return_type=Float)(other)
+
+    def max_inner_product(self, other):
+        """Negative inner product (for ordering by max inner product)."""
+        return self.op('<#>', return_type=Float)(other)
+
+
 class Vector(UserDefinedType):
     cache_ok = True
+    comparator_factory = VectorComparator
 
     def __init__(self, dim: int):
         self.dim = dim

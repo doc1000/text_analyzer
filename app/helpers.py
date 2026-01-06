@@ -137,7 +137,7 @@ def _ollama_chat(prompt: str, options: dict=ollama_chat_defaults) -> str:
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": options
+        #"options": options
     }
 
     req = urllib.request.Request(
@@ -226,6 +226,7 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
     )
     prompt = (
         "You are a helpful assistant. Using ONLY the context below, "
+        "Only respond with the answer to the question, do not include any other text.\n"
         "answer the user's question concisely.\n\n"
         f"Question: {query}\n\n"
         f"Context:\n{context}"
@@ -239,6 +240,21 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
         text = _openai_chat(prompt)
     return text
 
+def normalize_embedding(emb):
+    # Already a numpy array
+    if isinstance(emb, np.ndarray):
+        return emb
+
+    # Already a (Python) list/tuple of numbers
+    if isinstance(emb, (list, tuple)):
+        return np.array(emb, dtype=float)
+
+    # String that needs parsing
+    if isinstance(emb, str):
+        parsed = ast.literal_eval(emb)
+        return np.array(parsed, dtype=float)
+
+    raise TypeError(f"Unexpected embedding type: {type(emb)}")
 
 def get_embedding(text: str) -> List[float]:
     """
@@ -253,6 +269,7 @@ def get_embedding(text: str) -> List[float]:
     vec = resp.data[0].embedding
     #if len(vec) != EMBED_DIM:
     #    raise ValueError(f"Embedding dim mismatch: got {len(vec)} expected {EMBED_DIM} (model={model_name})")
+    vec = normalize_embedding(vec)
     return vec
 
 #EMBED_DIM = PREFERENCES.models.embedding_dim  # keep in sync with DB/vector size
