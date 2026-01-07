@@ -152,6 +152,8 @@ def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
         "You are helping categorize a cluster of documents. "
         "Based on the titles and snippets below, create:\n"
         "A SHORT topic title (max 15 words) that captures the main theme of the documents.\n"
+        "Include information from each document in the title, if relevant."
+        "Do not return an exact copy of the document titles, but use the information to create a concise title."
         "Respond in the format:\n"
         "TITLE: <short title>\n"
         f"DOCUMENTS:\n{context}"
@@ -159,7 +161,7 @@ def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
 
     model_provider = getattr(PREFERENCES.models, "provider", "openai")
     ollama_title_options = {
-        "temperature": 0.5,
+        "temperature": 0.6,
         "top_p": 0.8,
         #"num_predict": 32
     }

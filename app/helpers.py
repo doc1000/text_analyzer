@@ -127,7 +127,7 @@ def _openai_chat(prompt: str) -> str:
 ollama_chat_defaults = {
     "temperature": 0.6,
     "top_p": 0.9,
-    "num_predict": 256
+    #"num_predict": 256
   }
 
 def _ollama_chat(prompt: str, options: dict=ollama_chat_defaults) -> str:
