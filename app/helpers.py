@@ -404,24 +404,9 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     
     return embeddings
 
-#EMBED_DIM = PREFERENCES.models.embedding_dim  # keep in sync with DB/vector size
-EMBED_DIM = len(get_embedding("this is a test"))
-EMBED_MODEL = PREFERENCES.models.embedding_model
-
-EMBED_TABLE = get_or_create_embedding_class(
-        model_name=EMBED_MODEL,
-        version="v1",
-        dim=EMBED_DIM,
-        db=get_db()
-    )
-
-SENTENCE_TABLE = get_or_create_embedding_class(
-        model_name=EMBED_MODEL,
-        version="v1",
-        dim=EMBED_DIM,
-        db=get_db(),
-        chunk_type = "sent"
-    )
+# Table definitions moved to app/db.py to avoid circular dependencies
+# Import them from there
+from .db import EMBED_TABLE, SENTENCE_TABLE, EMBED_DIM, EMBED_MODEL
 
 def fill_empty_embed_docs(embed_type: Literal["chunk", "sent"] = "chunk", batch_size: int = None):
     """

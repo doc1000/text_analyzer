@@ -217,11 +217,14 @@ def get_or_create_embedding_class(model_name: str, version: str,
                 {"schema": "embedding"},
             ),
             "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
-            "parent_id": Column(UUID(as_uuid=True),
-                            nullable=True),
+            "parent_id": Column(UUID(as_uuid=True), nullable=True),
             "level_index": Column(Integer, nullable=False),
             "title_text": Column(Text, nullable=False),
+            "summary_text": Column(Text, nullable=True),
+            "document_count": Column(Integer, nullable=False),
             "embedding": Column(Vector(dim), nullable=False),
+            "last_matched_at": Column(DateTime(timezone=True), nullable=True),
+            "match_count": Column(Integer, default=0),
             "created_at": Column(
                 DateTime(timezone=True),
                 server_default=text("now()"),
@@ -239,8 +242,9 @@ def get_or_create_embedding_class(model_name: str, version: str,
     )
 
  # 3) Insert a row into embedding.embedding_model if not present
-    db_gen = db
-    Session = next(db_gen)
+    #db_gen = db
+    #Session = next(db_gen)
+    Session = db
     meta = register_embedding_model(
     session= Session,
     model_name= model_name,

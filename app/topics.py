@@ -22,7 +22,8 @@ from .schemas import (         # whatever pydantic models you use
     TopicDoc,
     TopicsResponse,
 )
-from .helpers import _openai_chat, _ollama_chat, get_embedding, EMBED_TABLE
+from .helpers import _openai_chat, _ollama_chat, get_embedding
+from .db import EMBED_TABLE, TOPIC_TABLE
 
 # ---------- OpenAI client ----------
 _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -131,7 +132,7 @@ def _get_sentence_embeddings_for_docs(
         sentences: List of sentence texts
         embeddings: List of sentence embedding vectors
     """
-    from .helpers import SENTENCE_TABLE
+    from .db import SENTENCE_TABLE
     
     # Query all sentences for these documents via their chunks
     # SENTENCE_TABLE has chunk_id -> EMBED_TABLE has document_id
@@ -500,6 +501,107 @@ def _generate_title_and_summary(
     return _generate_title_and_summary_fallback(docs)
 
 
+# ---------- Topic Persistence ----------
+
+def _save_topic_to_db(
+    db: Session,
+    title: str,
+    centroid: np.ndarray,
+    document_count: int,
+    summary: str = None,
+    parent_id: UUID = None,
+    level_index: int = 0
+) -> UUID:
+    """
+    Save a topic to the TOPIC_TABLE.
+    
+    Args:
+        db: Database session
+        title: Topic title
+        centroid: Cluster centroid embedding
+        document_count: Number of documents in cluster
+        summary: Optional summary text
+        parent_id: Parent topic ID (for subtopics)
+        level_index: 0 for top-level, 1 for subtopics
+    
+    Returns:
+        UUID of created topic
+    """
+    topic_record = TOPIC_TABLE(
+        parent_id=parent_id,
+        level_index=level_index,
+        title_text=title,
+        embedding=centroid.tolist(),
+        document_count=document_count,
+        summary_text=summary,
+        match_count=0
+    )
+    
+    db.add(topic_record)
+    db.commit()
+    db.refresh(topic_record)
+    
+    return topic_record.id
+
+
+def _find_matching_topic(
+    db: Session,
+    centroid: np.ndarray,
+    similarity_threshold: float = 0.85,
+    level_index: int = 0
+) -> Tuple[UUID, str, str] | None:
+    """
+    Find an existing topic with similar centroid.
+    
+    Args:
+        db: Database session
+        centroid: Cluster centroid to match against
+        similarity_threshold: Minimum similarity to consider a match
+        level_index: Topic level to search (0=topics, 1=subtopics)
+    
+    Returns:
+        (topic_id, title, summary) if match found, else None
+    """
+    cfg = PREFERENCES.topic_persistence
+    
+    # Query topics at the same level, limit for performance
+    existing_topics = (
+        db.query(TOPIC_TABLE)
+        .filter(TOPIC_TABLE.level_index == level_index)
+        .order_by(TOPIC_TABLE.created_at.desc())
+        .limit(cfg.max_existing_topics_to_check)
+        .all()
+    )
+    
+    if not existing_topics:
+        return None
+    
+    # Find best match using cosine similarity
+    best_match = None
+    best_similarity = similarity_threshold
+    
+    for topic in existing_topics:
+        topic_emb = normalize_embedding(topic.embedding)
+        similarity = float(cosine_similarity(
+            centroid.reshape(1, -1),
+            topic_emb.reshape(1, -1)
+        )[0, 0])
+        
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_match = topic
+    
+    if best_match:
+        # Update match statistics
+        best_match.last_matched_at = datetime.utcnow()
+        best_match.match_count = (best_match.match_count or 0) + 1
+        db.commit()
+        
+        return (best_match.id, best_match.title_text, best_match.summary_text or "")
+    
+    return None
+
+
 # ---------- URL canonicalization ----------
 
 def canonicalize_url(url: str) -> str:
@@ -772,7 +874,7 @@ def compute_topics(
     idx_to_doc = {i: d for i, d in enumerate(deduped_docs)}
 
     # Helper to build subtopics via a second-level KMeans
-    def build_subtopics(topic_docs_indices: List[int], parent_topic_id: str, parent_title: str) -> List[Subtopic]:
+    def build_subtopics(topic_docs_indices: List[int], parent_topic_id: str, parent_title: str, parent_db_id: UUID = None) -> List[Subtopic]:
         num_topic_docs = len(topic_docs_indices)
         if num_topic_docs < min_docs_for_clustering:
             # Small topic: single subtopic with all docs
@@ -810,7 +912,38 @@ def compute_topics(
             sub_indices = [topic_docs_indices[i] for i, sl in enumerate(sub_labels) if sl == s_label]
             docs_list = [idx_to_doc[i] for i in sub_indices]
             docs_out = [TopicDoc.model_validate(d) for d in docs_list]
-            title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+            
+            # Compute subtopic centroid
+            from .mmr import compute_centroid
+            sub_doc_emb_list = [doc_embeddings[d.id] for d in docs_list if d.id in doc_embeddings]
+            sub_centroid = compute_centroid(sub_doc_emb_list, normalize=True) if sub_doc_emb_list else None
+            
+            # Check for existing subtopic match (if persistence enabled and parent exists)
+            if PREFERENCES.topic_persistence.persist_subtopics and sub_centroid is not None and parent_db_id:
+                existing_sub = _find_matching_topic(
+                    db, sub_centroid,
+                    similarity_threshold=PREFERENCES.topic_persistence.similarity_threshold_subtopic,
+                    level_index=1
+                )
+                
+                if existing_sub:
+                    sub_db_id, title, summary = existing_sub
+                else:
+                    title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+                    
+                    # Save subtopic with parent_id
+                    sub_db_id = _save_topic_to_db(
+                        db=db,
+                        title=title,
+                        centroid=sub_centroid,
+                        document_count=len(docs_list),
+                        summary=summary,
+                        parent_id=parent_db_id,
+                        level_index=1
+                    )
+            else:
+                # Persistence disabled or no parent - just generate title
+                title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
 
             subtopic = Subtopic(
                 subtopic_id=f"{parent_topic_id}-S{s_label}",
@@ -835,17 +968,52 @@ def compute_topics(
 
         return subtopics
 
-    # 7) Build topic objects
+    # 7) Build topic objects and persist them
     for topic_idx, cluster_label in enumerate(topic_labels):
         topic_id = f"T{topic_idx}"
 
         topic_doc_indices = [i for i, lbl in enumerate(labels) if lbl == cluster_label]
         docs_list = [idx_to_doc[i] for i in topic_doc_indices]
 
-        # Generate title & summary for this top-level topic
-        topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+        # Compute centroid for this cluster
+        from .mmr import compute_centroid
+        doc_emb_list = [doc_embeddings[d.id] for d in docs_list if d.id in doc_embeddings]
+        centroid = compute_centroid(doc_emb_list, normalize=True) if doc_emb_list else None
+        
+        topic_db_id = None
+        
+        # Check if we have an existing topic that matches (if persistence enabled and centroid available)
+        if PREFERENCES.topic_persistence.persist_topics and centroid is not None:
+            existing_match = _find_matching_topic(
+                db, centroid,
+                similarity_threshold=PREFERENCES.topic_persistence.similarity_threshold_topic,
+                level_index=0
+            )
+            
+            if existing_match:
+                # Reuse existing topic
+                topic_db_id, topic_title, topic_summary = existing_match
+                print(f"♻ Reusing existing topic: {topic_title}")
+            else:
+                # Generate new title & summary
+                topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+                
+                # Save to database
+                topic_db_id = _save_topic_to_db(
+                    db=db,
+                    title=topic_title,
+                    centroid=centroid,
+                    document_count=len(docs_list),
+                    summary=topic_summary,
+                    level_index=0
+                )
+                print(f"✓ Created new topic: {topic_title}")
+        else:
+            # Persistence disabled or no centroid - just generate title
+            topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
 
-        subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title)
+        # Build and persist subtopics
+        subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title, topic_db_id)
 
         topic = Topic(
             topic_id=topic_id,

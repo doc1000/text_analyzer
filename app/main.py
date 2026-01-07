@@ -16,13 +16,13 @@ import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
 #Internal imports
-from .db import init_db, get_db
+from .db import init_db, get_db, EMBED_TABLE
 from .schemas import IngestPayload, DocumentDetailResponse
 from . import models
 from .models import Document
 from .helpers import (get_embedding,embed_doc_chunks,
     _answer_from_hits,DocumentOut, QueryRequest, ChunkHit,
-    QueryResponse, EMBED_TABLE, fill_empty_embed_docs
+    QueryResponse, fill_empty_embed_docs
 )
 from .topics import (
     TopicsResponse,

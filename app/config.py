@@ -64,6 +64,16 @@ class EmbeddingConfig:
     max_batch_size_ollama: int = 100   # Ollama practical limit
     retry_failed_batches: bool = True   # Retry failed batches individually
 
+
+@dataclass
+class TopicPersistenceConfig:
+    """Configuration for topic persistence and matching."""
+    similarity_threshold_topic: float = 0.85      # Min similarity to match top-level topic
+    similarity_threshold_subtopic: float = 0.85   # Min similarity to match subtopic
+    persist_topics: bool = True                   # Enable/disable persistence
+    persist_subtopics: bool = True                # Enable/disable subtopic persistence
+    max_existing_topics_to_check: int = 1000      # Limit for similarity search
+
 @dataclass
 class OllamaConfig:
     base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -85,6 +95,7 @@ class Preferences:
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
     mmr: MMRConfig = field(default_factory=MMRConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    topic_persistence: TopicPersistenceConfig = field(default_factory=TopicPersistenceConfig)
 
 
 # Single global preferences object. Import this elsewhere.
