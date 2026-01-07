@@ -130,17 +130,21 @@ def register_embedding_model(
 
 
 def get_or_create_embedding_class(model_name: str, version: str,
-     dim: int, db: "get_db()",chunk_type: Literal["chunk","sent"] = "chunk"):
+     dim: int, db: "get_db()",chunk_type: Literal["chunk","sent","topic"] = "chunk"):
     """get or create the chunk or sentence embeddings table.  will be model name for chunks
-    will append sent_ to model name for sentences"""
+    will append sent_/topic_ to model name for sentences/topics"""
 
     
     if chunk_type == "chunk":
         model_prefixed=model_name
-    else:
+    elif chunk_type == "sent":
         model_prefixed = chunk_type + "_" + model_name
         chunk_table = make_safe_table_name(model_name, version, dim)
-    
+    elif chunk_type == "topic":
+        model_prefixed = chunk_type + "_" + model_name
+    else:
+        raise ValueError(f"Invalid chunk type: {chunk_type}")
+
     table_name = make_safe_table_name(model_prefixed, version, dim)  # -> "all_minilm_v1_384"
     full_key = f"embedding.{table_name}"  # schema-qualified key in metadata.tables
 
@@ -165,7 +169,9 @@ def get_or_create_embedding_class(model_name: str, version: str,
     # (only runs the first time for this name)
 
     class_name = f"Embedding_{table_name}"
-    
+    # for chunk type table, we have document_id, chunk_index, chunk_text, embedding, created_at
+    # for sent type table, we have chunk_id, sent_index, sent_text, embedding, created_at
+    # for topic type table, we have parent_id, level_index, title_text, embedding, created_at
     attrs = {
         "__tablename__": table_name,
         "__table_args__": (
@@ -204,6 +210,24 @@ def get_or_create_embedding_class(model_name: str, version: str,
             ),
         }
 
+    if chunk_type == "topic":
+        attrs = {
+            "__tablename__": table_name,
+            "__table_args__": (
+                {"schema": "embedding"},
+            ),
+            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            "parent_id": Column(UUID(as_uuid=True),
+                            nullable=True),
+            "level_index": Column(Integer, nullable=False),
+            "title_text": Column(Text, nullable=False),
+            "embedding": Column(Vector(dim), nullable=False),
+            "created_at": Column(
+                DateTime(timezone=True),
+                server_default=text("now()"),
+                nullable=False,
+            ),
+        }
     cls = type(class_name, (Base,), attrs)
 
     Index(
