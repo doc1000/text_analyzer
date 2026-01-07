@@ -19,18 +19,56 @@ def ensure_schemas():
 
 
 def init_db():
+    """
+    Initialize database: create schemas, tables, and generate schema documentation.
+    
+    After creating tables, automatically runs schema inspection to update DATABASE_SCHEMA.md
+    for Cursor/AI reference.
+    
+    All tables are defined using SQLAlchemy's declarative base, suitable for Base.metadata.create_all(bind=engine).
+    Each embedding model gets its own table under the embedding schema and a row in embedding.embedding_model.
+    """
     ensure_schemas()
     
     Base.metadata.create_all(bind=engine)
-    # After Base.metadata.create_all(bind=engine)
-    # This will add the embedding table to the embedding.embedding_model table
-    """
-    All tables are defined using SQLAlchemy’s declarative base, suitable for Base.metadata.create_all(bind=engine).
-    Each embedding model gets its own table under the embedding schema and a row in embedding.embedding_model.
-    Your config.py can pick the model, look up the meta row, and you can map table_location back to the corresponding dynamic class if needed (e.g., via a registry dict keyed by (model_name, version)).
-    """
+    
+    # Automatically generate schema documentation for Cursor/AI reference
+    _update_schema_doc()
+    
     #with Session(engine) as session:
     #    register_embedding_model(session, "bge-small-en", "v1.5", 512)
+
+
+def _update_schema_doc():
+    """
+    Update DATABASE_SCHEMA.md by running the schema inspection script.
+    This ensures Cursor/AI always has current schema information.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+    
+    script_path = Path(__file__).parent.parent / "inspect_schema.py"
+    
+    if script_path.exists():
+        try:
+            # Run the schema inspection script
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                print("✓ Schema documentation updated")
+            else:
+                print(f"⚠ Schema documentation update had warnings: {result.stderr[:200]}")
+        except Exception as e:
+            # Don't fail init_db() if schema doc update fails
+            print(f"⚠ Could not update schema documentation: {e}")
+    else:
+        print(f"⚠ Schema inspection script not found at {script_path}")
+
 
 def get_db():
     db = SessionLocal()
@@ -38,8 +76,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-
-
-

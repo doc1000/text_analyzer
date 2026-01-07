@@ -120,69 +120,384 @@ def cluster_embeddings(X: np.ndarray) -> np.ndarray:
     # Fallback / future expansion
     raise ValueError(f"Unsupported cluster_algo: {cfg.cluster_algo}")
 
-def _generate_title_and_summary(docs: List[Document]) -> Tuple[str, str]:
+def _get_sentence_embeddings_for_docs(
+    db: Session,
+    doc_ids: List[UUID],
+) -> Tuple[List[str], List[np.ndarray]]:
     """
-    Use OpenAI to generate a short title and 2–3 sentence summary for a cluster.
+    Fetch all sentence embeddings for a set of documents.
+    
+    Returns:
+        sentences: List of sentence texts
+        embeddings: List of sentence embedding vectors
     """
-    #if True: #test to check speed
+    from .helpers import SENTENCE_TABLE
+    
+    # Query all sentences for these documents via their chunks
+    # SENTENCE_TABLE has chunk_id -> EMBED_TABLE has document_id
+    chunk_ids_query = (
+        db.query(EMBED_TABLE.id)
+        .filter(EMBED_TABLE.document_id.in_(doc_ids))
+        .subquery()
+    )
+    
+    sentences_rows = (
+        db.query(SENTENCE_TABLE.sent_text, SENTENCE_TABLE.embedding)
+        .filter(SENTENCE_TABLE.chunk_id.in_(chunk_ids_query))
+        .filter(SENTENCE_TABLE.embedding != None)
+        .all()
+    )
+    
+    if not sentences_rows:
+        return [], []
+    
+    sentences = []
+    embeddings = []
+    
+    for sent_text, sent_emb in sentences_rows:
+        if sent_emb is None:
+            continue
+        vec = normalize_embedding(sent_emb)
+        sentences.append(sent_text)
+        embeddings.append(vec)
+    
+    return sentences, embeddings
+
+
+def _generate_title_and_summary_mmr(
+    db: Session,
+    docs: List[Document],
+    doc_embeddings: Dict[UUID, np.ndarray],
+) -> Tuple[str, str]:
+    """
+    Use MMR-based sentence selection to generate a short title for a cluster.
+    
+    This approach:
+    1. Fetches sentence embeddings for all documents in cluster
+    2. Computes cluster centroid from document embeddings
+    3. Uses MMR to select k representative sentences (high relevance, low redundancy)
+    4. Sends compact prompt (~1000-1500 chars) to LLM
+    5. Returns generated title and summary
+    
+    Args:
+        db: Database session
+        docs: Documents in the cluster
+        doc_embeddings: Pre-computed document embeddings (from compute_document_embeddings)
+    
+    Returns:
+        (title, summary) tuple
+    """
+    from .mmr import mmr_select, compute_centroid, l2_normalize
+    
+    cfg = PREFERENCES.mmr
+    
     if not docs:
         return "Miscellaneous", "Mixed documents."
+    
+    # Limit number of docs to avoid overwhelming MMR
+    if len(docs) > cfg.max_docs_to_process:
+        docs = docs[:cfg.max_docs_to_process]
+    
+    doc_ids = [d.id for d in docs]
+    
+    # Get sentence embeddings for these documents
+    sentences, sent_embeddings = _get_sentence_embeddings_for_docs(db, doc_ids)
+    
+    # Fallback: if no sentence embeddings, use old approach
+    if len(sentences) < cfg.min_sentences_for_mmr:
+        return _generate_title_and_summary_fallback(docs)
+    
+    # Compute cluster centroid from document embeddings
+    doc_emb_list = [doc_embeddings[d.id] for d in docs if d.id in doc_embeddings]
+    if not doc_emb_list:
+        return _generate_title_and_summary_fallback(docs)
+    
+    centroid = compute_centroid(doc_emb_list, normalize=True)
+    
+    # Run MMR to select diverse, relevant sentences
+    selected_indices = mmr_select(
+        embeddings=sent_embeddings,
+        query_embedding=centroid,
+        k=cfg.k_sentences,
+        lambda_=cfg.lambda_param,
+        normalize=True
+    )
+    
+    # Build context from selected sentences
+    selected_sentences = [sentences[i] for i in selected_indices]
+    context = "\n".join(f"- {s}" for s in selected_sentences)
+    
+    # Truncate if needed to respect max_prompt_chars
+    if len(context) > cfg.max_prompt_chars:
+        context = context[:cfg.max_prompt_chars] + "..."
+    
+    # Simplified prompt optimized for small models
+    prompt = (
+        "You are categorizing a cluster of documents.\n"
+        "Below are the most representative sentences from this cluster.\n"
+        "Create a concise topic title (max 15 words) capturing the main theme.\n\n"
+        "REPRESENTATIVE SENTENCES:\n"
+        f"{context}\n\n"
+        "Respond ONLY with:\n"
+        "TITLE: <your title>"
+    )
+    
+    # Send to LLM
+    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+    if model_provider == "ollama":
+        ollama_options = {
+            "temperature": 0.6,
+            "top_p": 0.8,
+        }
+        text = _ollama_chat(prompt, ollama_options)
+    else:
+        text = _openai_chat(prompt)
+    
+    # Parse response
+    title = None
+    summary = ""
+    
+    # Try to extract title from response
+    for line in text.splitlines():
+        line_upper = line.upper().strip()
+        if line_upper.startswith("TITLE:"):
+            parsed_title = line.split(":", 1)[1].strip()
+            # Only accept non-empty titles that aren't placeholder text
+            if parsed_title and parsed_title.lower() not in ["untitled topic", "untitled", "no title", ""]:
+                title = parsed_title
+        elif line_upper.startswith("SUMMARY:"):
+            summary = line.split(":", 1)[1].strip() or summary
+    
+    # If no title found in structured format, try to extract from first line
+    if not title:
+        first_line = text.splitlines()[0].strip() if text.splitlines() else ""
+        # If first line looks like a title (not too long, not placeholder)
+        if first_line and len(first_line) < 200 and first_line.lower() not in ["untitled topic", "untitled", "no title"]:
+            title = first_line
+    
+    # Fallback to document titles if LLM didn't provide a valid title
+    # Always generate fallback title as backup
+    fallback_title = _generate_title_from_document_titles(docs)
+    
+    if not title or title.lower().strip() in ["untitled topic", "untitled", "no title", ""]:
+        title = fallback_title
+    elif title.lower().strip() == fallback_title.lower().strip():
+        # LLM just returned our fallback, use it directly
+        title = fallback_title
+    # else: use the LLM-generated title
+    
+    # Final safety check - ensure we never return "Untitled Topic" or empty
+    title_lower = title.lower().strip() if title else ""
+    if not title or title_lower in ["untitled topic", "untitled", "no title", ""]:
+        title = fallback_title if fallback_title else f"Topic with {len(docs)} documents"
+    
+    if not summary:
+        summary = "Summary not available."
+    
+    return title, summary
 
+
+def _generate_title_from_document_titles(docs: List[Document], max_words: int = 15) -> str:
+    """
+    Generate a title from document titles as a final fallback.
+    Creates a concise title from the first few document titles.
+    Always returns a non-empty title string.
+    
+    Args:
+        docs: List of documents
+        max_words: Maximum words in the title
+    
+    Returns:
+        A title string (never empty, never "Untitled Topic")
+    """
+    if not docs:
+        return "Miscellaneous"
+    
+    # Collect non-empty titles
+    titles = [d.title.strip() for d in docs if d.title and d.title.strip()]
+    
+    if not titles:
+        # No titles available, use URL domains or generic
+        domains = []
+        for d in docs[:5]:
+            if d.url:
+                try:
+                    domain = urlsplit(d.url).netloc
+                    if domain and domain not in domains:
+                        domains.append(domain)
+                except:
+                    pass
+        
+        if domains:
+            return f"Documents from {', '.join(domains[:3])}"
+        return f"Cluster of {len(docs)} documents"
+    
+    # If we have titles, create a concise combination
+    if len(titles) == 1:
+        # Single title - truncate if needed
+        title = titles[0]
+        if not title or title.lower() in ["untitled", "no title", ""]:
+            # Even the single title is invalid, use domain fallback
+            if docs[0].url:
+                try:
+                    domain = urlsplit(docs[0].url).netloc
+                    if domain:
+                        return f"Document from {domain}"
+                except:
+                    pass
+            return f"Single document cluster"
+        words = title.split()
+        if len(words) > max_words:
+            return " ".join(words[:max_words]) + "..."
+        return title
+    
+    # Multiple titles - create a combined title
+    # Filter out any invalid titles
+    valid_titles = [t for t in titles if t.lower() not in ["untitled", "no title", ""]]
+    
+    if not valid_titles:
+        # All titles were invalid, use domain fallback
+        domains = []
+        for d in docs[:3]:
+            if d.url:
+                try:
+                    domain = urlsplit(d.url).netloc
+                    if domain and domain not in domains:
+                        domains.append(domain)
+                except:
+                    pass
+        if domains:
+            return f"Documents from {', '.join(domains[:2])}"
+        return f"Cluster of {len(docs)} documents"
+    
+    # Use valid titles
+    if len(valid_titles) <= 3:
+        # Small number - just combine
+        combined = " / ".join(valid_titles[:3])
+        words = combined.split()
+        if len(words) > max_words:
+            return " ".join(words[:max_words]) + "..."
+        return combined
+    else:
+        # Many titles - use first few with count
+        first_titles = " / ".join(valid_titles[:2])
+        words = first_titles.split()
+        if len(words) > max_words - 3:
+            words = words[:max_words - 3]
+        return " ".join(words) + f" (+{len(valid_titles) - 2} more)"
+
+
+def _generate_title_and_summary_fallback(docs: List[Document]) -> Tuple[str, str]:
+    """
+    Fallback title generation when MMR cannot be used (e.g., missing sentence embeddings).
+    Uses the old approach: document titles + text snippets.
+    """
+    if not docs:
+        return "Miscellaneous", "Mixed documents."
+    
     # Take up to 10 docs, use titles + first snippet of full_text
     snippets = []
     for d in docs[:10]:
         title = d.title or "(no title)"
         body = (d.full_text or "")[:400].replace("\n", " ")
         snippets.append(f"Title: {title}\nSnippet: {body}")
-
+    
     context = "\n\n".join(snippets)
-
-    prompt_old = (
-        "You are helping categorize a cluster of documents. "
-        "Based on the titles and snippets below, create:\n"
-        "1) A SHORT topic title (max 5 words)\n"
-        #"2) A concise 2-3 sentence summary of the main theme.\n\n"
-        "Respond in the format:\n"
-        "TITLE: <short title>\n"
-        "SUMMARY: \n"#<summary text>\n\n"
-        f"DOCUMENTS:\n{context}"
-    )
     
     prompt = (
         "You are helping categorize a cluster of documents. "
         "Based on the titles and snippets below, create:\n"
         "A SHORT topic title (max 15 words) that captures the main theme of the documents.\n"
-        "Include information from each document in the title, if relevant."
-        "Do not return an exact copy of the document titles, but use the information to create a concise title."
+        "Include information from each document in the title, if relevant. "
+        "Do not return an exact copy of the document titles, but use the information to create a concise title.\n"
         "Respond in the format:\n"
         "TITLE: <short title>\n"
         f"DOCUMENTS:\n{context}"
     )
-
+    
     model_provider = getattr(PREFERENCES.models, "provider", "openai")
     ollama_title_options = {
         "temperature": 0.6,
         "top_p": 0.8,
-        #"num_predict": 32
     }
     if model_provider == "ollama":
         text = _ollama_chat(prompt, ollama_title_options)
     else:
         text = _openai_chat(prompt)
-
-    title = "Untitled Topic"
+    
+    # Parse response
+    title = None
     summary = ""
-
+    
+    # Try to extract title from response
     for line in text.splitlines():
-        if line.upper().startswith("TITLE:"):
-            title = line.split(":", 1)[1].strip() or title
-        elif line.upper().startswith("SUMMARY:"):
+        line_upper = line.upper().strip()
+        if line_upper.startswith("TITLE:"):
+            parsed_title = line.split(":", 1)[1].strip()
+            # Only accept non-empty titles that aren't placeholder text
+            if parsed_title and parsed_title.lower() not in ["untitled topic", "untitled", "no title", ""]:
+                title = parsed_title
+        elif line_upper.startswith("SUMMARY:"):
             summary = line.split(":", 1)[1].strip() or summary
-
+    
+    # If no title found in structured format, try to extract from first line
+    if not title:
+        first_line = text.splitlines()[0].strip() if text.splitlines() else ""
+        # If first line looks like a title (not too long, not placeholder)
+        if first_line and len(first_line) < 200 and first_line.lower() not in ["untitled topic", "untitled", "no title"]:
+            title = first_line
+    
+    # Fallback to document titles if LLM didn't provide a valid title
+    # Always generate fallback title as backup
+    fallback_title = _generate_title_from_document_titles(docs)
+    
+    if not title or title.lower().strip() in ["untitled topic", "untitled", "no title", ""]:
+        title = fallback_title
+    elif title.lower().strip() == fallback_title.lower().strip():
+        # LLM just returned our fallback, use it directly
+        title = fallback_title
+    # else: use the LLM-generated title
+    
+    # Final safety check - ensure we never return "Untitled Topic" or empty
+    title_lower = title.lower().strip() if title else ""
+    if not title or title_lower in ["untitled topic", "untitled", "no title", ""]:
+        title = fallback_title if fallback_title else f"Topic with {len(docs)} documents"
+    
     if not summary:
         summary = "Summary not available."
-
+    
     return title, summary
+
+
+def _generate_title_and_summary(
+    docs: List[Document],
+    db: Session = None,
+    doc_embeddings: Dict[UUID, np.ndarray] = None,
+) -> Tuple[str, str]:
+    """
+    Generate title and summary for a cluster of documents.
+    
+    Uses MMR-based sentence selection if db and doc_embeddings are provided,
+    otherwise falls back to document snippet approach.
+    
+    Args:
+        docs: Documents in the cluster
+        db: Database session (optional, required for MMR)
+        doc_embeddings: Pre-computed document embeddings (optional, required for MMR)
+    
+    Returns:
+        (title, summary) tuple
+    """
+    # Try MMR approach if we have the required inputs
+    if db is not None and doc_embeddings is not None:
+        try:
+            return _generate_title_and_summary_mmr(db, docs, doc_embeddings)
+        except Exception as e:
+            print(f"[WARN] MMR title generation failed, using fallback: {e}")
+            return _generate_title_and_summary_fallback(docs)
+    
+    # Fallback approach
+    return _generate_title_and_summary_fallback(docs)
 
 
 # ---------- URL canonicalization ----------
@@ -360,7 +675,7 @@ def compute_topics(
     if len(deduped_docs) < min_docs_for_clustering:
         # Not enough docs to cluster — return a single topic
         topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs)
+        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
         single_topic = Topic(
             topic_id="T0",
             title=title,
@@ -382,7 +697,7 @@ def compute_topics(
     if len(deduped_docs) < min_docs_for_clustering:
         # if embeddings filtered out too much
         topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs)
+        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
         single_topic = Topic(
             topic_id="T0",
             title=title,
@@ -403,7 +718,7 @@ def compute_topics(
     if len(deduped_docs) < min_docs_for_clustering:
         # embeddings filtered out too much
         topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs)
+        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
         single_topic = Topic(
             topic_id="T0",
             title=title,
@@ -427,7 +742,7 @@ def compute_topics(
     # For very small N, skip UMAP/clustering and treat as a single topic.
     if n_docs < min_docs_for_clustering:
         topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs)
+        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
         single_topic = Topic(
             topic_id="T0",
             title=title,
@@ -496,7 +811,7 @@ def compute_topics(
             sub_indices = [topic_docs_indices[i] for i, sl in enumerate(sub_labels) if sl == s_label]
             docs_list = [idx_to_doc[i] for i in sub_indices]
             docs_out = [TopicDoc.model_validate(d) for d in docs_list]
-            title, summary = _generate_title_and_summary(docs_list)
+            title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
 
             subtopic = Subtopic(
                 subtopic_id=f"{parent_topic_id}-S{s_label}",
@@ -529,7 +844,7 @@ def compute_topics(
         docs_list = [idx_to_doc[i] for i in topic_doc_indices]
 
         # Generate title & summary for this top-level topic
-        topic_title, topic_summary = _generate_title_and_summary(docs_list)
+        topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
 
         subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title)
 

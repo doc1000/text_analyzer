@@ -7,6 +7,8 @@ from openai import OpenAI
 import json
 import urllib.request
 import urllib.error
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 from .db import get_db
 from .config import PREFERENCES
 from uuid import UUID
@@ -261,18 +263,146 @@ def normalize_embedding(emb):
 def get_embedding(text: str) -> List[float]:
     """
     Get a single embedding vector for a text using the configured provider.
+    Returns L2-normalized embeddings for consistent cosine similarity calculations.
     """
     if getattr(PREFERENCES.models, "provider", "openai") == "ollama":
-        return _ollama_embed(text)
-
-    # OpenAI fallback (your existing behavior)
-    model_name = PREFERENCES.models.embedding_model
-    resp = client.embeddings.create(model=model_name, input=text)
-    vec = resp.data[0].embedding
-    #if len(vec) != EMBED_DIM:
-    #    raise ValueError(f"Embedding dim mismatch: got {len(vec)} expected {EMBED_DIM} (model={model_name})")
+        vec = _ollama_embed(text)
+    else:
+        # OpenAI embeddings
+        model_name = PREFERENCES.models.embedding_model
+        resp = client.embeddings.create(model=model_name, input=text)
+        vec = resp.data[0].embedding
+    
+    # Ensure consistent array format
     vec = normalize_embedding(vec)
-    return vec
+    
+    # L2-normalize for proper cosine similarity (dot product = cosine sim when normalized)
+    # OpenAI embeddings are already normalized, but Ollama may not be
+    # This ensures consistency across all providers
+    from .mmr import l2_normalize_vector
+    vec = l2_normalize_vector(vec)
+    
+    return vec.tolist()
+
+
+def _ollama_embed_batch(texts: List[str]) -> List[List[float]]:
+    """
+    Get embeddings for multiple texts from Ollama in a single API call.
+    
+    Ollama API supports batch via "input" as list of strings.
+    
+    Args:
+        texts: List of text strings to embed
+    
+    Returns:
+        List of embedding vectors (same order as input)
+    """
+    if not texts:
+        return []
+    
+    base = PREFERENCES.models.ollama.base_url.rstrip("/")
+    model = PREFERENCES.models.ollama.embed_model
+    
+    # Clean all inputs
+    cleaned_texts = [_clean_embed_input(t) for t in texts]
+    
+    url = f"{base}/api/embed"
+    payload = {
+        "model": model,
+        "input": cleaned_texts  # List of strings
+    }
+    
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise RuntimeError(f"Ollama batch embed HTTP {e.code}: {e.reason}. Body: {body[:500]}") from e
+    
+    # Ollama returns "embeddings": [[...], [...], ...] for batch input
+    if "embeddings" in data and isinstance(data["embeddings"], list):
+        embeddings_list = data["embeddings"]
+    elif "embedding" in data:
+        # Fallback: single embedding wrapped (shouldn't happen with batch, but handle gracefully)
+        embeddings_list = [data["embedding"]]
+    else:
+        raise RuntimeError(f"Unexpected Ollama batch response: {data}")
+    
+    # Verify we got the right number of embeddings
+    if len(embeddings_list) != len(texts):
+        raise RuntimeError(
+            f"Ollama batch returned {len(embeddings_list)} embeddings for {len(texts)} texts"
+        )
+    
+    # Normalize all embeddings
+    from .mmr import l2_normalize_vector
+    normalized = []
+    for vec in embeddings_list:
+        vec = normalize_embedding(vec)
+        vec = l2_normalize_vector(vec)
+        normalized.append(vec.tolist())
+    
+    return normalized
+
+
+def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
+    """
+    Get embeddings for multiple texts in a single API call.
+    
+    This is much faster than calling get_embedding() multiple times.
+    Supports both OpenAI and Ollama providers.
+    
+    Args:
+        texts: List of text strings to embed
+    
+    Returns:
+        List of embedding vectors (same order as input)
+    
+    Example:
+        >>> texts = ["Hello world", "How are you?", "Goodbye"]
+        >>> embeddings = get_embeddings_batch(texts)
+        >>> len(embeddings) == len(texts)  # True
+    """
+    if not texts:
+        return []
+    
+    if getattr(PREFERENCES.models, "provider", "openai") == "ollama":
+        return _ollama_embed_batch(texts)
+    
+    # OpenAI batch embedding
+    model_name = PREFERENCES.models.embedding_model
+    resp = client.embeddings.create(
+        model=model_name,
+        input=texts  # OpenAI accepts list of strings
+    )
+    
+    # Extract embeddings and normalize
+    embeddings = []
+    from .mmr import l2_normalize_vector
+    
+    # Verify we got the right number of embeddings
+    if len(resp.data) != len(texts):
+        raise RuntimeError(
+            f"OpenAI returned {len(resp.data)} embeddings for {len(texts)} texts"
+        )
+    
+    for item in resp.data:
+        vec = normalize_embedding(item.embedding)
+        vec = l2_normalize_vector(vec)
+        embeddings.append(vec.tolist())
+    
+    return embeddings
 
 #EMBED_DIM = PREFERENCES.models.embedding_dim  # keep in sync with DB/vector size
 EMBED_DIM = len(get_embedding("this is a test"))
@@ -293,102 +423,238 @@ SENTENCE_TABLE = get_or_create_embedding_class(
         chunk_type = "sent"
     )
 
-def fill_empty_embed_docs(embed_type: Literal["chunk","sent"]="chunk"):
-    #pull documents that do not have chunks with current embeddings
-
-    # pull documents that do not have embeddings in batches
-    # use ORM syntax
+def fill_empty_embed_docs(embed_type: Literal["chunk", "sent"] = "chunk", batch_size: int = None):
+    """
+    Fill missing embeddings for documents/chunks using batch processing.
+    
+    Args:
+        embed_type: "chunk" for document chunks, "sent" for sentence embeddings
+        batch_size: Number of texts to embed per API call (defaults to config)
+    """
+    if batch_size is None:
+        batch_size = PREFERENCES.embedding.batch_size
+    
+    # Determine parent/child table relationships
     if embed_type == "chunk":
-        target_table=EMBED_TABLE
+        target_table = EMBED_TABLE
         parent_table = Document
-        parent_id=target_table.document_id
-        parent_text=parent_table.full_text
-    if embed_type == "sent":
-        target_table=SENTENCE_TABLE
+        parent_id = target_table.document_id
+        parent_text = parent_table.full_text
+    else:  # sent
+        target_table = SENTENCE_TABLE
         parent_table = EMBED_TABLE
-        parent_id=target_table.chunk_id
-        parent_text=parent_table.chunk_text
+        parent_id = target_table.chunk_id
+        parent_text = parent_table.chunk_text
     
     db_gen = get_db()
     db: Session = next(db_gen)
-    subq = (
-        db.query(target_table.id)
-        .filter(parent_id == parent_table.id)
-        .exists()
-    )
-    query = (
-        db.query(parent_table.id, parent_text)
-        .filter(~subq)  # ← find NULL embeddings
-        .limit(100)
-    )
-    while True:
-        rows = query.all()
-        print(f"number of rows: {len(rows)}")
-        if not rows:
-            break
-        for doc in rows:
-            #   create and load embeddings for each document
-            #try:
-            embed_doc_chunks(doc,chunk_type=embed_type)
-            #except Exception as e:
+    
+    try:
+        # Count total items needing embedding for progress tracking
+        subq = (
+            db.query(target_table.id)
+            .filter(parent_id == parent_table.id)
+            .exists()
+        )
+        total_count_query = (
+            db.query(func.count(parent_table.id))
+            .filter(~subq)
+        )
+        total_count = total_count_query.scalar() or 0
+        
+        print(f"\n{'='*60}")
+        print(f"Filling empty {embed_type} embeddings")
+        print(f"Total items to process: {total_count}")
+        print(f"Batch size: {batch_size}")
+        print(f"{'='*60}\n")
+        
+        # Query for items without embeddings
+        query = (
+            db.query(parent_table.id, parent_text)
+            .filter(~subq)  # ← find NULL embeddings
+            .limit(100)  # Process in batches of 100 parent items
+        )
+        
+        processed_count = 0
+        while True:
+            rows = query.all()
+            if not rows:
+                break
+            
+            print(f"Processing batch of {len(rows)} items...")
+            
+            for i, doc_row in enumerate(rows):
+                try:
+                    # Create a simple object with id and text
+                    class DocProxy:
+                        def __init__(self, id_val, text_val):
+                            self.id = id_val
+                            if embed_type == "chunk":
+                                self.full_text = text_val
+                            else:
+                                self.chunk_text = text_val
+                    
+                    doc = DocProxy(doc_row[0], doc_row[1])
+                    
+                    # Embed using batch processing
+                    success = embed_doc_chunks(doc, chunk_type=embed_type, batch_size=batch_size)
+                    processed_count += 1
+                    
+                    if processed_count % 10 == 0:
+                        print(f"  Progress: {processed_count}/{total_count} items processed")
+                        
+                except Exception as e:
+                    print(f"[ERROR] Failed to process item {doc_row[0]}: {e}")
+                    continue
+        
+        print(f"\n{'='*60}")
+        print(f"Completed: {processed_count} items processed")
+        print(f"{'='*60}\n")
+        
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
                 
 
-def embed_doc_chunks(doc:Document | type[EMBED_TABLE],
-    chunk_type: Literal["chunk","sent"]="chunk"):
+def embed_doc_chunks(
+    doc: Document | type[EMBED_TABLE],
+    chunk_type: Literal["chunk", "sent"] = "chunk",
+    batch_size: int = None
+) -> int:
+    """
+    Embed chunks/sentences using batch processing for much better performance.
+    
+    Args:
+        doc: Document or chunk to embed
+        chunk_type: "chunk" or "sent"
+        batch_size: Number of texts to embed per API call (defaults to config)
+    
+    Returns:
+        Number of chunks successfully embedded
+    """
+    if batch_size is None:
+        batch_size = PREFERENCES.embedding.batch_size
+    
     db_gen = get_db()
     db: Session = next(db_gen)
-    # 2) Chunk full text
-    if chunk_type == "chunk":
-        max_char = MAX_CHARS_PER_CHUNK
-        text_input = doc.full_text
-    if chunk_type == "sent":
-        max_char = MAX_CHARS_PER_SENTENCE
-        text_input = doc.chunk_text
-
-    chunks = chunk_text(text_input, max_char=max_char)
-
-    # 3) For each chunk, compute embedding and create Chunk row
-    for idx, chunk_text_value in enumerate(chunks):
-        print(f"chunk {idx} length: {len(chunk_text_value)}")
-        try:
-            embedding = get_embedding(chunk_text_value)
-        except Exception as e: #NotImplementedError:
-            embedding = None  # let you develop embeddings later
-            # Continue on error; you can change to `raise` if you prefer strict fail-fast
-            preview = (text_input or "")[:200].replace("\n", " ")
-            print(f"[migrate_embeddings][WARN] chunk {doc.id} failed: {e} (len={len(text_input or '')}) preview='{preview}'")
-
+    
+    try:
+        # 1. Chunk the text
         if chunk_type == "chunk":
-            try:
-                chunk = EMBED_TABLE(
-                    document_id=doc.id,
-                    chunk_index=idx,
-                    chunk_text=chunk_text_value,
-                    embedding=embedding
-                )
-                db.add(chunk)
-                db.commit() 
-                embed_doc_chunks(chunk,
-                    chunk_type="sent")
-            except Exception as e:
-                print(e)
+            max_char = MAX_CHARS_PER_CHUNK
+            text_input = doc.full_text
         else:
+            max_char = MAX_CHARS_PER_SENTENCE
+            text_input = doc.chunk_text
+        
+        chunks = chunk_text(text_input, max_char=max_char)
+        
+        if not chunks:
+            return 0
+        
+        # 2. Batch embed all chunks
+        print(f"Embedding {len(chunks)} {chunk_type}s in batches of {batch_size}...")
+        
+        all_embeddings = []
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            batch_num = i // batch_size + 1
             try:
-                chunk = SENTENCE_TABLE(
-                    chunk_id=doc.id,
-                    sent_index=idx,
-                    sent_text=chunk_text_value,
-                    embedding=embedding
-                )
-                db.add(chunk)
-                db.commit()
+                batch_embeddings = get_embeddings_batch(batch)
+                all_embeddings.extend(batch_embeddings)
+                print(f"  ✓ Batch {batch_num}: {len(batch)} {chunk_type}s embedded")
             except Exception as e:
-                print(e)
-
-    # Commit everything
-   
-    #db.commit()
-    return len(chunks)
+                print(f"  [WARN] Batch {batch_num} failed: {e}")
+                # Fill with None for failed batches
+                all_embeddings.extend([None] * len(batch))
+        
+        # 3. Prepare bulk insert data
+        objects_to_insert = []
+        
+        for idx, (chunk_text_value, embedding) in enumerate(zip(chunks, all_embeddings)):
+            if embedding is None:
+                print(f"  [WARN] Skipping {chunk_type} {idx} (embedding failed)")
+                continue
+            
+            if chunk_type == "chunk":
+                obj_data = {
+                    "document_id": doc.id,
+                    "chunk_index": idx,
+                    "chunk_text": chunk_text_value,
+                    "embedding": embedding
+                }
+                objects_to_insert.append(obj_data)
+            else:
+                obj_data = {
+                    "chunk_id": doc.id,
+                    "sent_index": idx,
+                    "sent_text": chunk_text_value,
+                    "embedding": embedding
+                }
+                objects_to_insert.append(obj_data)
+        
+        # 4. Bulk insert
+        success_count = 0
+        if objects_to_insert:
+            try:
+                # Create ORM objects for bulk insert
+                orm_objects = []
+                for obj_data in objects_to_insert:
+                    if chunk_type == "chunk":
+                        obj = EMBED_TABLE(**obj_data)
+                    else:
+                        obj = SENTENCE_TABLE(**obj_data)
+                    orm_objects.append(obj)
+                
+                # Bulk save objects (faster than individual commits)
+                db.bulk_save_objects(orm_objects)
+                db.commit()
+                success_count = len(orm_objects)
+                print(f"✓ Inserted {success_count}/{len(chunks)} {chunk_type}s")
+            except Exception as e:
+                db.rollback()
+                print(f"[ERROR] Bulk insert failed: {e}")
+                # Fallback: try individual inserts
+                print("  Falling back to individual inserts...")
+                for obj_data in objects_to_insert:
+                    try:
+                        if chunk_type == "chunk":
+                            obj = EMBED_TABLE(**obj_data)
+                        else:
+                            obj = SENTENCE_TABLE(**obj_data)
+                        db.add(obj)
+                        db.commit()
+                        success_count += 1
+                    except Exception as e2:
+                        db.rollback()
+                        print(f"  [WARN] Failed to insert {chunk_type} {obj_data.get('chunk_index', obj_data.get('sent_index'))}: {e2}")
+        
+        # 5. Recursively embed sentences for chunks
+        if chunk_type == "chunk" and success_count > 0:
+            # Get inserted chunks and embed their sentences
+            inserted_chunks = (
+                db.query(EMBED_TABLE)
+                .filter(EMBED_TABLE.document_id == doc.id)
+                .order_by(EMBED_TABLE.chunk_index)
+                .all()
+            )
+            
+            for chunk in inserted_chunks:
+                embed_doc_chunks(chunk, chunk_type="sent", batch_size=batch_size)
+        
+        return success_count
+        
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] Failed to embed {chunk_type}s for doc {doc.id}: {e}")
+        raise
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
 
 def new_embedding_model_example():
     # Example: after containers are up and DB is reachable

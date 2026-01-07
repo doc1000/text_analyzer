@@ -8,6 +8,7 @@ services:
   backend:
     volumes:
       - ./app:/code/app
+      - .:/code  # Mount project root so test scripts are accessible
     command:
       - uvicorn
       - app.main:app

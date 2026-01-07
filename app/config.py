@@ -45,6 +45,25 @@ class ClusteringConfig:
     k_sub_min: int = 1
     k_sub_max: int = 4
 
+
+@dataclass
+class MMRConfig:
+    """Configuration for MMR-based sentence selection for topic titles."""
+    k_sentences: int = 10              # Number of sentences to select
+    lambda_param: float = 0.7          # Relevance vs diversity trade-off (0.65-0.75 recommended)
+    max_prompt_chars: int = 1500       # Maximum chars to send to LLM
+    min_sentences_for_mmr: int = 5     # Minimum sentences needed to use MMR
+    max_docs_to_process: int = 50      # Max docs per cluster to avoid overwhelming MMR
+
+
+@dataclass
+class EmbeddingConfig:
+    """Configuration for batch embedding processing."""
+    batch_size: int = 100              # Texts per API call
+    max_batch_size_openai: int = 2048  # OpenAI API limit
+    max_batch_size_ollama: int = 100   # Ollama practical limit
+    retry_failed_batches: bool = True   # Retry failed batches individually
+
 @dataclass
 class OllamaConfig:
     base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -64,6 +83,8 @@ class ModelConfig:
 class Preferences:
     models: ModelConfig = field(default_factory=ModelConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    mmr: MMRConfig = field(default_factory=MMRConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
 
 
 # Single global preferences object. Import this elsewhere.
