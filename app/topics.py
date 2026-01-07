@@ -138,7 +138,7 @@ def _get_sentence_embeddings_for_docs(
     chunk_ids_query = (
         db.query(EMBED_TABLE.id)
         .filter(EMBED_TABLE.document_id.in_(doc_ids))
-        .subquery()
+        #.subquery()
     )
     
     sentences_rows = (
@@ -549,7 +549,6 @@ def compute_document_embeddings(
 
     doc_ids = [d.id for d in docs]
     emb_dim = len(get_embedding("dimension probe"))
-    print(f"embedding_dimensions: {emb_dim}")
 
     chunks = (
         db.query(EMBED_TABLE)
