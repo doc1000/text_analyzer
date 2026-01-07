@@ -53,10 +53,10 @@ class OllamaConfig:
 
 @dataclass
 class ModelConfig:
-    provider: Provider = "ollama" #os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
-    embedding_model: EmbeddingModel = "all-minilm" #OllamaConfig.embed_model #"text-embedding-3-small" #os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
+    provider: Provider = "openai" #os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
+    embedding_model: EmbeddingModel = "text-embedding-3-small" #OllamaConfig.embed_model #"text-embedding-3-small" #os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
     #embedding_dim: int = 384 #os.getenv("EMBED_DIM_V2", 1536)
-    llm_model: ChatModel = "gemma3:1b-it-q4_K_M" #OllamaConfig.chat_model #"gpt-4.1-nano" #os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
+    llm_model: ChatModel = "gpt-4.1-nano" #OllamaConfig.chat_model #"gpt-4.1-nano" #os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 

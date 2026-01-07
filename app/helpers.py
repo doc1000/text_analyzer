@@ -12,6 +12,8 @@ from .config import PREFERENCES
 from uuid import UUID
 from pydantic import BaseModel
 from datetime import datetime
+import numpy as np
+import ast
 nlp = spacy.load("en_core_web_sm")
 from .models import Document, get_or_create_embedding_class
 
