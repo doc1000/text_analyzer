@@ -1,17 +1,17 @@
 {
   "manifest_version": 3,
   "name": "VaultBubble",
-  "version": "0.5.0",
-  "description": "Capture and analyze your reading with VaultBubble",
+  "version": "0.5.1",
+  "description": "Capture web content, organize by topics, and query your research vault with AI-powered search. All stored locally on your computer.",
   "icons": {},
   "permissions": [
     "activeTab",
     "tabs",
     "contextMenus",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
-    "<all_urls>",
     "http://localhost:8000/*"
   ],
   "background": {
@@ -21,16 +21,5 @@
     "default_title": "VaultBubble",
     "default_popup": "popup.html",
     "default_icon": {}
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content-script.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ]
+  }
 }

@@ -15,14 +15,14 @@ let currentPageTitle = "";
 
 // On load, grab selection from active tab (but DO NOT prefill header)
 document.addEventListener("DOMContentLoaded", () => {
-  browserAPI.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+  browserAPI.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
     if (!tabs || !tabs[0]) return;
 
     const tabId = tabs[0].id;
 
-    browserAPI.tabs.sendMessage(
-      tabId,
-      { type: "VB_GET_SELECTION_CONTEXT" },
+    // Ask background to inject content script and get selection
+    browserAPI.runtime.sendMessage(
+      { type: "VB_POPUP_GET_SELECTION", tabId },
       (response) => {
         if (browserAPI.runtime.lastError) {
           console.warn("[VB popup] Error getting selection:", browserAPI.runtime.lastError);

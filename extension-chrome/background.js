@@ -9,7 +9,18 @@ async function analyzeAndIngest(tab) {
   console.log("[VB] analyzeAndIngest for tab", tab.id);
 
   try {
-    // 1) Ask content script for page text (and optionally title/url)
+    // 1) Inject content script if needed (activeTab permission)
+    try {
+      await browserAPI.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content-script.js"]
+      });
+    } catch (e) {
+      // Content script may already be injected, or tab may not be accessible
+      console.log("[VB] Content script injection note:", e.message);
+    }
+
+    // 2) Ask content script for page text (and optionally title/url)
     const pageData = await browserAPI.tabs.sendMessage(tab.id, {
       type: "collect-text"
     });
@@ -132,6 +143,16 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== "vb-save-selection" || !tab || !tab.id) return;
 
   try {
+    // Inject content script if needed (activeTab permission)
+    try {
+      await browserAPI.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content-script.js"]
+      });
+    } catch (e) {
+      console.log("[VB] Content script injection note:", e.message);
+    }
+
     // Ask content script in that tab for selection + page info
     const response = await browserAPI.tabs.sendMessage(tab.id, {
       type: "VB_GET_SELECTION_CONTEXT"
@@ -195,6 +216,39 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
 
 browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) return false;
+
+  // Popup requesting selection from active tab
+  if (message.type === "VB_POPUP_GET_SELECTION") {
+    const tabId = message.tabId;
+    
+    (async () => {
+      try {
+        // Inject content script if needed (activeTab permission)
+        try {
+          await browserAPI.scripting.executeScript({
+            target: { tabId },
+            files: ["content-script.js"]
+          });
+          // Small delay to ensure content script is ready
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (e) {
+          console.log("[VB] Content script injection note:", e.message);
+        }
+
+        // Get selection from content script
+        const response = await browserAPI.tabs.sendMessage(tabId, {
+          type: "VB_GET_SELECTION_CONTEXT"
+        });
+        
+        sendResponse(response || {});
+      } catch (e) {
+        console.error("[VB] Error getting selection for popup:", e);
+        sendResponse({});
+      }
+    })();
+    
+    return true; // async response
+  }
 
   // Popup-triggered note capture
   if (message.type === "VB_CAPTURE_SNIPPET") {
