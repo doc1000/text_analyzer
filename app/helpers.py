@@ -242,17 +242,55 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
     max_context_chars = PREFERENCES.query.max_context_chars
     max_prompt_chars = PREFERENCES.query.max_prompt_chars
     
-    # Build context incrementally, prioritizing higher similarity hits (they come first)
+    # Group hits by chunk (document_id + chunk_index) and sort sentences within each chunk by sent_index
+    from collections import defaultdict
+    chunk_groups = defaultdict(list)
+    
+    for h in hits:
+        # Use (document_id, chunk_index) as the grouping key
+        chunk_key = (h.document_id, h.chunk_index)
+        chunk_groups[chunk_key].append(h)
+    
+    # Sort sentences within each chunk by sent_index (sequential order)
+    # Also track the highest similarity for each chunk to preserve ordering
+    grouped_hits = []
+    for chunk_key, chunk_hits in chunk_groups.items():
+        # Sort by sent_index if available, otherwise keep original order
+        sorted_chunk_hits = sorted(
+            chunk_hits,
+            key=lambda x: x.sent_index if x.sent_index is not None else float('inf')
+        )
+        # Get highest similarity in this chunk (for ordering chunks)
+        max_similarity = max(h.similarity for h in sorted_chunk_hits)
+        grouped_hits.append((chunk_key, sorted_chunk_hits, max_similarity))
+    
+    # Sort chunks by highest similarity (preserve relevance ordering)
+    grouped_hits.sort(key=lambda x: x[2], reverse=True)
+    
+    # Build context incrementally, prioritizing higher similarity chunks (they come first)
     context_parts = []
     current_context_size = 0
+    source_num = 0
     
-    for i, h in enumerate(hits):
-        # Format this hit
-        hit_prefix = f"Source {i+1} ({h.url}):\n"
-        # Prefer sentence text when available (more precise), fallback to chunk text
-        hit_text = h.sent_text if h.sent_text else h.chunk_text
+    for chunk_key, chunk_hits, _ in grouped_hits:
+        # Get document info from first hit in chunk (all hits in chunk have same doc info)
+        first_hit = chunk_hits[0]
+        source_num += 1
+        hit_prefix = f"Source {source_num} ({first_hit.url}):\n"
         
-        # Calculate size if we add this hit
+        # Combine sentences from same chunk in sequential order
+        if all(h.sent_text for h in chunk_hits):
+            # All hits have sentence text - combine them in order
+            sentence_texts = [h.sent_text for h in chunk_hits]
+            hit_text = " ".join(sentence_texts)
+        elif chunk_hits[0].sent_text:
+            # Some have sentence text - use first sentence text
+            hit_text = chunk_hits[0].sent_text
+        else:
+            # Fallback to chunk text
+            hit_text = first_hit.chunk_text
+        
+        # Calculate size if we add this grouped hit
         hit_size = len(hit_prefix) + len(hit_text)
         separator_size = len("\n\n") if context_parts else 0
         total_size_if_added = current_context_size + separator_size + hit_size
