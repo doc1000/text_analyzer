@@ -46,7 +46,7 @@ class ClusteringConfig:
     k_topics_min: int = 2
     k_topics_max: int = 10
     k_sub_min: int = 1
-    k_sub_max: int = 4
+    k_sub_max: int = 10
 
 
 @dataclass

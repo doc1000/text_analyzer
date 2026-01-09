@@ -467,21 +467,6 @@
       </div>
     </section>
 
-    <!-- PAGE 3: Reader -->
-    <section id="page-reader" class="page">
-      <div id="reader-panel" style="flex:1; padding: 1rem 1.5rem; overflow-y:auto;">
-        <div style="display:flex; gap: 0.75rem; align-items:center; margin-bottom: 0.75rem;">
-          <button id="readerBackBtn" class="tab-btn">← Back</button>
-          <div style="font-size: 0.95rem; color:#9ca3af;">Document Reader</div>
-        </div>
-
-        <h2 id="readerTitle" style="margin:0 0 0.4rem 0;"></h2>
-
-        <div id="readerMeta" style="color:#9ca3af; font-size:0.85rem; margin-bottom: 0.8rem;"></div>
-
-        <div id="readerBody" style="white-space: pre-wrap; line-height: 1.45; font-size: 0.95rem; color:#e5e7eb;"></div>
-      </div>
-    </section>
 
   </main>
 
@@ -510,13 +495,10 @@
       docIds: null
     };
 
-    const pageReader = document.getElementById("page-reader");
-
     function showPage(page) {
       // hide all pages
       pageTopics.classList.remove("active");
       pageQuery.classList.remove("active");
-      pageReader.classList.remove("active");
 
       // reset tabs
       tabTopics.classList.remove("active");
@@ -530,10 +512,6 @@
         pageQuery.classList.add("active");
         tabQuery.classList.add("active");
         headerHint.textContent = "Global query across all documents";
-      } else if (page === "reader") {
-        // ✅ this was missing
-        pageReader.classList.add("active");
-        headerHint.textContent = "Reading captured document";
       }
     }
 
@@ -1228,65 +1206,12 @@
       });
     }
 
-    // -------- READER PAGE HELPERS --------
-    const readerTitle = document.getElementById("readerTitle");
-    const readerMeta = document.getElementById("readerMeta");
-    const readerBody = document.getElementById("readerBody");
-    const readerBackBtn = document.getElementById("readerBackBtn");
-
-    // simple history stack so Back returns where you came from
-    let lastPage = "topics";
-
+    // -------- DOCUMENT OPENING --------
     async function openReader(docId) {
-      lastPage = pageTopics.classList.contains("active") ? "topics" : "query";
-      showPage("reader");
-
-      readerTitle.textContent = "Loading…";
-      readerMeta.textContent = "";
-      readerBody.textContent = "";
-
-      const url = `${API_BASE}/documents/${encodeURIComponent(docId)}`;
-      console.log("openReader docId:", docId);
-      console.log("openReader GET:", url);
-
-      try {
-        const res = await fetch(url);
-        console.log("openReader status:", res.status, res.statusText);
-
-        if (!res.ok) {
-          readerTitle.textContent = "Error";
-          readerBody.textContent = `Failed to load document ${docId} (HTTP ${res.status})`;
-          return;
-        }
-
-        const doc = await res.json();
-        console.log("openReader json ok. text length:", (doc.text || "").length);
-
-        readerTitle.textContent = doc.title || "(no title)";
-
-        const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
-        const info = (doc.score_info != null) ? Number(doc.score_info).toFixed(2) : "n/a";
-        const slop = (doc.score_ai_slop != null) ? Number(doc.score_ai_slop).toFixed(2) : "n/a";
-
-        readerMeta.innerHTML = `
-          <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
-          <div>Captured: ${captured}</div>
-          <div>info: ${info} · ai slop: ${slop}</div>
-        `;
-
-        readerBody.textContent = doc.text || "";
-
-      } catch (err) {
-        console.error("openReader error:", err);
-        readerTitle.textContent = "Error";
-        readerBody.textContent = "Failed to load document. See console for details.";
-      }
+      // Open document in a new browser tab
+      const documentUrl = `/static/document.html?id=${encodeURIComponent(docId)}`;
+      window.open(documentUrl, '_blank');
     }
-
-
-
-
-    readerBackBtn.addEventListener("click", () => showPage(lastPage));
 
   </script>
 </body>

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
 #Internal imports
 from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE
-from .schemas import IngestPayload, DocumentDetailResponse
+from .schemas import IngestPayload, DocumentDetailResponse, DocumentUpdateRequest
 from . import models
 from .models import Document
 from .helpers import (get_embedding,embed_doc_chunks,
@@ -263,6 +263,54 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Reconstruct full captured text from chunks (ordered)
+    chunks = (
+        db.query(EMBED_TABLE)
+        .filter(EMBED_TABLE.document_id == doc.id)
+        .order_by(asc(EMBED_TABLE.chunk_index))
+        .all()
+    )
+    full_text = "\n\n".join([c.chunk_text for c in chunks]) if chunks else ""
+
+    return DocumentDetailResponse(
+        id=str(doc.id),
+        url=doc.url,
+        title=doc.title,
+        captured_at=doc.captured_at,
+        score_info=doc.score_info,
+        score_ai_slop=doc.score_ai_slop,
+        text=full_text,
+    )
+
+@app.put("/documents/{document_id}", response_model=DocumentDetailResponse)
+def update_document(document_id: str, payload: DocumentUpdateRequest, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Update title if provided
+    if payload.title is not None:
+        doc.title = payload.title
+
+    # Update text if provided - need to re-chunk and re-embed
+    if payload.text is not None:
+        doc.full_text = payload.text
+        
+        # Delete old chunks (CASCADE will delete sentences automatically)
+        db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).delete()
+        db.commit()
+        
+        # Re-chunk and re-embed
+        from .helpers import embed_doc_chunks
+        embed_doc_chunks(doc, chunk_type="chunk")
+        
+        # Re-embed sentences for each chunk
+        chunks = db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).all()
+        for chunk in chunks:
+            embed_doc_chunks(chunk, chunk_type="sent")
+
+    db.commit()
+    
+    # Return updated document
     chunks = (
         db.query(EMBED_TABLE)
         .filter(EMBED_TABLE.document_id == doc.id)

@@ -56,3 +56,7 @@ class DocumentDetailResponse(BaseModel):
     score_info: Optional[float] = None
     score_ai_slop: Optional[float] = None
     text: str
+
+class DocumentUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    text: Optional[str] = None

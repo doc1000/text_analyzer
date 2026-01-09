@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Document Viewer - VaultBubble</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      font-size: 1.3rem;
+      margin: 0;
+    }
+
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    button {
+      padding: 0.3rem 0.9rem;
+      border-radius: 6px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    button:hover {
+      background: #1f2937;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    main {
+      padding: 1.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    #documentTitle {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      box-sizing: border-box;
+    }
+
+    #documentTitle:focus {
+      outline: none;
+      border-color: #60a5fa;
+    }
+
+    #documentMeta {
+      color: #9ca3af;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    #documentMeta a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+
+    #documentMeta a:hover {
+      text-decoration: underline;
+    }
+
+    #documentBody {
+      width: 100%;
+      min-height: 400px;
+      padding: 0.75rem;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      font-family: inherit;
+      white-space: pre-wrap;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+
+    #documentBody:focus {
+      outline: none;
+      border-color: #60a5fa;
+    }
+
+    .save-status {
+      font-size: 0.85rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 4px;
+    }
+
+    .save-status.unsaved {
+      color: #fbbf24;
+    }
+
+    .save-status.saving {
+      color: #60a5fa;
+    }
+
+    .save-status.saved {
+      color: #10b981;
+    }
+
+    .save-status.error {
+      color: #ef4444;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Document Viewer</h1>
+    <div class="controls">
+      <button id="saveBtn">Save</button>
+      <span id="saveStatus" class="save-status"></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="section-label">Header</div>
+    <input type="text" id="documentTitle" placeholder="Document title..." />
+
+    <div id="documentMeta"></div>
+
+    <div class="section-label">Captured</div>
+    <textarea id="documentBody" placeholder="Document content..."></textarea>
+  </main>
+
+  <script>
+    const API_BASE = "http://localhost:8000"; // adjust if needed
+
+    const documentTitle = document.getElementById("documentTitle");
+    const documentMeta = document.getElementById("documentMeta");
+    const documentBody = document.getElementById("documentBody");
+    const saveBtn = document.getElementById("saveBtn");
+    const saveStatus = document.getElementById("saveStatus");
+
+    // Get document ID from URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const docId = urlParams.get("id");
+
+    if (!docId) {
+      documentTitle.value = "Error: No document ID provided";
+      documentBody.value = "Please provide a document ID in the URL: ?id=document-id";
+      documentTitle.disabled = true;
+      documentBody.disabled = true;
+      saveBtn.disabled = true;
+    } else {
+      loadDocument(docId);
+    }
+
+    let originalTitle = "";
+    let originalText = "";
+    let originalFullText = ""; // Store the complete original text
+    let hasChanges = false;
+
+    function extractCapturedContent(fullText) {
+      // Find [Captured] marker (case-insensitive, handles variations)
+      const capturedMarker = /\[captured\]/i;
+      const match = fullText.match(capturedMarker);
+      
+      if (match) {
+        // Get everything after the marker
+        const startIndex = match.index + match[0].length;
+        let capturedContent = fullText.substring(startIndex);
+        
+        // Remove leading whitespace/newlines
+        capturedContent = capturedContent.replace(/^\s+/, '');
+        
+        return capturedContent;
+      }
+      
+      // If no [Captured] marker found, return the full text
+      return fullText;
+    }
+
+    async function loadDocument(docId) {
+      documentTitle.value = "Loading…";
+      documentBody.value = "";
+      saveBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`);
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: Failed to load document`);
+        }
+
+        const doc = await res.json();
+
+        originalTitle = doc.title || "";
+        originalFullText = doc.text || "";
+        
+        // Extract only the captured content (everything after [Captured])
+        const capturedContent = extractCapturedContent(originalFullText);
+        originalText = capturedContent; // Store the extracted content as the "original"
+
+        documentTitle.value = originalTitle;
+        documentBody.value = capturedContent;
+
+        const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
+        const info = (doc.score_info != null) ? Number(doc.score_info).toFixed(2) : "n/a";
+        const slop = (doc.score_ai_slop != null) ? Number(doc.score_ai_slop).toFixed(2) : "n/a";
+
+        documentMeta.innerHTML = `
+          <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
+          <div>Captured: ${captured}</div>
+          <div>info: ${info} · ai slop: ${slop}</div>
+        `;
+
+        // Update page title
+        document.title = `${doc.title || "Untitled"} - VaultBubble`;
+
+        saveBtn.disabled = false;
+        hasChanges = false;
+        updateSaveStatus("");
+
+      } catch (err) {
+        console.error("Load error:", err);
+        documentTitle.value = "Error";
+        documentBody.value = "Failed to load document. See console for details.";
+        updateSaveStatus("Error loading document", "error");
+      }
+    }
+
+    function updateSaveStatus(message, type = "") {
+      saveStatus.textContent = message;
+      saveStatus.className = `save-status ${type}`;
+    }
+
+    // Track changes
+    documentTitle.addEventListener("input", () => {
+      hasChanges = documentTitle.value !== originalTitle || documentBody.value !== originalText;
+      if (hasChanges) {
+        updateSaveStatus("Unsaved changes", "unsaved");
+      } else {
+        updateSaveStatus("");
+      }
+    });
+
+    documentBody.addEventListener("input", () => {
+      hasChanges = documentTitle.value !== originalTitle || documentBody.value !== originalText;
+      if (hasChanges) {
+        updateSaveStatus("Unsaved changes", "unsaved");
+      } else {
+        updateSaveStatus("");
+      }
+    });
+
+    // Save functionality
+    async function saveDocument() {
+      if (!docId || !hasChanges) return;
+
+      const title = documentTitle.value.trim();
+      const text = documentBody.value;
+
+      updateSaveStatus("Saving...", "saving");
+      saveBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title || null,
+            text: text
+          })
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const updatedDoc = await res.json();
+
+        originalTitle = updatedDoc.title || "";
+        originalFullText = updatedDoc.text || "";
+        
+        // Extract only the captured content for display
+        const capturedContent = extractCapturedContent(originalFullText);
+        originalText = capturedContent;
+
+        // Update page title
+        document.title = `${updatedDoc.title || "Untitled"} - VaultBubble`;
+
+        hasChanges = false;
+        updateSaveStatus("Saved", "saved");
+        setTimeout(() => updateSaveStatus(""), 2000);
+
+      } catch (err) {
+        console.error("Save error:", err);
+        updateSaveStatus("Error: " + err.message, "error");
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    saveBtn.addEventListener("click", saveDocument);
+
+    // Keyboard shortcut: Ctrl+S to save
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        saveDocument();
+      }
+    });
+
+    // Warn before closing if there are unsaved changes
+    window.addEventListener("beforeunload", (e) => {
+      if (hasChanges) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
+        return e.returnValue;
+      }
+    });
+  </script>
+</body>
+</html>
