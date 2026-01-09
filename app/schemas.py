@@ -60,3 +60,16 @@ class DocumentDetailResponse(BaseModel):
 class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None
     text: Optional[str] = None
+
+class SettingsResponse(BaseModel):
+    chat_model: str
+    topic_model: str
+    embedding_model: str
+    chat_provider: str
+    embedding_provider: str
+    topic_provider: str
+    has_openai_key: bool  # Whether API key is set (without revealing it)
+
+class SettingsUpdateRequest(BaseModel):
+    chat_provider: Optional[Literal["openai", "ollama"]] = None
+    openai_api_key: Optional[str] = None  # If provided, will update the API key

@@ -117,11 +117,37 @@ def chunk_text(text: str, max_char: int = MAX_CHARS_PER_CHUNK) -> List[str]:
 
     return chunks
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Global OpenAI client - can be updated dynamically
+_client_instance = None
+
+def get_openai_client():
+    """Get or create OpenAI client with current API key."""
+    global _client_instance
+    api_key = os.getenv("OPENAI_API_KEY")
+    if _client_instance is None or (hasattr(_client_instance, 'api_key') and _client_instance.api_key != api_key):
+        _client_instance = OpenAI(api_key=api_key)
+    return _client_instance
+
+def update_openai_client(api_key: str):
+    """Update the OpenAI client with a new API key."""
+    global _client_instance
+    os.environ["OPENAI_API_KEY"] = api_key
+    _client_instance = OpenAI(api_key=api_key)
+
+# Initialize client
+client = get_openai_client()
 
 def _openai_chat(prompt: str) -> str:
     model_name = PREFERENCES.models.llm_model
-    resp = client.chat.completions.create(
+    
+    # Ensure we're using a valid OpenAI model (not an Ollama model name)
+    # Valid OpenAI models start with "gpt-" or "o1-"
+    openai_models = ["gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o"]
+    if model_name not in openai_models:
+        # Fallback to a default OpenAI model if llm_model is set to an Ollama model
+        model_name = "gpt-4o-mini"
+    
+    resp = get_openai_client().chat.completions.create(
         model=model_name,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -325,9 +351,9 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
             # Even template is too large (shouldn't happen), use minimal prompt
             prompt = f"Question: {query}\n\nAnswer based on the provided context."
 
-    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+    chat_provider = getattr(PREFERENCES.models, "chat_provider", "ollama")
 
-    if model_provider == "ollama":
+    if chat_provider == "ollama":
         text = _ollama_chat(prompt)
     else:
         text = _openai_chat(prompt)
@@ -354,12 +380,13 @@ def get_embedding(text: str) -> List[float]:
     Get a single embedding vector for a text using the configured provider.
     Returns L2-normalized embeddings for consistent cosine similarity calculations.
     """
-    if getattr(PREFERENCES.models, "provider", "openai") == "ollama":
+    embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
+    if embedding_provider == "ollama":
         vec = _ollama_embed(text)
     else:
         # OpenAI embeddings
         model_name = PREFERENCES.models.embedding_model
-        resp = client.embeddings.create(model=model_name, input=text)
+        resp = get_openai_client().embeddings.create(model=model_name, input=text)
         vec = resp.data[0].embedding
     
     # Ensure consistent array format
@@ -466,12 +493,13 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     if not texts:
         return []
     
-    if getattr(PREFERENCES.models, "provider", "openai") == "ollama":
+    embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
+    if embedding_provider == "ollama":
         return _ollama_embed_batch(texts)
     
     # OpenAI batch embedding
     model_name = PREFERENCES.models.embedding_model
-    resp = client.embeddings.create(
+    resp = get_openai_client().embeddings.create(
         model=model_name,
         input=texts  # OpenAI accepts list of strings
     )

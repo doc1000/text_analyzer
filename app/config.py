@@ -92,10 +92,14 @@ class OllamaConfig:
 
 @dataclass
 class ModelConfig:
-    provider: Provider = "ollama" #os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
+    # Separate providers for different model types
+    chat_provider: Provider = "ollama"  # Provider for chat/query model
+    embedding_provider: Provider = "ollama"  # Provider for embedding model
+    topic_provider: Provider = "ollama"  # Provider for topic generation model
+    
     embedding_model: EmbeddingModel = OllamaConfig.embed_model #"text-embedding-3-small" #os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
     #embedding_dim: int = 384 #os.getenv("EMBED_DIM_V2", 1536)
-    llm_model: ChatModel = OllamaConfig.chat_model #"gpt-4.1-nano" #os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
+    llm_model: ChatModel = "gpt-4o-mini"  # Default OpenAI model (used when chat_provider is "openai")
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 

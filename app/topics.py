@@ -22,11 +22,8 @@ from .schemas import (         # whatever pydantic models you use
     TopicDoc,
     TopicsResponse,
 )
-from .helpers import _openai_chat, _ollama_chat, get_embedding
+from .helpers import _openai_chat, _ollama_chat, get_embedding, get_openai_client, update_openai_client
 from .db import EMBED_TABLE, TOPIC_TABLE
-
-# ---------- OpenAI client ----------
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Simple in-memory cache for topics per (days, max_captured_at)
 _topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
 
@@ -244,8 +241,8 @@ def _generate_title_and_summary_mmr(
     )
     
     # Send to LLM - use topic_model for faster topic generation
-    model_provider = getattr(PREFERENCES.models, "provider", "openai")
-    if model_provider == "ollama":
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+    if topic_provider == "ollama":
         ollama_options = {
             "temperature": 0.6,
             "top_p": 0.8,
@@ -418,12 +415,12 @@ def _generate_title_and_summary_fallback(docs: List[Document]) -> Tuple[str, str
         f"DOCUMENTS:\n{context}"
     )
     
-    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
     ollama_title_options = {
         "temperature": 0.6,
         "top_p": 0.8,
     }
-    if model_provider == "ollama":
+    if topic_provider == "ollama":
         # Use topic_model for topic generation (faster latency)
         topic_model = PREFERENCES.models.ollama.topic_model
         text = _ollama_chat(prompt, ollama_title_options, model=topic_model)

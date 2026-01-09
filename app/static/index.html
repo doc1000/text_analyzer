@@ -395,6 +395,178 @@
       border: 1px solid #374151;
       margin-left: 0.2rem;
     }
+
+    /* Settings Modal Styles */
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    .modal-content {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #374151;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 1.2rem;
+    }
+
+    .close-btn {
+      background: none;
+      border: none;
+      color: #9ca3af;
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .close-btn:hover {
+      color: #e5e7eb;
+    }
+
+    .modal-body {
+      padding: 1.5rem;
+    }
+
+    .settings-section {
+      margin-bottom: 2rem;
+    }
+
+    .settings-section h3 {
+      margin: 0 0 0.75rem 0;
+      font-size: 1rem;
+      color: #e5e7eb;
+    }
+
+    .settings-section label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
+      color: #d1d5db;
+    }
+
+    .settings-section input[type="password"],
+    .settings-section input[type="text"],
+    .settings-section select {
+      width: 100%;
+      padding: 0.5rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .settings-section input[type="password"]:focus,
+    .settings-section input[type="text"]:focus,
+    .settings-section select:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+
+    .model-info {
+      background: #020617;
+      border: 1px solid #374151;
+      border-radius: 4px;
+      padding: 1rem;
+    }
+
+    .model-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    .model-row:last-child {
+      border-bottom: none;
+    }
+
+    .model-label {
+      color: #9ca3af;
+      font-size: 0.85rem;
+    }
+
+    .model-value {
+      color: #e5e7eb;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .save-btn {
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      border: 1px solid #3b82f6;
+      background: #3b82f6;
+      color: white;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-right: 0.5rem;
+    }
+
+    .save-btn:hover {
+      background: #2563eb;
+    }
+
+    .cancel-btn {
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
+    .cancel-btn:hover {
+      background: #1f2937;
+    }
+
+    .settings-actions {
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #374151;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    #keyStatus {
+      margin-top: 0.25rem;
+      font-size: 0.8rem;
+    }
+
+    #keyStatus.has-key {
+      color: #10b981;
+    }
   </style>
 </head>
 <body>
@@ -416,9 +588,62 @@
       </select>
 
       <button id="reloadBtn">Reload</button>
+      <button id="settingsBtn" title="Settings">⚙️</button>
       <span class="hint" id="headerHint">Click big bubbles to zoom · click document bubbles to open</span>
     </div>
   </header>
+
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button id="closeSettingsBtn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section">
+          <h3>Current Models</h3>
+          <div class="model-info">
+            <div class="model-row">
+              <span class="model-label">Chat Model:</span>
+              <span class="model-value" id="currentChatModel">-</span>
+            </div>
+            <div class="model-row">
+              <span class="model-label">Topic Model:</span>
+              <span class="model-value" id="currentTopicModel">-</span>
+            </div>
+            <div class="model-row">
+              <span class="model-label">Embedding Model:</span>
+              <span class="model-value" id="currentEmbeddingModel">-</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Chat Provider</h3>
+          <label for="chatProviderSelect">Select chat provider:</label>
+          <select id="chatProviderSelect">
+            <option value="ollama">Ollama (Local)</option>
+            <option value="openai">OpenAI</option>
+          </select>
+          <p class="hint">Changing the chat provider will use OpenAI for queries while keeping embeddings and topics on Ollama.</p>
+        </div>
+
+        <div class="settings-section">
+          <h3>OpenAI API Key</h3>
+          <label for="openaiKeyInput">API Key:</label>
+          <input type="password" id="openaiKeyInput" placeholder="sk-..." />
+          <p class="hint" id="keyStatus">No API key set</p>
+          <button id="saveKeyBtn" class="save-btn">Save API Key</button>
+        </div>
+
+        <div class="settings-actions">
+          <button id="saveSettingsBtn" class="save-btn">Save Settings</button>
+          <button id="cancelSettingsBtn" class="cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <main>
     <!-- PAGE 1: Topics Map -->
@@ -1213,6 +1438,165 @@
       const documentUrl = `/static/document.html?id=${encodeURIComponent(docId)}`;
       window.open(documentUrl, '_blank');
     }
+
+    // -------- SETTINGS MODAL --------
+    const settingsBtn = document.getElementById("settingsBtn");
+    const settingsModal = document.getElementById("settingsModal");
+    const closeSettingsBtn = document.getElementById("closeSettingsBtn");
+    const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+    const cancelSettingsBtn = document.getElementById("cancelSettingsBtn");
+    const chatProviderSelect = document.getElementById("chatProviderSelect");
+    const openaiKeyInput = document.getElementById("openaiKeyInput");
+    const saveKeyBtn = document.getElementById("saveKeyBtn");
+    const keyStatus = document.getElementById("keyStatus");
+    const currentChatModel = document.getElementById("currentChatModel");
+    const currentTopicModel = document.getElementById("currentTopicModel");
+    const currentEmbeddingModel = document.getElementById("currentEmbeddingModel");
+
+    let currentSettings = null;
+
+    // Load settings from API
+    async function loadSettings() {
+      try {
+        const res = await fetch(`${API_BASE}/settings`);
+        if (!res.ok) {
+          console.error("Failed to load settings");
+          return;
+        }
+        currentSettings = await res.json();
+        
+        // Update UI with current settings
+        currentChatModel.textContent = currentSettings.chat_model;
+        currentTopicModel.textContent = currentSettings.topic_model;
+        currentEmbeddingModel.textContent = currentSettings.embedding_model;
+        chatProviderSelect.value = currentSettings.chat_provider;
+        
+        // Update API key status
+        if (currentSettings.has_openai_key) {
+          keyStatus.textContent = "✓ API key is set";
+          keyStatus.classList.add("has-key");
+          openaiKeyInput.value = ""; // Don't show the actual key
+          openaiKeyInput.placeholder = "••••••••••••";
+        } else {
+          keyStatus.textContent = "No API key set";
+          keyStatus.classList.remove("has-key");
+          openaiKeyInput.value = "";
+          openaiKeyInput.placeholder = "sk-...";
+        }
+      } catch (error) {
+        console.error("Error loading settings:", error);
+      }
+    }
+
+    // Save settings
+    async function saveSettings() {
+      const updates = {};
+      
+      // Check if chat provider changed
+      if (chatProviderSelect.value !== currentSettings.chat_provider) {
+        updates.chat_provider = chatProviderSelect.value;
+      }
+      
+      // Check if API key was entered
+      if (openaiKeyInput.value.trim()) {
+        updates.openai_api_key = openaiKeyInput.value.trim();
+      }
+      
+      if (Object.keys(updates).length === 0) {
+        alert("No changes to save");
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates)
+        });
+        
+        if (!res.ok) {
+          const error = await res.json();
+          alert(`Failed to save settings: ${error.detail || "Unknown error"}`);
+          return;
+        }
+        
+        // Reload settings to get updated values
+        await loadSettings();
+        alert("Settings saved successfully!");
+        
+        // Clear the API key input after saving
+        if (updates.openai_api_key) {
+          openaiKeyInput.value = "";
+        }
+      } catch (error) {
+        console.error("Error saving settings:", error);
+        alert("Failed to save settings. Please try again.");
+      }
+    }
+
+    // Save API key separately
+    async function saveApiKey() {
+      const apiKey = openaiKeyInput.value.trim();
+      if (!apiKey) {
+        alert("Please enter an API key");
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ openai_api_key: apiKey })
+        });
+        
+        if (!res.ok) {
+          const error = await res.json();
+          alert(`Failed to save API key: ${error.detail || "Unknown error"}`);
+          return;
+        }
+        
+        await loadSettings();
+        alert("API key saved successfully!");
+        openaiKeyInput.value = "";
+      } catch (error) {
+        console.error("Error saving API key:", error);
+        alert("Failed to save API key. Please try again.");
+      }
+    }
+
+    // Open settings modal
+    settingsBtn.addEventListener("click", async () => {
+      await loadSettings();
+      settingsModal.style.display = "flex";
+    });
+
+    // Close settings modal
+    function closeSettings() {
+      settingsModal.style.display = "none";
+    }
+
+    closeSettingsBtn.addEventListener("click", closeSettings);
+    cancelSettingsBtn.addEventListener("click", closeSettings);
+    
+    // Close modal when clicking outside
+    settingsModal.addEventListener("click", (e) => {
+      if (e.target === settingsModal) {
+        closeSettings();
+      }
+    });
+
+    // Save settings button
+    saveSettingsBtn.addEventListener("click", async () => {
+      await saveSettings();
+    });
+
+    // Save API key button
+    saveKeyBtn.addEventListener("click", async () => {
+      await saveApiKey();
+    });
+
+    // Load settings on page load
+    loadSettings();
 
   </script>
 </body>
