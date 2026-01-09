@@ -36,7 +36,7 @@ services:
        until curl -sf http://ollama:11434/api/tags >/dev/null; do sleep 1; done &&
        echo 'Seeding models...' &&
        curl -s http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"all-minilm\"}' >/dev/null &&
-       curl -s http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"phi3.5-mini-q2k\"}' >/dev/null &&
+       curl -s http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"gemma3:1b-it-q4_K_M\"}' >/dev/null &&
        echo 'Done seeding.'"
 
 
@@ -50,7 +50,7 @@ services:
       # Ollama wiring
       MODEL_PROVIDER: ollama
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_CHAT_MODEL: phi3.5-mini-q2k
+      OLLAMA_CHAT_MODEL: gemma3:1b-it-q4_K_M
       OLLAMA_EMBED_MODEL: all-minilm
 
     ports:

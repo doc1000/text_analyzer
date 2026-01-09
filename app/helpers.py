@@ -21,6 +21,7 @@ from .models import Document, get_or_create_embedding_class
 
 MAX_CHARS_PER_CHUNK = 1024  # tune this as you like
 MAX_CHARS_PER_SENTENCE = 170  # typical sentence is 75-100, academic 150
+OLLAMA_EMBED_CHAR_LIMIT = int(os.getenv("OLLAMA_EMBED_CHAR_LIMIT", "500"))
 
 ## BaseModel Classes - could be moved
 ## DocumentOut, QueryRequest, ChunkHit, QueryResponse
@@ -40,7 +41,7 @@ class DocumentOut(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    top_k: int = 5
+    top_k: int = 15
     with_answer: bool = True
     doc_ids: Optional[List[str]] = None
 
@@ -54,6 +55,8 @@ class ChunkHit(BaseModel):
     chunk_index: int
     chunk_text: str
     similarity: float
+    sent_text: str | None = None  # Sentence text when using sentence embeddings
+    sent_index: int | None = None  # Sentence index within chunk when using sentence embeddings
 
 
 class QueryResponse(BaseModel):
@@ -132,9 +135,11 @@ ollama_chat_defaults = {
     #"num_predict": 256
   }
 
-def _ollama_chat(prompt: str, options: dict=ollama_chat_defaults) -> str:
+def _ollama_chat(prompt: str, options: dict=ollama_chat_defaults, model: str = None) -> str:
     base = PREFERENCES.models.ollama.base_url.rstrip("/")
-    model = PREFERENCES.models.ollama.chat_model
+    # Use provided model or default to chat_model
+    if model is None:
+        model = PREFERENCES.models.ollama.chat_model
     url = f"{base}/api/chat"
 
     payload = {
@@ -167,7 +172,6 @@ def _post_json(url: str, payload: dict, timeout: int = 60) -> dict:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-OLLAMA_EMBED_CHAR_LIMIT = int(os.getenv("OLLAMA_EMBED_CHAR_LIMIT", "1000"))
 
 def _clean_embed_input(text: str) -> str:
     if text is None:
@@ -224,17 +228,64 @@ def _ollama_embed(text: str) -> list[float]:
 
 
 def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
-    context = "\n\n".join(
-        f"Source {i+1} ({h.url}):\n{h.chunk_text}"
-        for i, h in enumerate(hits)
-    )
-    prompt = (
+    # Calculate prompt template size (everything except context)
+    prompt_template = (
         "You are a helpful assistant. Using ONLY the context below, "
         "Only respond with the answer to the question, do not include any other text.\n"
         "answer the user's question concisely.\n\n"
         f"Question: {query}\n\n"
-        f"Context:\n{context}"
+        "Context:\n"
     )
+    template_size = len(prompt_template)
+    
+    # Get max context size from config (leaves room for prompt template)
+    max_context_chars = PREFERENCES.query.max_context_chars
+    max_prompt_chars = PREFERENCES.query.max_prompt_chars
+    
+    # Build context incrementally, prioritizing higher similarity hits (they come first)
+    context_parts = []
+    current_context_size = 0
+    
+    for i, h in enumerate(hits):
+        # Format this hit
+        hit_prefix = f"Source {i+1} ({h.url}):\n"
+        # Prefer sentence text when available (more precise), fallback to chunk text
+        hit_text = h.sent_text if h.sent_text else h.chunk_text
+        
+        # Calculate size if we add this hit
+        hit_size = len(hit_prefix) + len(hit_text)
+        separator_size = len("\n\n") if context_parts else 0
+        total_size_if_added = current_context_size + separator_size + hit_size
+        
+        # Check if adding this hit would exceed the limit
+        if total_size_if_added > max_context_chars:
+            # Try truncating this hit to fit
+            available_space = max_context_chars - current_context_size - separator_size - len(hit_prefix)
+            if available_space > 50:  # Only add if we have meaningful space (at least 50 chars)
+                truncated_text = hit_text[:available_space] + "..."
+                context_parts.append(f"{hit_prefix}{truncated_text}")
+            # Stop here - we've filled the context budget
+            break
+        else:
+            context_parts.append(f"{hit_prefix}{hit_text}")
+            current_context_size = total_size_if_added
+    
+    # Join context parts
+    context = "\n\n".join(context_parts)
+    
+    # Build final prompt
+    prompt = prompt_template + context
+    
+    # Final safety check: truncate entire prompt if it somehow exceeds max
+    if len(prompt) > max_prompt_chars:
+        # Truncate context portion to fit
+        available_for_context = max_prompt_chars - template_size
+        if available_for_context > 0:
+            context = context[:available_for_context] + "..."
+            prompt = prompt_template + context
+        else:
+            # Even template is too large (shouldn't happen), use minimal prompt
+            prompt = f"Question: {query}\n\nAnswer based on the provided context."
 
     model_provider = getattr(PREFERENCES.models, "provider", "openai")
 

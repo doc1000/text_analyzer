@@ -11,6 +11,7 @@ EmbeddingModel = Literal[
     "text-embedding-3-small", #1536?
     "bge-m3", #1024
     "all-minilm" #324
+    "bge_small_en" #512
 ]
 
 #EmbeddingDimension = Literal[384]  # keep in sync with DB/vector size
@@ -21,9 +22,11 @@ ChatModel = Literal[
     "gpt-4.1",
     "gpt-4o-mini",
     "gpt-4o",
-    "gemma3:1b-it-q4_K_M", # supposed to be low latency, light
-    "phi3.5-mini-q4km", # midsize - mid CPU latency, mid performance
-    "llama3.2:3b", #a bit big for CPU"
+    "gemma3:1b-it-q4_K_M", # supposed to be low latency, light (~700MB)
+    "phi3.5-mini-q4km", # midsize - mid CPU latency, mid performance (~3.8GB)
+    "phi3.5:3.8b-mini-instruct-q2_K", # smaller phi3.5 variant (~1.9GB)
+    "llama3.2:3b", # base llama3.2 (~2.0GB)
+    "llama3.2:3b", # llama3.2 3B - good balance (~2.0GB)
 ]
 # may need to add something to make sure that EMBED_DIM is consistent
 
@@ -59,9 +62,9 @@ class MMRConfig:
 @dataclass
 class EmbeddingConfig:
     """Configuration for batch embedding processing."""
-    batch_size: int = 100              # Texts per API call
+    batch_size: int = 50              # Texts per API call
     max_batch_size_openai: int = 2048  # OpenAI API limit
-    max_batch_size_ollama: int = 100   # Ollama practical limit
+    max_batch_size_ollama: int = 50   # Ollama practical limit
     retry_failed_batches: bool = True   # Retry failed batches individually
 
 
@@ -75,17 +78,24 @@ class TopicPersistenceConfig:
     max_existing_topics_to_check: int = 1000      # Limit for similarity search
 
 @dataclass
+class QueryConfig:
+    """Configuration for query answer generation."""
+    max_prompt_chars: int = 2000                 # Maximum chars in prompt sent to LLM (prevents timeouts with small models)
+    max_context_chars: int = 1500                 # Maximum chars for context portion (leaves room for prompt template)
+
+@dataclass
 class OllamaConfig:
     base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    chat_model: str = "gemma3:1b-it-q4_K_M" #os.getenv("OLLAMA_CHAT_MODEL","gemma3:1b-it-q4_K_M")
+    chat_model: str = "llama3.2:3b" #os.getenv("OLLAMA_CHAT_MODEL","phi3.5-mini-q2k") - for queries
+    topic_model: str = "gemma3:1b-it-q4_K_M" #os.getenv("OLLAMA_TOPIC_MODEL","phi3.5-mini-q2k") - for topic titles
     embed_model: str = "all-minilm" #os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
 
 @dataclass
 class ModelConfig:
-    provider: Provider = "openai" #os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
-    embedding_model: EmbeddingModel = "text-embedding-3-small" #OllamaConfig.embed_model #"text-embedding-3-small" #os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
+    provider: Provider = "ollama" #os.getenv("MODEL_PROVIDER", "openai")  # default openai for now
+    embedding_model: EmbeddingModel = OllamaConfig.embed_model #"text-embedding-3-small" #os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
     #embedding_dim: int = 384 #os.getenv("EMBED_DIM_V2", 1536)
-    llm_model: ChatModel = "gpt-4.1-nano" #OllamaConfig.chat_model #"gpt-4.1-nano" #os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
+    llm_model: ChatModel = OllamaConfig.chat_model #"gpt-4.1-nano" #os.getenv("OLLAMA_CHAT_MODEL","gpt-4.1-nano")
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 
@@ -96,6 +106,7 @@ class Preferences:
     mmr: MMRConfig = field(default_factory=MMRConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     topic_persistence: TopicPersistenceConfig = field(default_factory=TopicPersistenceConfig)
+    query: QueryConfig = field(default_factory=QueryConfig)
 
 
 # Single global preferences object. Import this elsewhere.

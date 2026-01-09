@@ -41,7 +41,9 @@ services:
 
 
   backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.beta
     restart: unless-stopped
     env_file: .env
     environment:

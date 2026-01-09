@@ -16,7 +16,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
 #Internal imports
-from .db import init_db, get_db, EMBED_TABLE
+from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE
 from .schemas import IngestPayload, DocumentDetailResponse
 from . import models
 from .models import Document
@@ -165,13 +165,16 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     # 2) cosine distance → similarity
     # Use pgvector's cosine distance operator (<=>) directly
     # cosine_distance returns distance (0=same, 1=opposite), so similarity = 1 - distance
-    similarity_expr = 1 - EMBED_TABLE.embedding.cosine_distance(q_emb)
+    # Query sentence embeddings instead of chunk embeddings
+    similarity_expr = 1 - SENTENCE_TABLE.embedding.cosine_distance(q_emb)
 
-    # base query: chunks with non-null embeddings joined to documents
+    # base query: sentences with non-null embeddings joined to chunks and documents
+    # Join path: SENTENCE_TABLE → EMBED_TABLE → Document
     base_query = (
-        db.query(EMBED_TABLE, Document, similarity_expr.label("similarity"))
+        db.query(SENTENCE_TABLE, EMBED_TABLE, Document, similarity_expr.label("similarity"))
+        .join(EMBED_TABLE, SENTENCE_TABLE.chunk_id == EMBED_TABLE.id)
         .join(Document, EMBED_TABLE.document_id == Document.id)
-        .filter(EMBED_TABLE.embedding != None)  # ← ignore NULL embeddings
+        .filter(SENTENCE_TABLE.embedding != None)  # ← ignore NULL embeddings
     )
 
     # 2b) Optional scoping by document IDs
@@ -204,11 +207,7 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     )
 
     hits: List[ChunkHit] = []
-    for chunk, doc, similarity in rows:
-        if similarity is None:
-            # extra safety, shouldn't hit if filter above works
-            continue
-
+    for sentence, chunk, doc, similarity in rows:
         hits.append(
             ChunkHit(
                 document_id=str(doc.id),
@@ -218,6 +217,8 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
                 score_ai_slop=doc.score_ai_slop,
                 chunk_index=chunk.chunk_index,
                 chunk_text=chunk.chunk_text,
+                sent_text=sentence.sent_text,
+                sent_index=sentence.sent_index,
                 similarity=float(similarity),
             )
         )

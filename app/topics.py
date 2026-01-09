@@ -243,14 +243,16 @@ def _generate_title_and_summary_mmr(
         "TITLE: <your title>"
     )
     
-    # Send to LLM
+    # Send to LLM - use topic_model for faster topic generation
     model_provider = getattr(PREFERENCES.models, "provider", "openai")
     if model_provider == "ollama":
         ollama_options = {
             "temperature": 0.6,
             "top_p": 0.8,
         }
-        text = _ollama_chat(prompt, ollama_options)
+        # Use topic_model for topic generation (faster latency)
+        topic_model = PREFERENCES.models.ollama.topic_model
+        text = _ollama_chat(prompt, ollama_options, model=topic_model)
     else:
         text = _openai_chat(prompt)
     
@@ -422,7 +424,9 @@ def _generate_title_and_summary_fallback(docs: List[Document]) -> Tuple[str, str
         "top_p": 0.8,
     }
     if model_provider == "ollama":
-        text = _ollama_chat(prompt, ollama_title_options)
+        # Use topic_model for topic generation (faster latency)
+        topic_model = PREFERENCES.models.ollama.topic_model
+        text = _ollama_chat(prompt, ollama_title_options, model=topic_model)
     else:
         text = _openai_chat(prompt)
     
