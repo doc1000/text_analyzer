@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "VaultBubble",
+  "version": "0.5.1",
+  "description": "Capture web content, organize by topics, and query your research vault with AI-powered search. All stored locally on your computer.",
+  "icons": {},
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "contextMenus",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "VaultBubble",
+    "default_popup": "popup.html",
+    "default_icon": {}
+  }
+}

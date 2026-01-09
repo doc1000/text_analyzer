@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="none"/>
+  <path d="M 64 40 L 448 40 L 256 472 Z" fill="#0077B6" stroke="#000000" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M 96 28 L 416 28 L 256 456 Z" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="8" stroke-linejoin="round"/>
+  <g>
+  <circle cx="180" cy="180" r="44" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="167.7" cy="167.7" r="15.4" fill="rgba(255,255,255,0.85)"/>
+</g><g>
+  <circle cx="330" cy="190" r="34" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="320.5" cy="180.5" r="11.9" fill="rgba(255,255,255,0.85)"/>
+</g><g>
+  <circle cx="256" cy="256" r="40" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="244.8" cy="244.8" r="14.0" fill="rgba(255,255,255,0.85)"/>
+</g><g>
+  <circle cx="220" cy="330" r="30" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="211.6" cy="321.6" r="10.5" fill="rgba(255,255,255,0.85)"/>
+</g><g>
+  <circle cx="305" cy="336" r="28" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="297.2" cy="328.2" r="9.8" fill="rgba(255,255,255,0.85)"/>
+</g><g>
+  <circle cx="150" cy="250" r="24" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="143.3" cy="243.3" r="8.4" fill="rgba(255,255,255,0.85)"/>
+</g><g>
+  <circle cx="362" cy="270" r="22" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="355.8" cy="263.8" r="7.7" fill="rgba(255,255,255,0.85)"/>
+</g><g>
+  <circle cx="266" cy="406" r="18" fill="rgba(255,255,255,0.92)" stroke="rgba(0,0,0,0.55)" stroke-width="6"/>
+  <circle cx="261.0" cy="401.0" r="6.3" fill="rgba(255,255,255,0.85)"/>
+</g>
+</svg>

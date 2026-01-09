@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>VaultBubble</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      font-size: 1.3rem;
+      margin: 0;
+    }
+
+    header .controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      font-size: 0.85rem;
+      color: #9ca3af;
+    }
+
+    .tabs {
+      display: inline-flex;
+      border-radius: 999px;
+      border: 1px solid #1f2937;
+      overflow: hidden;
+      margin-right: 0.75rem;
+    }
+
+    .tab-btn {
+      padding: 0.25rem 0.9rem;
+      border: none;
+      background: transparent;
+      color: #9ca3af;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .tab-btn.active {
+      background: #111827;
+      color: #e5e7eb;
+    }
+
+    header input[type="number"] {
+      width: 4rem;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    header select {
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.8rem;
+    }
+
+    header button {
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    header button:hover {
+      background: #1f2937;
+    }
+
+    .hint {
+      font-size: 0.75rem;
+      color: #9ca3af;
+    }
+
+    main {
+      padding: 0;
+      margin: 0;
+      height: calc(100vh - 60px);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .page {
+      display: none;
+      height: 100%;
+    }
+
+    .page.active {
+      display: flex;
+    }
+
+    /* PAGE 1: TOPICS MAP LAYOUT */
+
+    #page-topics {
+      flex-direction: row;
+    }
+
+    #bubble-container {
+      flex: 1;
+      position: relative;
+      background: #e5e9f1; /* lighter background */
+    }
+
+    #bubble-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: pointer;
+    }
+
+    #info-panel {
+      width: 320px;
+      max-width: 40vw;
+      border-left: 1px solid #1f2937;
+      padding: 0.75rem 0.9rem;
+      box-sizing: border-box;
+      font-size: 0.9rem;
+      background: #020617;
+      overflow-y: auto;
+    }
+
+    #info-panel h2 {
+      font-size: 1rem;
+      margin: 0 0 0.4rem 0;
+    }
+
+    #info-panel h3 {
+      font-size: 0.95rem;
+      margin: 0.6rem 0 0.3rem 0;
+    }
+
+    #info-panel p {
+      margin: 0 0 0.4rem 0;
+      line-height: 1.3;
+    }
+
+    #info-panel .meta {
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Scoped query UI in side panel */
+
+    #scope-query-panel {
+      margin-top: 0.9rem;
+      padding-top: 0.6rem;
+      border-top: 1px solid #1f2937;
+    }
+
+    #scope-label {
+      font-size: 0.8rem;
+      color: #9ca3af;
+      margin-bottom: 0.35rem;
+    }
+
+    #scopeQueryInput {
+      width: 100%;
+      min-height: 70px;
+      max-height: 160px;
+      padding: 0.45rem 0.5rem;
+      box-sizing: border-box;
+      border-radius: 6px;
+      border: 1px solid #374151;
+      background: #020617;
+      color: #e5e7eb;
+      resize: vertical;
+      font-size: 0.85rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .scope-query-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.8rem;
+    }
+
+    #scopeQueryBtn {
+      padding: 0.25rem 0.7rem;
+      border-radius: 999px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+
+    #scopeQueryBtn:hover {
+      background: #1f2937;
+    }
+
+    #scopeAnswerContainer {
+      margin-bottom: 0.35rem;
+    }
+
+    #scopeHitsContainer {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      margin-bottom: 0.25rem;
+    }
+
+    #scopeHitsContainer .hit {
+      cursor: pointer;
+      padding: 0.35rem 0.45rem;
+      border-radius: 6px;
+      background: #020617;
+      border: 1px solid #1f2937;
+    }
+
+    #scopeHitsContainer .hit:hover {
+      background: #111827;
+      border-color: #4b5563;
+    }
+
+    #scopeHitsContainer .hit-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.78rem;
+      color: #d1d5db;
+    }
+
+    #scopeHitsContainer .hit-title {
+      font-weight: 500;
+    }
+
+    /* Tooltip */
+
+    #tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(15,23,42,0.95);
+      color: #e5e7eb;
+      padding: 0.3rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      border: 1px solid #4b5563;
+      z-index: 10;
+      opacity: 0;
+      transition: opacity 0.1s ease-out;
+      max-width: 260px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    /* PAGE 2: QUERY LAYOUT (global query) */
+
+    #page-query {
+      flex-direction: column;
+    }
+
+    #query-panel {
+      flex: 1;
+      padding: 1rem 1.5rem;
+      overflow-y: auto;
+    }
+
+    #query-panel h2 {
+      margin: 0 0 0.5rem 0;
+      font-size: 1.1rem;
+    }
+
+    #query-panel p {
+      margin: 0 0 0.75rem 0;
+      font-size: 0.9rem;
+      color: #9ca3af;
+    }
+
+    #queryInput {
+      width: 100%;
+      min-height: 90px;
+      max-height: 220px;
+      padding: 0.6rem;
+      box-sizing: border-box;
+      border-radius: 6px;
+      border: 1px solid #374151;
+      background: #020617;
+      color: #e5e7eb;
+      resize: vertical;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+
+    #query-controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 0.6rem;
+      font-size: 0.85rem;
+    }
+
+    #query-controls input[type="number"] {
+      width: 3rem;
+      padding: 0.1rem 0.3rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    #query-controls button {
+      padding: 0.3rem 0.9rem;
+      border-radius: 999px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    #query-controls button:hover {
+      background: #1f2937;
+    }
+
+    #answerContainer {
+      margin-bottom: 0.75rem;
+    }
+
+    #hitsContainer {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding-bottom: 1rem;
+    }
+
+    #hitsContainer .hit {
+      border-radius: 6px;
+      border: 1px solid #1f2937;
+      padding: 0.5rem 0.6rem;
+      background: #020617;
+    }
+
+    #hitsContainer .hit-meta {
+      font-size: 0.78rem;
+      color: #9ca3af;
+      margin-bottom: 0.25rem;
+    }
+
+    #hitsContainer .hit-text {
+      font-size: 0.83rem;
+      line-height: 1.3;
+    }
+
+    .answer-box {
+      padding: 0.75rem;
+      background: #0b1120;
+      border-radius: 6px;
+      border: 1px solid #1d4ed8;
+      font-size: 0.9rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+
+    .tag {
+      font-size: 0.72rem;
+      padding: 0.05rem 0.3rem;
+      border-radius: 999px;
+      background: #111827;
+      border: 1px solid #374151;
+      margin-left: 0.2rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VaultBubble</h1>
+    <div class="controls">
+      <div class="tabs">
+        <button id="tabTopics" class="tab-btn active">Topics Map</button>
+        <button id="tabQuery" class="tab-btn">Query</button>
+      </div>
+
+      <span>Days:</span>
+      <input type="number" id="daysInput" value="30" min="1" max="365" />
+
+      <span>Viz:</span>
+      <select id="vizMode">
+        <option value="circles" selected>Circles</option>
+        <!-- option value="multicolor">Multicolored</option-->
+      </select>
+
+      <button id="reloadBtn">Reload</button>
+      <span class="hint" id="headerHint">Click big bubbles to zoom · click document bubbles to open</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- PAGE 1: Topics Map -->
+    <section id="page-topics" class="page active">
+      <div id="bubble-container">
+        <svg id="bubble-svg"></svg>
+        <div id="tooltip"></div>
+      </div>
+      <aside id="info-panel">
+        <h2>Topic Details</h2>
+        <p>Select a topic, subtopic, or document bubble to see more information.</p>
+        <div id="info-content"></div>
+
+        <div id="scope-query-panel">
+          <h3>Ask within this scope</h3>
+          <div id="scope-label" class="meta">Scope: All documents</div>
+          <textarea id="scopeQueryInput" placeholder="Ask about this topic, subtopic, or document…"></textarea>
+          <div class="scope-query-controls">
+            <button id="scopeQueryBtn" type="button">Ask</button>
+            <span class="hint">Ctrl+Enter to query · scoped to current bubble</span>
+          </div>
+          <div id="scopeAnswerContainer"></div>
+          <div id="scopeHitsContainer"></div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- PAGE 2: Query -->
+    <section id="page-query" class="page">
+      <div id="query-panel">
+        <h2>Ask your vault</h2>
+        <p>Query across your captured documents using semantic search and optional answer synthesis.</p>
+
+        <textarea id="queryInput" placeholder="Ask something across your whole vault, e.g. 'What are the main themes in my recent security-related articles?'"></textarea>
+
+        <div id="query-controls">
+          <label>
+            Top K:
+            <input type="number" id="topK" value="5" min="1" max="20" />
+          </label>
+          <button id="queryBtn">Search</button>
+          <span class="hint">Ctrl+Enter to run query</span>
+        </div>
+
+        <div id="answerContainer"></div>
+        <div id="hitsContainer"></div>
+      </div>
+    </section>
+
+    <!-- PAGE 3: Reader -->
+    <section id="page-reader" class="page">
+      <div id="reader-panel" style="flex:1; padding: 1rem 1.5rem; overflow-y:auto;">
+        <div style="display:flex; gap: 0.75rem; align-items:center; margin-bottom: 0.75rem;">
+          <button id="readerBackBtn" class="tab-btn">← Back</button>
+          <div style="font-size: 0.95rem; color:#9ca3af;">Document Reader</div>
+        </div>
+
+        <h2 id="readerTitle" style="margin:0 0 0.4rem 0;"></h2>
+
+        <div id="readerMeta" style="color:#9ca3af; font-size:0.85rem; margin-bottom: 0.8rem;"></div>
+
+        <div id="readerBody" style="white-space: pre-wrap; line-height: 1.45; font-size: 0.95rem; color:#e5e7eb;"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- D3 -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <script>
+    const API_BASE = "http://localhost:8000"; // adjust if needed
+
+    // -------- SPA TAB LOGIC --------
+    const tabTopics = document.getElementById("tabTopics");
+    const tabQuery = document.getElementById("tabQuery");
+    const pageTopics = document.getElementById("page-topics");
+    const pageQuery = document.getElementById("page-query");
+    const headerHint = document.getElementById("headerHint");
+
+    const scopeLabel = document.getElementById("scope-label");
+    const scopeQueryInput = document.getElementById("scopeQueryInput");
+    const scopeQueryBtn = document.getElementById("scopeQueryBtn");
+    const scopeAnswerContainer = document.getElementById("scopeAnswerContainer");
+    const scopeHitsContainer = document.getElementById("scopeHitsContainer");
+
+    let currentScope = {
+      type: "all",
+      label: "All documents",
+      docIds: null
+    };
+
+    const pageReader = document.getElementById("page-reader");
+
+    function showPage(page) {
+      // hide all pages
+      pageTopics.classList.remove("active");
+      pageQuery.classList.remove("active");
+      pageReader.classList.remove("active");
+
+      // reset tabs
+      tabTopics.classList.remove("active");
+      tabQuery.classList.remove("active");
+
+      if (page === "topics") {
+        pageTopics.classList.add("active");
+        tabTopics.classList.add("active");
+        headerHint.textContent = "Click big bubbles to zoom · click document bubbles to open";
+      } else if (page === "query") {
+        pageQuery.classList.add("active");
+        tabQuery.classList.add("active");
+        headerHint.textContent = "Global query across all documents";
+      } else if (page === "reader") {
+        // ✅ this was missing
+        pageReader.classList.add("active");
+        headerHint.textContent = "Reading captured document";
+      }
+    }
+
+
+    tabTopics.addEventListener("click", () => showPage("topics"));
+    tabQuery.addEventListener("click", () => showPage("query"));
+
+    // -------- TOPICS MAP (D3) --------
+
+    const svg = d3.select("#bubble-svg");
+    const width = svg.node().clientWidth || 800;
+    const height = svg.node().clientHeight || 600;
+
+    const tooltip = d3.select("#tooltip");
+    const infoContent = document.getElementById("info-content");
+
+    const topicColorScale = d3.scaleOrdinal(d3.schemeTableau10);
+
+    let rootNode;
+    let focusNode;
+    let view;
+
+    let nodeGroup;     // holds circles & labels
+    let labelGroup;
+    let circle;        // selection of circles
+    let labels;        // selection of text labels
+    let lastDocClickedId = null;
+    
+    function updateInfoPanel(d) {
+      const data = d.data;
+      infoContent.innerHTML = "";
+
+      const el = document.createElement("div");
+
+      const title = document.createElement("h3");
+      title.textContent = data.name || "(no name)";
+      el.appendChild(title);
+
+      if (data.summary) {
+        const summaryP = document.createElement("p");
+        summaryP.textContent = data.summary;
+        el.appendChild(summaryP);
+      }
+
+      if (data.url) {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const a = document.createElement("a");
+        a.href = data.url;
+        a.target = "_blank";
+        a.textContent = "Open document";
+        meta.appendChild(a);
+
+        if (data.score_info != null || data.score_ai_slop != null) {
+          const scores = document.createElement("div");
+          scores.textContent = ` info: ${data.score_info ?? ""} · ai slop: ${data.score_ai_slop ?? ""}`;
+          meta.appendChild(scores);
+        }
+
+        if (data.captured_at) {
+          const dt = document.createElement("div");
+          const dateStr = new Date(data.captured_at).toLocaleString();
+          dt.textContent = ` captured: ${dateStr}`;
+          meta.appendChild(dt);
+        }
+
+        el.appendChild(meta);
+      } else {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = "Aggregated topic / subtopic";
+        el.appendChild(meta);
+      }
+
+      infoContent.appendChild(el);
+
+      // Update scoped query context to this node
+      setScopeForNode(d);
+    }
+
+    function showTooltip(event, d) {
+      const data = d.data;
+      let line = data.name || "";
+      tooltip.text(line);
+      const [x, y] = d3.pointer(event);
+      const containerRect = document.getElementById("bubble-container").getBoundingClientRect();
+
+      tooltip
+        .style("left", (containerRect.left + x + 16) + "px")
+        .style("top", (containerRect.top + y + 16) + "px")
+        .style("opacity", 1);
+    }
+
+    function hideTooltip() {
+      tooltip.style("opacity", 0);
+    }
+
+    function collectDocIdsFromNode(node) {
+      const ids = [];
+      (function walk(n) {
+        if (!n) return;
+        if (n.data && n.data.doc_id) {
+          ids.push(n.data.doc_id);
+        }
+        if (n.children) {
+          n.children.forEach(child => walk(child));
+        }
+      })(node);
+      return ids;
+    }
+
+    function setScopeForNode(d) {
+      if (!scopeLabel) return;
+
+      if (!d) {
+        currentScope = {
+          type: "all",
+          label: "All documents",
+          docIds: null
+        };
+        scopeLabel.textContent = "Scope: All documents";
+        return;
+      }
+
+      const name = d.data && d.data.name ? d.data.name : "(no name)";
+      const docIds = collectDocIdsFromNode(d);
+      let typeLabel;
+      if (d.depth === 1) {
+        typeLabel = "Topic";
+      } else if (d.depth === 2) {
+        typeLabel = "Subtopic";
+      } else if (d.depth >= 3 && d.data && d.data.doc_id) {
+        typeLabel = "Document";
+      } else {
+        typeLabel = "Node";
+      }
+
+      const count = docIds.length;
+      currentScope = {
+        type: typeLabel.toLowerCase(),
+        label: `${typeLabel}: ${name} (${count} doc${count === 1 ? "" : "s"})`,
+        docIds
+      };
+      scopeLabel.textContent = `Scope: ${currentScope.label}`;
+    }
+
+    function findTopicAncestor(d) {
+      const anc = d.ancestors().find(a => a.depth === 1);
+      return anc || d;
+    }
+
+    // Same-family colors, darker at top, lighter down
+    function colorByTopicDepth(d) {
+      const topicNode = findTopicAncestor(d);
+      const baseName = topicNode.data.topic_id || topicNode.data.name || "default";
+      let base = topicColorScale(baseName);
+      try {
+        base = d3.color(base);
+      } catch {
+        base = d3.color("#6366f1");
+      }
+
+      const depth = d.depth - 1;
+      if (depth <= 0) return base.formatHex();
+
+      if (depth === 1) {
+        return base.brighter(0.5).formatHex();
+      } else if (depth === 2) {
+        return base.brighter(1.0).formatHex();
+      } else {
+        return base.brighter(1.2).formatHex();
+      }
+    }
+
+    function shortLabel(str, maxLen) {
+      if (!str) return "";
+      if (str.length <= maxLen) return str;
+      return str.slice(0, maxLen - 1) + "…";
+    }
+
+    function wrapLabel(selection, maxCharsPerLine, maxLines) {
+      selection.each(function(d) {
+        const textSel = d3.select(this);
+        const full = textSel.text();
+        textSel.text("");
+
+        const words = full.split(/\s+/);
+        const lines = [];
+        let currentLine = "";
+
+        function pushLine(line) {
+          if (line) lines.push(line);
+        }
+
+        for (const word of words) {
+          const tentative = currentLine ? currentLine + " " + word : word;
+          if (tentative.length <= maxCharsPerLine) {
+            currentLine = tentative;
+          } else {
+            pushLine(currentLine);
+            currentLine = word;
+          }
+
+          if (lines.length >= maxLines) break;
+        }
+
+        if (lines.length < maxLines && currentLine) {
+          pushLine(currentLine);
+        }
+
+        const dy = parseFloat(textSel.attr("dy")) || 0;
+        const lineHeight = 1.1;
+
+        lines.forEach((line, i) => {
+          textSel.append("tspan")
+            .attr("x", 0)
+            .attr("dy", i === 0 ? `${dy}em` : `${lineHeight}em`)
+            .text(line);
+        });
+      });
+    }
+
+    async function renderBubbleMap(days = 30) {
+      svg.selectAll("*").remove(); // clear
+      tooltip.style("opacity", 0);
+      infoContent.innerHTML = "<p>Loading topics…</p>";
+
+      const res = await fetch(`${API_BASE}/topics/hierarchy?days=${days}`);
+      const data = await res.json();
+
+      const root = d3.hierarchy(data)
+        .sum(d => d.size || 1)
+        .sort((a, b) => (b.value || 0) - (a.value || 0));
+
+      const pack = d3.pack()
+        .size([width, height])
+        .padding(3);
+
+      const packedRoot = pack(root);
+      rootNode = packedRoot;
+      focusNode = packedRoot;
+      view = [rootNode.x, rootNode.y, rootNode.r * 2];
+
+      const nodes = rootNode.descendants().filter(d => d.depth > 0); // skip root circle
+
+      nodeGroup = svg.append("g");
+
+      // Circles
+      circle = nodeGroup.selectAll("circle")
+        .data(nodes)
+        .join("circle")
+        .attr("class", "bubble")
+        .attr("transform", d => `translate(${d.x},${d.y})`)
+        .attr("r", d => d.r)
+        .attr("fill", d => colorByTopicDepth(d))
+        .attr("fill-opacity", d => d.depth >= 3 ? 0.55 : 0.9)
+        .attr("stroke", "#020617")
+        .attr("stroke-width", 0.6)
+        .on("mouseover", (event, d) => showTooltip(event, d))
+        .on("mouseout", hideTooltip)
+        .on("click", (event, d) => {
+          event.stopPropagation();
+          const hasChildren = !!d.children && d.children.length > 0;
+
+          // Topic / subtopic: just zoom + update panel, clear doc selection
+          if (hasChildren) {
+            lastDocClickedId = null;
+            zoom(d);
+            updateInfoPanel(d);
+            return;
+          }
+
+          // Leaf document node: first click = focus + scope, second click = open reader
+          if (d.data && d.data.doc_id) {
+            const thisId = d.data.doc_id;
+
+            if (lastDocClickedId === thisId) {
+              // Second click on same doc -> open document reader
+              openReader(thisId);
+            } else {
+              // First click -> center on this doc + update side panel + scope
+              lastDocClickedId = thisId;
+              zoom(d);
+              updateInfoPanel(d);
+
+            }
+            return;
+          }
+
+          // Fallback for older hierarchy that only has URL
+          if (d.data && d.data.url) {
+            window.open(d.data.url, "_blank");
+            updateInfoPanel(d);
+            lastDocClickedId = null;
+            return;
+          }
+
+          // Any other node type
+          updateInfoPanel(d);
+          lastDocClickedId = null;
+        });
+
+
+      // Separate group for labels, so they're rendered above circles
+      labelGroup = svg.append("g");
+
+      labels = labelGroup.selectAll("text.label")
+        .data(nodes)
+        .join("text")
+        .attr("class", "label")
+        .attr("text-anchor", "middle")
+        .attr("dy", d => d.depth === 1 ? "-0.9em" : "-0.9em")
+        .attr("transform", d => `translate(${d.x},${d.y})`)
+        .style("pointer-events", "none")
+        .style("fill", "#020617")
+        .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.9rem")
+        // Initial: show ONLY top-level labels
+        .style("opacity", d => d.depth === 1 ? 1 : 0)
+        .style("display", d => d.depth === 1 ? "inline" : "none")
+        .text(d => {
+          const raw = (d.data.name || "").replace(/\s*\(\d+\)\s*$/, "");
+          return shortLabel(raw, d.depth === 1 ? 72 : 72);
+        });
+
+      // Wrap labels to multiple lines if needed
+      labels.call(d => wrapLabel(
+        d,
+        d.depth === 1 ? 24 : 20,   // chars per line
+        d.depth === 1 ? 4 : 6     // max lines
+      ));
+
+      // Ensure labels are above nodes
+      labelGroup.raise();
+
+      const BUBBLE_SCALE = 2.0;
+
+      function zoomTo(v) {
+        const baseK = Math.min(
+          width / (v[2] * 2),
+          height / (v[2] * 2)
+        );
+        const k = baseK * BUBBLE_SCALE;
+        view = v;
+
+        const transform = d =>
+          `translate(${(d.x - v[0]) * k + width / 2},${(d.y - v[1]) * k + height / 2})`;
+
+        nodeGroup.selectAll("circle").attr("transform", transform);
+        labelGroup.selectAll("text.label").attr("transform", transform);
+        nodeGroup.selectAll("circle").attr("r", d => d.r * k);
+      }
+
+      function zoom(d) {
+        focusNode = d;
+
+        const isLeafFocus = !focusNode.children || focusNode.children.length === 0;
+
+        const transition = svg.transition()
+          .duration(750)
+          .tween("zoom", () => {
+            const i = d3.interpolateZoom(view, [focusNode.x, focusNode.y, focusNode.r * 2]);
+            return t => zoomTo(i(t));
+          });
+
+        transition.selectAll("text.label")
+          .style("opacity", n => {
+            // Always show top-level topics
+            if (n.depth === 1) return 0.7;
+
+            // At root, show depth 2 labels as well
+            if (focusNode === rootNode && n.depth === 2) return 1;
+
+            // When zoomed into a topic/subtopic, show its children
+            if (n.parent === focusNode) return 1;
+
+            // NEW: when focused on a leaf doc, show its own label
+            if (isLeafFocus && n === focusNode) return 1;
+
+            return 0;
+          })
+          .on("end", function (n) {
+            const show =
+              (n.depth === 1) ||
+              (focusNode === rootNode && n.depth === 2) ||
+              (n.parent === focusNode) ||
+              (isLeafFocus && n === focusNode); // NEW
+
+            this.style.display = show ? "inline" : "none";
+          });
+      }
+
+
+      // Initial zoom
+      zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
+      infoContent.innerHTML = "<p>Click a topic bubble to see details. Zoom in to see subtopics.</p>";
+
+      // Reset zoom & labels on background click: restore top-level labels only
+      svg.on("click", () => {
+        focusNode = rootNode;
+        lastDocClickedId = null;
+
+        const transition = svg.transition()
+          .duration(750)
+          .tween("zoom", () => {
+            const i = d3.interpolateZoom(view, [rootNode.x, rootNode.y, rootNode.r * 2]);
+            return t => zoomTo(i(t));
+          });
+
+        transition.selectAll("text.label")
+          .style("opacity", d => d.depth === 1 ? 1 : 0)
+          .on("end", function(d) {
+            this.style.display = d.depth === 1 ? "inline" : "none";
+          });
+
+        infoContent.innerHTML = "<p>Click a topic, subtopic, or document bubble to see details.</p>";
+
+        // If you're also resetting scoped query here, leave that logic in place
+        if (typeof setScopeForNode === "function") {
+          setScopeForNode(null);
+          if (scopeAnswerContainer) scopeAnswerContainer.innerHTML = "";
+          if (scopeHitsContainer) scopeHitsContainer.innerHTML = "";
+        }
+      
+
+        // Reset scoped query to all documents and clear results
+        setScopeForNode(null);
+        if (scopeAnswerContainer) scopeAnswerContainer.innerHTML = "";
+        if (scopeHitsContainer) scopeHitsContainer.innerHTML = "";
+      });
+    }
+
+    const daysInput = document.getElementById("daysInput");
+    const reloadBtn = document.getElementById("reloadBtn");
+    if (reloadBtn) {
+      reloadBtn.addEventListener("click", () => {
+        const days = parseInt(daysInput.value, 10) || 30;
+        renderBubbleMap(days);
+      });
+    }
+
+    // Initial topics load
+    renderBubbleMap(30);
+
+    // -------- SCOPED QUERY IN INFO PANEL --------
+
+    async function runScopedQuery() {
+      if (!scopeQueryInput) return;
+
+      const query = (scopeQueryInput.value || "").trim();
+      if (!query) {
+        alert("Type a question first.");
+        return;
+      }
+
+      // Default top_k for scoped queries
+      const topK = 5;
+
+      // Clear previous results
+      if (scopeAnswerContainer) {
+        scopeAnswerContainer.innerHTML = "<p class='hint'>Thinking…</p>";
+      }
+      if (scopeHitsContainer) {
+        scopeHitsContainer.innerHTML = "";
+      }
+
+      const body = {
+        query,
+        top_k: topK,
+        with_answer: true
+      };
+
+      if (currentScope.docIds && currentScope.docIds.length > 0) {
+        body.doc_ids = currentScope.docIds;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+          console.error("Scoped query error status:", res.status, await res.text());
+          if (scopeAnswerContainer) {
+            scopeAnswerContainer.innerHTML = "<p class='hint'>Error during query.</p>";
+          }
+          if (scopeHitsContainer) {
+            scopeHitsContainer.innerHTML = "";
+          }
+          return;
+        }
+
+        const data = await res.json();
+
+        if (scopeAnswerContainer) {
+          if (data.answer) {
+            const box = document.createElement("div");
+            box.className = "answer-box";
+            box.textContent = data.answer;
+            scopeAnswerContainer.innerHTML = "";
+            scopeAnswerContainer.appendChild(box);
+          } else {
+            scopeAnswerContainer.innerHTML = "<p class='hint'>No synthesized answer.</p>";
+          }
+        }
+
+        if (!scopeHitsContainer) return;
+
+        if (!data.hits || data.hits.length === 0) {
+          scopeHitsContainer.innerHTML = "<p class='hint'>No matching chunks found in this scope.</p>";
+          return;
+        }
+
+        scopeHitsContainer.innerHTML = "";
+
+        data.hits.forEach((hit) => {
+          const div = document.createElement("div");
+          div.className = "hit";
+
+          // Clicking a result opens the document reader
+          div.addEventListener("click", () => {
+            if (hit.document_id) {
+              openReader(hit.document_id);
+            }
+          });
+
+          const meta = document.createElement("div");
+          meta.className = "hit-meta";
+
+          const titleSpan = document.createElement("span");
+          titleSpan.className = "hit-title";
+          titleSpan.textContent = hit.document_title || "(no title)";
+
+          const simTag = document.createElement("span");
+          simTag.className = "tag";
+          const simVal = hit.similarity ?? hit.distance;
+          if (simVal != null) {
+            simTag.textContent = simVal.toFixed ? `sim: ${simVal.toFixed(3)}` : `sim: ${simVal}`;
+          } else {
+            simTag.textContent = "sim: n/a";
+          }
+
+          const infoTag = document.createElement("span");
+          infoTag.className = "tag";
+          if (hit.score_info != null) {
+            if (hit.score_ai_slop != null) {
+              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info} · slop: ${hit.score_ai_slop.toFixed ? hit.score_ai_slop.toFixed(2) : hit.score_ai_slop}`;
+            } else {
+              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info}`;
+            }
+          } else {
+            infoTag.textContent = "score: n/a";
+          }
+
+          meta.appendChild(titleSpan);
+          meta.appendChild(simTag);
+          meta.appendChild(infoTag);
+          div.appendChild(meta);
+
+          scopeHitsContainer.appendChild(div);
+        });
+
+      } catch (err) {
+        console.error("Scoped query error:", err);
+        if (scopeHitsContainer) {
+          scopeHitsContainer.innerHTML = "<p class='hint'>Error during query. See console.</p>";
+        }
+      }
+    }
+
+    if (scopeQueryBtn && scopeQueryInput) {
+      scopeQueryBtn.addEventListener("click", runScopedQuery);
+      scopeQueryInput.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          runScopedQuery();
+        }
+      });
+    }
+
+    // -------- QUERY PAGE LOGIC --------
+
+    const queryInput = document.getElementById("queryInput");
+    const topKInput = document.getElementById("topK");
+    const queryBtn = document.getElementById("queryBtn");
+    const answerContainer = document.getElementById("answerContainer");
+    const hitsContainer = document.getElementById("hitsContainer");
+
+    async function runQuery() {
+      const query = (queryInput.value || "").trim();
+      const topK = parseInt(topKInput.value, 10) || 5;
+
+      if (!query) {
+        alert("Type a question first.");
+        return;
+      }
+
+      answerContainer.innerHTML = "";
+      hitsContainer.innerHTML = "<p class='hint'>Searching…</p>";
+
+      try {
+        const res = await fetch(`${API_BASE}/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query,
+            top_k: topK,
+            with_answer: true
+          })
+        });
+
+        const data = await res.json();
+
+        hitsContainer.innerHTML = "";
+
+        if (data.answer) {
+          const box = document.createElement("div");
+          box.className = "answer-box";
+          box.textContent = data.answer;
+          answerContainer.innerHTML = "";
+          answerContainer.appendChild(box);
+        } else {
+          answerContainer.innerHTML = "<p class='hint'>No synthesized answer.</p>";
+        }
+
+        if (!data.hits || data.hits.length === 0) {
+          hitsContainer.innerHTML = "<p class='hint'>No matching chunks found.</p>";
+          return;
+        }
+
+        data.hits.forEach((hit, idx) => {
+          const div = document.createElement("div");
+          div.className = "hit";
+
+          const meta = document.createElement("div");
+          meta.className = "hit-meta";
+
+          const link = document.createElement("a");
+          link.href = hit.url;
+          link.target = "_blank";
+          link.textContent = hit.document_title || "(no title)";
+
+          const simTag = document.createElement("span");
+          simTag.className = "tag";
+          const simVal = hit.similarity ?? hit.distance;
+          if (simVal != null) {
+            simTag.textContent = simVal.toFixed ? `sim: ${simVal.toFixed(3)}` : `sim: ${simVal}`;
+          } else {
+            simTag.textContent = "sim: n/a";
+          }
+
+          const infoTag = document.createElement("span");
+          infoTag.className = "tag";
+          if (hit.score_info != null) {
+            if (hit.score_ai_slop != null) {
+              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info} · slop: ${hit.score_ai_slop.toFixed ? hit.score_ai_slop.toFixed(2) : hit.score_ai_slop}`;
+            } else {
+              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info}`;
+            }
+          } else {
+            infoTag.textContent = "score: n/a";
+          }
+
+          meta.appendChild(link);
+          meta.appendChild(simTag);
+          meta.appendChild(infoTag);
+
+          const text = document.createElement("div");
+          text.className = "hit-text";
+          text.textContent = hit.chunk_text;
+
+          div.appendChild(meta);
+          div.appendChild(text);
+          hitsContainer.appendChild(div);
+        });
+
+      } catch (err) {
+        console.error("Query error:", err);
+        hitsContainer.innerHTML = "<p class='hint'>Error during query. See console.</p>";
+      }
+    }
+
+    if (queryBtn) {
+      queryBtn.addEventListener("click", runQuery);
+    }
+
+    if (queryInput) {
+      queryInput.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          runQuery();
+        }
+      });
+    }
+
+    // -------- READER PAGE HELPERS --------
+    const readerTitle = document.getElementById("readerTitle");
+    const readerMeta = document.getElementById("readerMeta");
+    const readerBody = document.getElementById("readerBody");
+    const readerBackBtn = document.getElementById("readerBackBtn");
+
+    // simple history stack so Back returns where you came from
+    let lastPage = "topics";
+
+    async function openReader(docId) {
+      lastPage = pageTopics.classList.contains("active") ? "topics" : "query";
+      showPage("reader");
+
+      readerTitle.textContent = "Loading…";
+      readerMeta.textContent = "";
+      readerBody.textContent = "";
+
+      const url = `${API_BASE}/documents/${encodeURIComponent(docId)}`;
+      console.log("openReader docId:", docId);
+      console.log("openReader GET:", url);
+
+      try {
+        const res = await fetch(url);
+        console.log("openReader status:", res.status, res.statusText);
+
+        if (!res.ok) {
+          readerTitle.textContent = "Error";
+          readerBody.textContent = `Failed to load document ${docId} (HTTP ${res.status})`;
+          return;
+        }
+
+        const doc = await res.json();
+        console.log("openReader json ok. text length:", (doc.text || "").length);
+
+        readerTitle.textContent = doc.title || "(no title)";
+
+        const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
+        const info = (doc.score_info != null) ? Number(doc.score_info).toFixed(2) : "n/a";
+        const slop = (doc.score_ai_slop != null) ? Number(doc.score_ai_slop).toFixed(2) : "n/a";
+
+        readerMeta.innerHTML = `
+          <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
+          <div>Captured: ${captured}</div>
+          <div>info: ${info} · ai slop: ${slop}</div>
+        `;
+
+        readerBody.textContent = doc.text || "";
+
+      } catch (err) {
+        console.error("openReader error:", err);
+        readerTitle.textContent = "Error";
+        readerBody.textContent = "Failed to load document. See console for details.";
+      }
+    }
+
+
+
+
+    readerBackBtn.addEventListener("click", () => showPage(lastPage));
+
+  </script>
+</body>
+</html>
