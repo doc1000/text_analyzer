@@ -1,7 +1,9 @@
 # app/config.py
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Literal, Optional
 import os
+import json
+from pathlib import Path
 # You can extend these later or load them from JSON if you want.
 # For now: one central place to tweak your internal tools.
 Provider = Literal["openai", "ollama"]
@@ -113,5 +115,81 @@ class Preferences:
     query: QueryConfig = field(default_factory=QueryConfig)
 
 
+# Settings file path - store in the app directory
+SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
+
+
+def save_settings_to_file(prefs: Preferences):
+    """Save user-modifiable settings to a JSON file."""
+    # Only save model-related settings that users can change
+    settings_data = {
+        "models": {
+            "chat_provider": prefs.models.chat_provider,
+            "embedding_provider": prefs.models.embedding_provider,
+            "topic_provider": prefs.models.topic_provider,
+            "llm_model": prefs.models.llm_model,
+            "embedding_model": prefs.models.embedding_model,
+            "ollama": {
+                "chat_model": prefs.models.ollama.chat_model,
+                "topic_model": prefs.models.ollama.topic_model,
+                "embed_model": prefs.models.ollama.embed_model,
+                "base_url": prefs.models.ollama.base_url,
+            }
+        }
+    }
+    
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings_data, f, indent=2)
+    except Exception as e:
+        # Log error but don't fail - settings are optional
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to save settings: {e}")
+
+
+def load_settings_from_file(prefs: Preferences):
+    """Load user-modifiable settings from a JSON file."""
+    if not SETTINGS_FILE.exists():
+        return  # No saved settings, use defaults
+    
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            settings_data = json.load(f)
+        
+        # Update model settings if present
+        if "models" in settings_data:
+            models_data = settings_data["models"]
+            
+            if "chat_provider" in models_data:
+                prefs.models.chat_provider = models_data["chat_provider"]
+            if "embedding_provider" in models_data:
+                prefs.models.embedding_provider = models_data["embedding_provider"]
+            if "topic_provider" in models_data:
+                prefs.models.topic_provider = models_data["topic_provider"]
+            if "llm_model" in models_data:
+                prefs.models.llm_model = models_data["llm_model"]
+            if "embedding_model" in models_data:
+                prefs.models.embedding_model = models_data["embedding_model"]
+            
+            if "ollama" in models_data:
+                ollama_data = models_data["ollama"]
+                if "chat_model" in ollama_data:
+                    prefs.models.ollama.chat_model = ollama_data["chat_model"]
+                if "topic_model" in ollama_data:
+                    prefs.models.ollama.topic_model = ollama_data["topic_model"]
+                if "embed_model" in ollama_data:
+                    prefs.models.ollama.embed_model = ollama_data["embed_model"]
+                if "base_url" in ollama_data:
+                    prefs.models.ollama.base_url = ollama_data["base_url"]
+                    
+    except Exception as e:
+        # Log error but don't fail - use defaults if file is corrupted
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to load settings: {e}")
+
+
 # Single global preferences object. Import this elsewhere.
 PREFERENCES = Preferences()
+
+# Load persisted settings on startup
+load_settings_from_file(PREFERENCES)

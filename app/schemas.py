@@ -70,6 +70,11 @@ class SettingsUpdateRequest(BaseModel):
     chat_provider: Optional[Literal["openai", "ollama"]] = None
     embedding_provider: Optional[Literal["openai", "ollama"]] = None
     topic_provider: Optional[Literal["openai", "ollama"]] = None
+    chat_model: Optional[str] = None  # Model name for chat (Ollama or OpenAI)
+    topic_model: Optional[str] = None  # Model name for topic generation (Ollama)
+    embed_model: Optional[str] = None  # Model name for embeddings (Ollama)
+    llm_model: Optional[str] = None  # OpenAI model name (when chat_provider is "openai")
+    embedding_model: Optional[str] = None  # OpenAI embedding model name (when embedding_provider is "openai")
     openai_api_key: Optional[str] = None  # If provided, will update the API key
 
 

@@ -368,7 +368,7 @@ def get_settings():
 
 @app.put("/settings", response_model=SettingsResponse)
 def update_settings(payload: SettingsUpdateRequest):
-    """Update settings including providers and OpenAI API key."""
+    """Update settings including providers, model names, and OpenAI API key."""
     # Update chat provider if provided
     if payload.chat_provider is not None:
         if payload.chat_provider not in ["openai", "ollama"]:
@@ -387,6 +387,23 @@ def update_settings(payload: SettingsUpdateRequest):
             raise HTTPException(status_code=400, detail="Invalid topic_provider. Must be 'openai' or 'ollama'")
         PREFERENCES.models.topic_provider = payload.topic_provider
     
+    # Update Ollama model names if provided
+    if payload.chat_model is not None:
+        PREFERENCES.models.ollama.chat_model = payload.chat_model
+    
+    if payload.topic_model is not None:
+        PREFERENCES.models.ollama.topic_model = payload.topic_model
+    
+    if payload.embed_model is not None:
+        PREFERENCES.models.ollama.embed_model = payload.embed_model
+    
+    # Update OpenAI model names if provided
+    if payload.llm_model is not None:
+        PREFERENCES.models.llm_model = payload.llm_model
+    
+    if payload.embedding_model is not None:
+        PREFERENCES.models.embedding_model = payload.embedding_model
+    
     # Update OpenAI API key if provided
     if payload.openai_api_key is not None:
         if payload.openai_api_key.strip():
@@ -398,6 +415,10 @@ def update_settings(payload: SettingsUpdateRequest):
             os.environ.pop("OPENAI_API_KEY", None)
             import app.helpers as helpers_module
             helpers_module._client_instance = None
+    
+    # Persist settings to file
+    from .config import save_settings_to_file
+    save_settings_to_file(PREFERENCES)
     
     # Return updated settings
     return get_settings()
