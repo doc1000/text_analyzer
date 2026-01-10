@@ -14,8 +14,12 @@ import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
 #Internal imports
-from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE
-from .schemas import IngestPayload, DocumentDetailResponse, DocumentUpdateRequest, SettingsResponse, SettingsUpdateRequest
+from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE
+from .schemas import (
+    IngestPayload, DocumentDetailResponse, DocumentUpdateRequest, 
+    SettingsResponse, SettingsUpdateRequest, TopicOption, TopicsListResponse,
+    TopicAssignmentRequest
+)
 from . import models
 from .models import Document
 from .helpers import (get_embedding,embed_doc_chunks,
@@ -397,6 +401,237 @@ def update_settings(payload: SettingsUpdateRequest):
     
     # Return updated settings
     return get_settings()
+
+
+# ---------- Topic Assignment Endpoints ----------
+
+@app.get("/documents/{document_id}/topics", response_model=TopicsListResponse)
+def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
+    """
+    Get all existing topics sorted by semantic similarity to the document's embedding.
+    Most similar topics appear first.
+    
+    Uses efficient SQL with pgvector's cosine distance operator.
+    """
+    # Verify document exists
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Get table names for raw SQL
+    embed_table_name = EMBED_TABLE.__tablename__
+    topic_table_name = TOPIC_TABLE.__tablename__
+    
+    # Use raw SQL for efficient pgvector operations:
+    # 1. Compute average embedding for document's chunks
+    # 2. Order topics by cosine distance (similarity = 1 - distance)
+    sql = text(f"""
+        WITH doc_embedding AS (
+            SELECT AVG(embedding) as avg_emb
+            FROM embedding.{embed_table_name}
+            WHERE document_id = :doc_id
+            AND embedding IS NOT NULL
+        )
+        SELECT 
+            t.id,
+            t.title_text,
+            t.document_count,
+            1 - (t.embedding <=> de.avg_emb) as similarity
+        FROM embedding.{topic_table_name} t
+        CROSS JOIN doc_embedding de
+        WHERE t.level_index = 0
+        AND de.avg_emb IS NOT NULL
+        ORDER BY t.embedding <=> de.avg_emb ASC
+        LIMIT 100
+    """)
+    
+    result = db.execute(sql, {"doc_id": document_id})
+    rows = result.fetchall()
+    
+    if not rows:
+        # Check if it's because document has no embeddings
+        check_sql = text(f"""
+            SELECT COUNT(*) FROM embedding.{embed_table_name}
+            WHERE document_id = :doc_id AND embedding IS NOT NULL
+        """)
+        count_result = db.execute(check_sql, {"doc_id": document_id}).scalar()
+        if count_result == 0:
+            raise HTTPException(status_code=400, detail="Document has no embeddings. Please wait for embedding processing.")
+        # Otherwise, just no topics exist
+        return TopicsListResponse(topics=[])
+    
+    topic_options = [
+        TopicOption(
+            id=str(row.id),
+            title=row.title_text,
+            similarity=round(float(row.similarity), 4) if row.similarity else 0.0,
+            document_count=row.document_count or 0
+        )
+        for row in rows
+    ]
+    
+    return TopicsListResponse(topics=topic_options)
+
+
+@app.post("/documents/{document_id}/topic/generate")
+def generate_topic_for_document(document_id: str, db: Session = Depends(get_db)):
+    """
+    Generate a topic title for a document using AI, but don't assign it yet.
+    Returns the generated title for user preview/approval.
+    """
+    from .topics import compute_document_embeddings, _generate_title_and_summary
+    
+    # Get the document
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Compute document embedding
+    doc_embeddings = compute_document_embeddings(db, [doc])
+    if doc.id not in doc_embeddings:
+        raise HTTPException(status_code=400, detail="Document has no embeddings")
+    
+    # Generate title using the topic model
+    title, summary = _generate_title_and_summary([doc], db=db, doc_embeddings=doc_embeddings)
+    
+    return {
+        "status": "ok",
+        "generated_title": title,
+        "generated_summary": summary
+    }
+
+
+@app.put("/documents/{document_id}/topic")
+def update_document_topic(
+    document_id: str, 
+    payload: TopicAssignmentRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Update a document's topic assignment.
+    
+    Options:
+    1. topic_id provided: Assign to existing topic
+    2. custom_title provided: Create new topic with custom title
+    3. generate_new=True: Use AI to generate a new topic for this document
+    """
+    from .topics import (
+        compute_document_embeddings, _save_topic_to_db, 
+        _generate_title_and_summary, clear_topics_cache
+    )
+    from .mmr import compute_centroid
+    from uuid import UUID as PyUUID
+    
+    # Get the document
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Compute document embedding (needed for new topic creation)
+    doc_embeddings = compute_document_embeddings(db, [doc])
+    
+    if payload.topic_id:
+        # Option 1: Assign to existing topic
+        try:
+            topic_uuid = PyUUID(payload.topic_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid topic_id format")
+        
+        topic = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id == topic_uuid).first()
+        if not topic:
+            raise HTTPException(status_code=404, detail="Topic not found")
+        
+        doc.assigned_topic_id = topic.id
+        doc.assigned_topic_title = topic.title_text
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": f"Document assigned to topic: {topic.title_text}",
+            "assigned_topic_id": str(topic.id),
+            "assigned_topic_title": topic.title_text
+        }
+    
+    elif payload.custom_title:
+        # Option 2: Create new topic with custom title
+        if doc.id not in doc_embeddings:
+            raise HTTPException(status_code=400, detail="Document has no embeddings")
+        
+        # Use document embedding as centroid for the new topic
+        centroid = doc_embeddings[doc.id]
+        
+        topic_id = _save_topic_to_db(
+            db=db,
+            title=payload.custom_title,
+            centroid=centroid,
+            document_count=1,
+            summary=None,
+            level_index=0
+        )
+        
+        doc.assigned_topic_id = topic_id
+        doc.assigned_topic_title = payload.custom_title
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": f"Created new topic: {payload.custom_title}",
+            "assigned_topic_id": str(topic_id),
+            "assigned_topic_title": payload.custom_title
+        }
+    
+    elif payload.generate_new:
+        # Option 3: Generate new topic using AI
+        if doc.id not in doc_embeddings:
+            raise HTTPException(status_code=400, detail="Document has no embeddings")
+        
+        # Generate title using the topic model
+        title, summary = _generate_title_and_summary([doc], db=db, doc_embeddings=doc_embeddings)
+        
+        # Use document embedding as centroid
+        centroid = doc_embeddings[doc.id]
+        
+        topic_id = _save_topic_to_db(
+            db=db,
+            title=title,
+            centroid=centroid,
+            document_count=1,
+            summary=summary,
+            level_index=0
+        )
+        
+        doc.assigned_topic_id = topic_id
+        doc.assigned_topic_title = title
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": f"Generated new topic: {title}",
+            "assigned_topic_id": str(topic_id),
+            "assigned_topic_title": title
+        }
+    
+    else:
+        # Clear topic assignment
+        doc.assigned_topic_id = None
+        doc.assigned_topic_title = None
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": "Topic assignment cleared",
+            "assigned_topic_id": None,
+            "assigned_topic_title": None
+        }
+
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt

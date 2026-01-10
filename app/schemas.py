@@ -71,3 +71,23 @@ class SettingsUpdateRequest(BaseModel):
     embedding_provider: Optional[Literal["openai", "ollama"]] = None
     topic_provider: Optional[Literal["openai", "ollama"]] = None
     openai_api_key: Optional[str] = None  # If provided, will update the API key
+
+
+class TopicOption(BaseModel):
+    """A topic option for dropdown selection."""
+    id: str
+    title: str
+    similarity: float
+    document_count: int
+
+
+class TopicsListResponse(BaseModel):
+    """List of topics for selection, sorted by similarity."""
+    topics: List[TopicOption]
+
+
+class TopicAssignmentRequest(BaseModel):
+    """Request to update document's topic assignment."""
+    topic_id: Optional[str] = None  # UUID of existing topic, or None to clear
+    custom_title: Optional[str] = None  # Custom title for new topic
+    generate_new: bool = False  # If True, generate a new topic using the model
