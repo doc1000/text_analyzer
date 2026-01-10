@@ -304,6 +304,22 @@ def update_document(document_id: str, payload: DocumentUpdateRequest, db: Sessio
         text=full_text,
     )
 
+@app.delete("/documents/{document_id}")
+def delete_document(document_id: str, db: Session = Depends(get_db)):
+    """Delete a document from the database. Chunks and sentences will be deleted via CASCADE."""
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Store document info for response
+    doc_title = doc.title or "Untitled"
+    
+    # Delete the document (CASCADE will delete chunks and sentences automatically)
+    db.delete(doc)
+    db.commit()
+    
+    return {"status": "ok", "message": f"Document '{doc_title}' deleted successfully"}
+
 @app.get("/model_configs")
 def get_embedding_length(prompt: str = "this is a test"):
     """

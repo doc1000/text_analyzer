@@ -143,6 +143,102 @@
       margin-bottom: 0.5rem;
       font-weight: 600;
     }
+
+    .delete-btn {
+      background: #7f1d1d;
+      border-color: #991b1b;
+      color: #fca5a5;
+    }
+
+    .delete-btn:hover {
+      background: #991b1b;
+      border-color: #7f1d1d;
+    }
+
+    /* Modal styles */
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-content {
+      background-color: #111827;
+      margin: 15% auto;
+      padding: 0;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 500px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+      padding: 1.5rem;
+      border-bottom: 1px solid #374151;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: #e5e7eb;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: #9ca3af;
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-close:hover {
+      color: #e5e7eb;
+    }
+
+    .modal-body {
+      padding: 1.5rem;
+      color: #d1d5db;
+    }
+
+    .modal-body p {
+      margin: 0 0 1rem 0;
+      line-height: 1.6;
+    }
+
+    .modal-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid #374151;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+    }
+
+    .modal-btn-danger {
+      background: #7f1d1d;
+      border-color: #991b1b;
+      color: #fca5a5;
+    }
+
+    .modal-btn-danger:hover {
+      background: #991b1b;
+      border-color: #7f1d1d;
+    }
   </style>
 </head>
 <body>
@@ -151,8 +247,27 @@
     <div class="controls">
       <button id="saveBtn">Save</button>
       <span id="saveStatus" class="save-status"></span>
+      <button id="deleteBtn" class="delete-btn">Delete</button>
     </div>
   </header>
+
+  <!-- Delete Confirmation Modal -->
+  <div id="deleteModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Delete Document</h2>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to delete this document?</p>
+        <p style="color: #9ca3af; font-size: 0.9rem;">This action cannot be undone. The document will be permanently removed from the vault and database.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelDeleteBtn">Cancel</button>
+        <button id="confirmDeleteBtn" class="modal-btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
 
   <main>
     <div class="section-label">Header</div>
@@ -172,6 +287,11 @@
     const documentBody = document.getElementById("documentBody");
     const saveBtn = document.getElementById("saveBtn");
     const saveStatus = document.getElementById("saveStatus");
+    const deleteBtn = document.getElementById("deleteBtn");
+    const deleteModal = document.getElementById("deleteModal");
+    const modalClose = document.getElementById("modalClose");
+    const cancelDeleteBtn = document.getElementById("cancelDeleteBtn");
+    const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
 
     // Get document ID from URL parameters
     const urlParams = new URLSearchParams(window.location.search);
@@ -354,6 +474,71 @@
         e.preventDefault();
         e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
         return e.returnValue;
+      }
+    });
+
+    // Delete functionality
+    function showDeleteModal() {
+      deleteModal.style.display = "block";
+    }
+
+    function hideDeleteModal() {
+      deleteModal.style.display = "none";
+    }
+
+    async function deleteDocument() {
+      if (!docId) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
+          method: "DELETE"
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const result = await res.json();
+        
+        // Show success message briefly, then redirect
+        updateSaveStatus("Document deleted", "saved");
+        
+        // Redirect to main page after a short delay
+        setTimeout(() => {
+          window.location.href = "/static/index.html";
+        }, 1000);
+
+      } catch (err) {
+        console.error("Delete error:", err);
+        updateSaveStatus("Error: " + err.message, "error");
+        hideDeleteModal();
+      }
+    }
+
+    // Event listeners for delete functionality
+    deleteBtn.addEventListener("click", () => {
+      if (hasChanges) {
+        if (!confirm("You have unsaved changes. Do you want to delete anyway? (Changes will be lost)")) {
+          return;
+        }
+      }
+      showDeleteModal();
+    });
+
+    modalClose.addEventListener("click", hideDeleteModal);
+    cancelDeleteBtn.addEventListener("click", hideDeleteModal);
+    
+    confirmDeleteBtn.addEventListener("click", () => {
+      confirmDeleteBtn.disabled = true;
+      confirmDeleteBtn.textContent = "Deleting...";
+      deleteDocument();
+    });
+
+    // Close modal when clicking outside of it
+    window.addEventListener("click", (e) => {
+      if (e.target === deleteModal) {
+        hideDeleteModal();
       }
     });
   </script>
