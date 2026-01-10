@@ -130,14 +130,37 @@
     }
 
     #info-panel {
-      width: 320px;
-      max-width: 40vw;
+      width: 33vw;
+      min-width: 300px;
+      max-width: 50vw;
       border-left: 1px solid #1f2937;
       padding: 0.75rem 0.9rem;
       box-sizing: border-box;
       font-size: 0.9rem;
       background: #020617;
       overflow-y: auto;
+      position: relative;
+    }
+
+    #info-panel-resize-handle {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      cursor: ew-resize;
+      background: transparent;
+      z-index: 10;
+    }
+
+    #info-panel-resize-handle:hover {
+      background: #3b82f6;
+      opacity: 0.5;
+    }
+
+    #info-panel-resize-handle.dragging {
+      background: #3b82f6;
+      opacity: 0.8;
     }
 
     #info-panel h2 {
@@ -562,6 +585,7 @@
         <div id="tooltip"></div>
       </div>
       <aside id="info-panel">
+        <div id="info-panel-resize-handle"></div>
         <h2>Topic Details</h2>
         <p>Select a topic, subtopic, or document bubble to see more information.</p>
         <div id="info-content"></div>
@@ -1456,6 +1480,46 @@
 
     // Load settings on page load
     loadSettings();
+
+    // -------- INFO PANEL RESIZE --------
+    const infoPanel = document.getElementById("info-panel");
+    const resizeHandle = document.getElementById("info-panel-resize-handle");
+    
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    resizeHandle.addEventListener("mousedown", (e) => {
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = parseInt(window.getComputedStyle(infoPanel).width, 10);
+      resizeHandle.classList.add("dragging");
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+      e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (!isResizing) return;
+      
+      const diff = startX - e.clientX; // Reverse because we're resizing from the left
+      const newWidth = startWidth + diff;
+      const minWidth = 300;
+      const maxWidth = Math.min(window.innerWidth * 0.5, 800); // Max 50vw or 800px
+      
+      if (newWidth >= minWidth && newWidth <= maxWidth) {
+        infoPanel.style.width = newWidth + "px";
+      }
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (isResizing) {
+        isResizing = false;
+        resizeHandle.classList.remove("dragging");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    });
 
   </script>
 </body>
