@@ -237,13 +237,10 @@
         documentBody.value = capturedContent;
 
         const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
-        const info = (doc.score_info != null) ? Number(doc.score_info).toFixed(2) : "n/a";
-        const slop = (doc.score_ai_slop != null) ? Number(doc.score_ai_slop).toFixed(2) : "n/a";
 
         documentMeta.innerHTML = `
           <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
           <div>Captured: ${captured}</div>
-          <div>info: ${info} · ai slop: ${slop}</div>
         `;
 
         // Update page title

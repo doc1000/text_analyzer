@@ -24,8 +24,6 @@ class Document(Base):
     url = Column(Text, nullable=False)
     title = Column(Text, nullable=True)
     full_text = Column(Text, nullable=False)
-    score_info = Column(Float, nullable=True)
-    score_ai_slop = Column(Float, nullable=True)
     captured_at = Column(DateTime, default=datetime.utcnow)
 
 

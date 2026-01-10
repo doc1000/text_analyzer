@@ -29,8 +29,6 @@ class DocumentOut(BaseModel):
     id: UUID
     url: str
     title: str | None
-    score_info: float | None
-    score_ai_slop: float | None
     captured_at: datetime
 
     class Config:
@@ -50,8 +48,6 @@ class ChunkHit(BaseModel):
     document_id: str
     document_title: str | None
     url: str
-    score_info: float | None
-    score_ai_slop: float | None
     chunk_index: int
     chunk_text: str
     similarity: float

@@ -6,8 +6,6 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import asyncio
 from pydantic import BaseModel
-import spacy
-import gzip
 import uvicorn
 import os
 from datetime import datetime
@@ -34,8 +32,6 @@ from .config import PREFERENCES
 from .helpers import update_openai_client
 
 
-
-nlp = spacy.load("en_core_web_sm")
 
 async def _fill_embeddings_async():
     loop = asyncio.get_running_loop()
@@ -71,46 +67,6 @@ def test_db(db: Session = Depends(get_db)):
     result = db.execute(text('SELECT 1;'))
     return {"db_ok": bool(list(result))}
 
-class Input(BaseModel):
-    text: str
-
-@app.post("/analyzer")
-def analyzer(data: Input):
-    text = data.text
-    doc = nlp(text)
-    
-    # Lexical density
-    content_words = [t for t in doc if t.pos_ in ["NOUN","VERB","ADJ","ADV"]]
-    lexical_density = len(content_words) / len([t for t in doc if t.is_alpha]) if text else 0
-
-    # Specificity (rough)
-    numbers = sum(1 for t in doc if t.like_num)
-    entities = len(doc.ents)
-    sents = list(doc.sents)
-    specificity = min(1.0, (numbers + entities) / (len(sents) + 1))
-
-    # Compression ratio
-    compressed = len(gzip.compress(text.encode("utf-8")))
-    #compressed = len(zlib.compress(text.encode("utf-8")))
-    ratio = len(text.encode("utf-8")) / compressed if compressed else 1
-    
-    # Combine scores (weights adjustable)
-    score = (
-        lexical_density * 40 +
-        specificity * 40 +
-        ratio * 20
-    )
-    score = min(100, score)
-
-    return {
-        "score": score,
-        "lexical_density": lexical_density,
-        "specificity": specificity,
-        "compression_ratio": ratio,
-        "infoScore": score,
-        "aiScore": ratio
-    }
-
 from . import models
 
 @app.post("/ingest")
@@ -122,8 +78,6 @@ def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
         url=payload.url,
         title=payload.title,
         full_text=payload.text,
-        score_info=payload.score_info,
-        score_ai_slop=payload.score_ai_slop,
         captured_at=captured_at,
     )
 
@@ -214,8 +168,6 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
                 document_id=str(doc.id),
                 document_title=doc.title,
                 url=doc.url,
-                score_info=doc.score_info,
-                score_ai_slop=doc.score_ai_slop,
                 chunk_index=chunk.chunk_index,
                 chunk_text=chunk.chunk_text,
                 sent_text=sentence.sent_text,
@@ -277,8 +229,6 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
         url=doc.url,
         title=doc.title,
         captured_at=doc.captured_at,
-        score_info=doc.score_info,
-        score_ai_slop=doc.score_ai_slop,
         text=full_text,
     )
 
@@ -325,8 +275,6 @@ def update_document(document_id: str, payload: DocumentUpdateRequest, db: Sessio
         url=doc.url,
         title=doc.title,
         captured_at=doc.captured_at,
-        score_info=doc.score_info,
-        score_ai_slop=doc.score_ai_slop,
         text=full_text,
     )
 

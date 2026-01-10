@@ -639,11 +639,6 @@
         a.textContent = "Open document";
         meta.appendChild(a);
 
-        if (data.score_info != null || data.score_ai_slop != null) {
-          const scores = document.createElement("div");
-          scores.textContent = ` info: ${data.score_info ?? ""} · ai slop: ${data.score_ai_slop ?? ""}`;
-          meta.appendChild(scores);
-        }
 
         if (data.captured_at) {
           const dt = document.createElement("div");
@@ -811,13 +806,21 @@
       const res = await fetch(`${API_BASE}/topics/hierarchy?days=${days}`);
       const data = await res.json();
 
+      // Increase size for topics (depth 1) to make them bigger
       const root = d3.hierarchy(data)
-        .sum(d => d.size || 1)
+        .sum(d => {
+          const baseSize = d.size || 1;
+          // Make topics (depth 1) bigger by multiplying their size
+          if (d.depth === 1) {
+            return baseSize * 1.5; // Increase topic bubble size by 50%
+          }
+          return baseSize;
+        })
         .sort((a, b) => (b.value || 0) - (a.value || 0));
 
       const pack = d3.pack()
         .size([width, height])
-        .padding(3);
+        .padding(8); // Increased padding to space bubbles more
 
       const packedRoot = pack(root);
       rootNode = packedRoot;
@@ -838,7 +841,9 @@
         .attr("fill", d => colorByTopicDepth(d))
         .attr("fill-opacity", d => d.depth >= 3 ? 0.55 : 0.9)
         .attr("stroke", "#020617")
-        .attr("stroke-width", 0.6)
+        .attr("stroke-width", 0.4)
+        // Add subtle blur to reduce fine lines and visual noise
+        .style("filter", d => d.depth >= 3 ? "blur(0.5px)" : "blur(0.3px)")
         .on("mouseover", (event, d) => showTooltip(event, d))
         .on("mouseout", hideTooltip)
         .on("click", (event, d) => {
@@ -886,6 +891,19 @@
 
       // Separate group for labels, so they're rendered above circles
       labelGroup = svg.append("g");
+      
+      // Create background rectangles for labels to improve readability
+      // Only show at root level (initially focusNode === rootNode)
+      const labelRects = labelGroup.selectAll("rect.label-bg")
+        .data(nodes)
+        .join("rect")
+        .attr("class", "label-bg")
+        .style("fill", "#e5e9f1")
+        .style("fill-opacity", 0.92)
+        .style("stroke", "none")
+        .style("pointer-events", "none")
+        .style("opacity", 0) // Start hidden, will be shown only at root level
+        .style("display", "none");
 
       labels = labelGroup.selectAll("text.label")
         .data(nodes)
@@ -897,6 +915,9 @@
         .style("pointer-events", "none")
         .style("fill", "#020617")
         .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.9rem")
+        .style("font-weight", "600") // Keep all labels bold for readability
+        // Add subtle text shadow for better readability
+        .style("text-shadow", "0 1px 2px rgba(229, 233, 241, 0.8)")
         // Initial: show ONLY top-level labels
         .style("opacity", d => d.depth === 1 ? 1 : 0)
         .style("display", d => d.depth === 1 ? "inline" : "none")
@@ -906,11 +927,52 @@
         });
 
       // Wrap labels to multiple lines if needed
-      labels.call(d => wrapLabel(
-        d,
-        d.depth === 1 ? 24 : 20,   // chars per line
-        d.depth === 1 ? 4 : 6     // max lines
-      ));
+      // Limit width to bubble diameter (2 * radius)
+      labels.each(function(d) {
+        const bubbleDiameter = d.r * 2;
+        // Estimate character width - font size is 0.9rem ≈ 14.4px
+        const fontSize = 14.4;
+        const estimatedCharWidth = fontSize * 0.6; // Average character width estimate
+        const maxCharsPerLine = Math.floor(bubbleDiameter / estimatedCharWidth);
+        
+        // Use calculated max width, but ensure minimum readability
+        const charsPerLine = Math.max(8, Math.min(maxCharsPerLine, d.depth === 1 ? 30 : 24));
+        const maxLines = d.depth === 1 ? 4 : 6;
+        
+        wrapLabel(d3.select(this), charsPerLine, maxLines);
+      });
+      
+      // Update background rectangles after text wrapping
+      function updateLabelBackgrounds() {
+        labelRects.each(function(d, i) {
+          const textNodes = labelGroup.selectAll("text.label").nodes();
+          const textEl = textNodes[i];
+          if (!textEl || textEl.style.display === "none") {
+            d3.select(this).style("display", "none");
+            return;
+          }
+          
+          try {
+            const bbox = textEl.getBBox();
+            const padding = 5;
+            const transform = d3.select(textEl).attr("transform");
+            
+            d3.select(this)
+              .attr("x", bbox.x - padding)
+              .attr("y", bbox.y - padding)
+              .attr("width", bbox.width + padding * 2)
+              .attr("height", bbox.height + padding * 2)
+              .attr("rx", 4)
+              .attr("transform", transform);
+          } catch (e) {
+            // Skip if bbox not available
+            d3.select(this).style("display", "none");
+          }
+        });
+      }
+      
+      // Update backgrounds after initial render
+      setTimeout(updateLabelBackgrounds, 100);
 
       // Ensure labels are above nodes
       labelGroup.raise();
@@ -929,8 +991,13 @@
           `translate(${(d.x - v[0]) * k + width / 2},${(d.y - v[1]) * k + height / 2})`;
 
         nodeGroup.selectAll("circle").attr("transform", transform);
-        labelGroup.selectAll("text.label").attr("transform", transform);
         nodeGroup.selectAll("circle").attr("r", d => d.r * k);
+        
+        // Transform labels
+        labelGroup.selectAll("text.label").attr("transform", transform);
+        
+        // Update background rectangles after zoom
+        setTimeout(updateLabelBackgrounds, 50);
       }
 
       function zoom(d) {
@@ -970,12 +1037,38 @@
 
             this.style.display = show ? "inline" : "none";
           });
+        
+        // Update background rectangles visibility - only show at root level
+        transition.selectAll("rect.label-bg")
+          .style("opacity", n => {
+            // Only show backgrounds when at root level (zoomed out)
+            if (focusNode === rootNode) {
+              if (n.depth === 1) return 0.92;
+              return 0;
+            }
+            // Hide backgrounds when zoomed in
+            return 0;
+          })
+          .on("end", function (n) {
+            // Only show backgrounds at root level for top-level topics
+            const show = focusNode === rootNode && n.depth === 1;
+            this.style.display = show ? "inline" : "none";
+            // Update background positions after visibility changes
+            if (show) {
+              setTimeout(updateLabelBackgrounds, 50);
+            }
+          });
       }
 
 
       // Initial zoom
       zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
       infoContent.innerHTML = "<p>Click a topic bubble to see details. Zoom in to see subtopics.</p>";
+      
+      // Hide all background rectangles initially - they only appear on zoom out
+      labelRects
+        .style("opacity", 0)
+        .style("display", "none");
 
       // Reset zoom & labels on background click: restore top-level labels only
       svg.on("click", () => {
@@ -1124,21 +1217,8 @@
             simTag.textContent = "sim: n/a";
           }
 
-          const infoTag = document.createElement("span");
-          infoTag.className = "tag";
-          if (hit.score_info != null) {
-            if (hit.score_ai_slop != null) {
-              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info} · slop: ${hit.score_ai_slop.toFixed ? hit.score_ai_slop.toFixed(2) : hit.score_ai_slop}`;
-            } else {
-              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info}`;
-            }
-          } else {
-            infoTag.textContent = "score: n/a";
-          }
-
           meta.appendChild(titleSpan);
           meta.appendChild(simTag);
-          meta.appendChild(infoTag);
           div.appendChild(meta);
 
           scopeHitsContainer.appendChild(div);

@@ -11,8 +11,6 @@ class IngestPayload(BaseModel):
     text: str
     mode: Literal["page", "selection", "note"] = "page"
     tags: Optional[List[str]] = None
-    score_info: Optional[float] = None
-    score_ai_slop: Optional[float] = None
     captured_at: Optional[datetime] = None
 
     # ---------- Pydantic response models ----------
@@ -21,8 +19,6 @@ class TopicDoc(BaseModel):
     id: UUID
     title: str | None
     url: str
-    score_info: float | None = None
-    score_ai_slop: float | None = None
     captured_at: datetime
 
     class Config:
@@ -53,8 +49,6 @@ class DocumentDetailResponse(BaseModel):
     url: str
     title: Optional[str] = None
     captured_at: Optional[datetime] = None
-    score_info: Optional[float] = None
-    score_ai_slop: Optional[float] = None
     text: str
 
 class DocumentUpdateRequest(BaseModel):

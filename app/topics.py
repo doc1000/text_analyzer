@@ -1088,8 +1088,6 @@ def build_topics_hierarchy(resp: TopicsResponse) -> dict:
                     "name": doc.title or "(no title)",
                     "doc_id": str(doc.id),
                     "url": doc.url,
-                    "score_info": doc.score_info,
-                    "score_ai_slop": doc.score_ai_slop,
                     "captured_at": doc.captured_at.isoformat(),
                     # D3 circle packing will use this as bubble size
                     "size": 1
