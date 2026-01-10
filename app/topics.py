@@ -779,93 +779,85 @@ def compute_topics(
     # 4) Semantic dedupe (keeps latest among high-similarity docs)
     deduped_docs = dedupe_documents_semantic(canonical_docs, doc_embeddings)
 
-    if len(deduped_docs) < min_docs_for_clustering:
-        # Not enough docs to cluster — return a single topic
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
-                )
-            ],
-        )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
+    # 4b) Separate documents with existing topic assignments from unassigned
+    # Pre-assigned documents will be grouped by their existing topic
+    pre_assigned_groups: Dict[UUID, List[Document]] = {}
+    unassigned_docs: List[Document] = []
+    
+    for d in deduped_docs:
+        if d.assigned_topic_id:
+            pre_assigned_groups.setdefault(d.assigned_topic_id, []).append(d)
+        else:
+            unassigned_docs.append(d)
+    
+    print(f"[Topics] {len(pre_assigned_groups)} existing topic groups, {len(unassigned_docs)} unassigned docs")
 
-    # Build matrix of embeddings for deduped docs
-    deduped_docs = [d for d in deduped_docs if d.id in doc_embeddings]
-    if len(deduped_docs) < min_docs_for_clustering:
-        # if embeddings filtered out too much
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
+    # ---------- Process pre-assigned document groups first ----------
+    topics: List[Topic] = []
+    topic_idx_counter = 0
+    
+    # Create topics from pre-assigned groups (documents with existing topic assignments)
+    for topic_db_id, docs_in_group in pre_assigned_groups.items():
+        # Use the stored topic title from the first document
+        topic_title = docs_in_group[0].assigned_topic_title or "Assigned Topic"
+        topic_id = f"T{topic_idx_counter}"
+        topic_idx_counter += 1
+        
+        docs_out = [TopicDoc.model_validate(d) for d in docs_in_group]
+        
+        # Create a simple single-subtopic structure for pre-assigned groups
+        topic = Topic(
+            topic_id=topic_id,
+            title=topic_title,
+            summary=None,
+            documents_count=len(docs_out),
             subtopics=[
                 Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
+                    subtopic_id=f"{topic_id}-S0",
+                    title=topic_title,
+                    summary=None,
+                    documents=docs_out,
                 )
             ],
         )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
-    # Build matrix of embeddings for deduped docs
-    deduped_docs = [d for d in deduped_docs if d.id in doc_embeddings]
-    if len(deduped_docs) < min_docs_for_clustering:
-        # embeddings filtered out too much
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
-                )
-            ],
-        )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
+        topics.append(topic)
+        print(f"♻ Reusing pre-assigned topic: {topic_title} ({len(docs_out)} docs)")
+    
+    # ---------- Cluster unassigned documents ----------
+    # Filter unassigned docs to those with embeddings
+    unassigned_docs = [d for d in unassigned_docs if d.id in doc_embeddings]
+    
+    if len(unassigned_docs) < min_docs_for_clustering:
+        # Not enough unassigned docs to cluster - put them all in one topic
+        if unassigned_docs:
+            topic_docs = [TopicDoc.model_validate(d) for d in unassigned_docs]
+            title, summary = _generate_title_and_summary(unassigned_docs, db=db, doc_embeddings=doc_embeddings)
+            single_topic = Topic(
+                topic_id=f"T{topic_idx_counter}",
+                title=title,
+                summary=summary,
+                documents_count=len(topic_docs),
+                subtopics=[
+                    Subtopic(
+                        subtopic_id=f"T{topic_idx_counter}-S0",
+                        title=title,
+                        summary=summary,
+                        documents=topic_docs,
+                    )
+                ],
+            )
+            topics.append(single_topic)
+        
+        # Return early if we have topics from pre-assigned groups
+        if topics:
+            return TopicsResponse(time_range_days=days, topics=topics)
+        else:
+            # No topics at all - return empty
+            return TopicsResponse(time_range_days=days, topics=[])
 
-    X = np.stack([doc_embeddings[d.id] for d in deduped_docs], axis=0)
+    # Build matrix of embeddings for unassigned docs only
+    X = np.stack([doc_embeddings[d.id] for d in unassigned_docs], axis=0)
     n_docs = X.shape[0]
-
-    # ---------- small-N guard ----------
-    # For very small N, skip UMAP/clustering and treat as a single topic.
-    if n_docs < min_docs_for_clustering:
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
-                )
-            ],
-        )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
-
 
  # 2) For visualization, always reduce to 2D/low-D (UMAP or none)
     X_vis = reduce_embeddings(X)   # uses cfg.dim_reducer; can be X unchanged
@@ -874,10 +866,9 @@ def compute_topics(
     # 3) For clustering, maybe use the same reduced space, maybe not
     labels = cluster_embeddings(X)
 
-    topic_labels = sorted(set(labels))  # e.g. [0,1,2,...]
-    topics: List[Topic] = []
-    # Map from original index to doc
-    idx_to_doc = {i: d for i, d in enumerate(deduped_docs)}
+    cluster_labels = sorted(set(labels))  # e.g. [0,1,2,...]
+    # Map from original index to doc (for unassigned docs only)
+    idx_to_doc = {i: d for i, d in enumerate(unassigned_docs)}
 
     # Helper to build subtopics via a second-level KMeans
     def build_subtopics(topic_docs_indices: List[int], parent_topic_id: str, parent_title: str, parent_db_id: UUID = None) -> List[Subtopic]:
@@ -974,9 +965,9 @@ def compute_topics(
 
         return subtopics
 
-    # 7) Build topic objects and persist them
-    for topic_idx, cluster_label in enumerate(topic_labels):
-        topic_id = f"T{topic_idx}"
+    # 7) Build topic objects and persist them (for newly clustered unassigned docs)
+    for idx, cluster_label in enumerate(cluster_labels):
+        topic_id = f"T{topic_idx_counter + idx}"
 
         topic_doc_indices = [i for i, lbl in enumerate(labels) if lbl == cluster_label]
         docs_list = [idx_to_doc[i] for i in topic_doc_indices]
@@ -1020,6 +1011,17 @@ def compute_topics(
 
         # Build and persist subtopics
         subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title, topic_db_id)
+
+        # Save topic assignment to each document in this cluster
+        if topic_db_id:
+            for doc in docs_list:
+                doc.assigned_topic_id = topic_db_id
+                doc.assigned_topic_title = topic_title
+            try:
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                print(f"[WARN] Failed to save topic assignments: {e}")
 
         topic = Topic(
             topic_id=topic_id,

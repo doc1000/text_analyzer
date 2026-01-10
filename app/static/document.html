@@ -238,9 +238,16 @@
 
         const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
 
+        // Build topic info if assigned
+        let topicInfo = "";
+        if (doc.assigned_topic_title) {
+          topicInfo = `<div style="margin-top: 0.5rem; padding: 0.4rem 0.6rem; background: #1f2937; border-radius: 4px; display: inline-block;"><span style="color: #9ca3af;">Topic:</span> <span style="color: #60a5fa;">${doc.assigned_topic_title}</span></div>`;
+        }
+
         documentMeta.innerHTML = `
           <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
           <div>Captured: ${captured}</div>
+          ${topicInfo}
         `;
 
         // Update page title

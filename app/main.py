@@ -254,6 +254,8 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
         title=doc.title,
         captured_at=doc.captured_at,
         text=full_text,
+        assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
+        assigned_topic_title=doc.assigned_topic_title,
     )
 
 @app.put("/documents/{document_id}", response_model=DocumentDetailResponse)

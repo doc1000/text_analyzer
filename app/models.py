@@ -25,6 +25,11 @@ class Document(Base):
     title = Column(Text, nullable=True)
     full_text = Column(Text, nullable=False)
     captured_at = Column(DateTime, default=datetime.utcnow)
+    # Assigned topic - stores the UUID of the topic this document belongs to
+    # References the dynamically-created TOPIC_TABLE (no FK constraint due to dynamic table)
+    assigned_topic_id = Column(UUID(as_uuid=True), nullable=True)
+    # Denormalized topic title for quick access without joins
+    assigned_topic_title = Column(Text, nullable=True)
 
 
 class EmbeddingModel(Base):

@@ -50,6 +50,8 @@ class DocumentDetailResponse(BaseModel):
     title: Optional[str] = None
     captured_at: Optional[datetime] = None
     text: str
+    assigned_topic_id: Optional[str] = None
+    assigned_topic_title: Optional[str] = None
 
 class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None
