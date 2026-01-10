@@ -522,13 +522,20 @@
         </div>
 
         <div class="settings-section">
-          <h3>Chat Provider</h3>
-          <label for="chatProviderSelect">Select chat provider:</label>
+          <h3>Providers</h3>
+          <label for="chatProviderSelect">Chat Provider (for queries):</label>
           <select id="chatProviderSelect">
             <option value="ollama">Ollama (default)</option>
             <option value="openai">OpenAI</option>
           </select>
-          <p class="hint">Choose which provider to use for queries. Ollama is the default and runs locally.</p>
+          
+          <label for="topicProviderSelect" style="margin-top: 1rem;">Topic Provider (for topic generation):</label>
+          <select id="topicProviderSelect">
+            <option value="ollama">Ollama (default)</option>
+            <option value="openai">OpenAI</option>
+          </select>
+          
+          <p class="hint">Choose which provider to use for each function. Ollama is the default and runs locally.</p>
         </div>
 
         <div class="settings-section">
@@ -1289,6 +1296,7 @@
     const saveSettingsBtn = document.getElementById("saveSettingsBtn");
     const cancelSettingsBtn = document.getElementById("cancelSettingsBtn");
     const chatProviderSelect = document.getElementById("chatProviderSelect");
+    const topicProviderSelect = document.getElementById("topicProviderSelect");
     const openaiKeyInput = document.getElementById("openaiKeyInput");
     const saveKeyBtn = document.getElementById("saveKeyBtn");
     const keyStatus = document.getElementById("keyStatus");
@@ -1313,6 +1321,9 @@
         currentTopicModel.textContent = currentSettings.topic_model;
         currentEmbeddingModel.textContent = currentSettings.embedding_model;
         chatProviderSelect.value = currentSettings.chat_provider;
+        if (topicProviderSelect) {
+          topicProviderSelect.value = currentSettings.topic_provider || "ollama";
+        }
         
         // Update API key status
         if (currentSettings.has_openai_key) {
@@ -1338,6 +1349,11 @@
       // Check if chat provider changed
       if (chatProviderSelect.value !== currentSettings.chat_provider) {
         updates.chat_provider = chatProviderSelect.value;
+      }
+      
+      // Check if topic provider changed
+      if (topicProviderSelect && topicProviderSelect.value !== (currentSettings.topic_provider || "ollama")) {
+        updates.topic_provider = topicProviderSelect.value;
       }
       
       // Check if API key was entered
