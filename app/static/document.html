@@ -165,6 +165,17 @@
       border-color: #7f1d1d;
     }
 
+    .export-btn {
+      background: #1e3a5f;
+      border-color: #3b82f6;
+      color: #93c5fd;
+    }
+
+    .export-btn:hover {
+      background: #2563eb;
+      border-color: #60a5fa;
+    }
+
     /* Modal styles */
     .modal {
       display: none;
@@ -447,6 +458,8 @@
   <header>
     <h1><img src="/static/icon.svg" alt="V" style="height: 2.6rem; vertical-align: middle; margin-right: -0.3rem; margin-left: -0.2rem;">Document Viewer</h1>
     <div class="controls">
+      <button id="exportClipboardBtn" class="export-btn" title="Export to clipboard">📋 Copy</button>
+      <button id="exportFileBtn" class="export-btn" title="Export to .md file">💾 Export</button>
       <button id="saveBtn">Save</button>
       <span id="saveStatus" class="save-status"></span>
       <button id="deleteBtn" class="delete-btn">Delete</button>
@@ -526,6 +539,8 @@
     const saveBtn = document.getElementById("saveBtn");
     const saveStatus = document.getElementById("saveStatus");
     const deleteBtn = document.getElementById("deleteBtn");
+    const exportClipboardBtn = document.getElementById("exportClipboardBtn");
+    const exportFileBtn = document.getElementById("exportFileBtn");
     const deleteModal = document.getElementById("deleteModal");
     const modalClose = document.getElementById("modalClose");
     const cancelDeleteBtn = document.getElementById("cancelDeleteBtn");
@@ -567,6 +582,8 @@
     let hasChanges = false;
     let currentAssignedTopicId = null;
     let currentAssignedTopicTitle = null;
+    let currentDocumentUrl = null;
+    let currentCapturedAt = null;
 
     function extractCapturedContent(fullText) {
       // Find [Captured] marker (case-insensitive, handles variations)
@@ -613,6 +630,10 @@
         documentBody.value = capturedContent;
 
         const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
+
+        // Store metadata for export
+        currentDocumentUrl = doc.url || null;
+        currentCapturedAt = captured;
 
         // Update topic badge directly and store for later use
         currentAssignedTopicId = doc.assigned_topic_id;
@@ -1023,6 +1044,99 @@
       }
     });
 
+    // -------- EXPORT FUNCTIONALITY --------
+
+    function generateExportContent() {
+      const title = documentTitle.value.trim() || "Untitled";
+      const content = documentBody.value;
+      const url = currentDocumentUrl || "N/A";
+      const topic = currentAssignedTopicTitle || "Not assigned";
+      const captured = currentCapturedAt || "N/A";
+
+      return `# ${title}
+
+## Metadata
+
+- **Source URL:** ${url}
+- **Assigned Topic:** ${topic}
+- **Captured:** ${captured}
+
+---
+
+## Content
+
+${content}
+`;
+    }
+
+    async function exportToClipboard() {
+      try {
+        const exportContent = generateExportContent();
+        await navigator.clipboard.writeText(exportContent);
+        
+        // Show temporary success message
+        const originalText = exportClipboardBtn.textContent;
+        exportClipboardBtn.textContent = "✓ Copied!";
+        exportClipboardBtn.style.background = "#10b981";
+        exportClipboardBtn.style.borderColor = "#10b981";
+        
+        setTimeout(() => {
+          exportClipboardBtn.textContent = originalText;
+          exportClipboardBtn.style.background = "";
+          exportClipboardBtn.style.borderColor = "";
+        }, 2000);
+      } catch (err) {
+        console.error("Failed to copy to clipboard:", err);
+        alert("Failed to copy to clipboard. Please try again.");
+      }
+    }
+
+    function exportToFile() {
+      try {
+        const exportContent = generateExportContent();
+        const title = documentTitle.value.trim() || "Untitled";
+        
+        // Sanitize filename: remove invalid characters
+        const sanitizedTitle = title
+          .replace(/[<>:"/\\|?*]/g, "_")
+          .replace(/\s+/g, "_")
+          .substring(0, 100); // Limit length
+        
+        const filename = `${sanitizedTitle}.md`;
+        const blob = new Blob([exportContent], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // Clean up the object URL
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+        
+        // Show temporary success message
+        const originalText = exportFileBtn.textContent;
+        exportFileBtn.textContent = "✓ Exported!";
+        exportFileBtn.style.background = "#10b981";
+        exportFileBtn.style.borderColor = "#10b981";
+        
+        setTimeout(() => {
+          exportFileBtn.textContent = originalText;
+          exportFileBtn.style.background = "";
+          exportFileBtn.style.borderColor = "";
+        }, 2000);
+      } catch (err) {
+        console.error("Failed to export file:", err);
+        alert("Failed to export file. Please try again.");
+      }
+    }
+
+    // Event listeners for export functionality
+    exportClipboardBtn.addEventListener("click", exportToClipboard);
+    exportFileBtn.addEventListener("click", exportToFile);
+
     // Modify loadDocument to also store topic info (topics load lazily when ribbon opens)
     const originalLoadDocument = loadDocument;
     loadDocument = async function(docId) {
@@ -1055,6 +1169,10 @@
         updateCurrentTopicDisplay(currentAssignedTopicTitle);
 
         const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
+
+        // Store metadata for export
+        currentDocumentUrl = doc.url || null;
+        currentCapturedAt = captured;
 
         // Build meta info (topic is shown in badge, not here)
         documentMeta.innerHTML = `
