@@ -300,11 +300,18 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
         source_num += 1
         hit_prefix = f"Source {source_num} ({first_hit.url}):\n"
         
-        # Combine sentences from same chunk in sequential order
+        # Combine sentences from same chunk in sequential order, removing duplicates
         if all(h.sent_text for h in chunk_hits):
-            # All hits have sentence text - combine them in order
-            sentence_texts = [h.sent_text for h in chunk_hits]
-            hit_text = " ".join(sentence_texts)
+            # All hits have sentence text - combine them in order, removing duplicates by text content
+            seen_sentence_texts = set()
+            unique_sentence_texts = []
+            for h in chunk_hits:
+                # Deduplicate by normalized sentence text content
+                sent_text_normalized = (h.sent_text or "").strip()
+                if sent_text_normalized and sent_text_normalized not in seen_sentence_texts:
+                    seen_sentence_texts.add(sent_text_normalized)
+                    unique_sentence_texts.append(h.sent_text)
+            hit_text = " ".join(unique_sentence_texts)
         elif chunk_hits[0].sent_text:
             # Some have sentence text - use first sentence text
             hit_text = chunk_hits[0].sent_text

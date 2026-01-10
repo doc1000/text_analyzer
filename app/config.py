@@ -41,7 +41,7 @@ class ClusteringConfig:
     cluster_algo: ClusterAlgo = "kmeans"
     min_docs_for_clustering: int = 6
     max_neighbors: int = 15          # still used if you pick UMAP
-    max_components: int = 24
+    max_components: int = 18
     random_state: int = 42
     k_topics_min: int = 2
     k_topics_max: int = 10

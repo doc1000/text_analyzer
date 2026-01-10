@@ -619,6 +619,7 @@
     let circle;        // selection of circles
     let labels;        // selection of text labels
     let lastDocClickedId = null;
+    let zoomToNode = null;  // Will be set by renderBubbleMap to enable zooming from outside
     
     function updateInfoPanel(d) {
       const data = d.data;
@@ -685,6 +686,23 @@
         }
       })(node);
       return ids;
+    }
+
+    // Find a node in the hierarchy by document ID
+    function findNodeByDocId(docId) {
+      if (!rootNode) return null;
+      let found = null;
+      (function walk(n) {
+        if (found) return;
+        if (n.data && n.data.doc_id === docId) {
+          found = n;
+          return;
+        }
+        if (n.children) {
+          n.children.forEach(child => walk(child));
+        }
+      })(rootNode);
+      return found;
     }
 
     function setScopeForNode(d) {
@@ -1059,6 +1077,9 @@
             }
           });
       }
+      
+      // Expose zoom function for use outside renderBubbleMap
+      zoomToNode = zoom;
 
 
       // Initial zoom
@@ -1090,18 +1111,8 @@
 
         infoContent.innerHTML = "<p>Click a topic, subtopic, or document bubble to see details.</p>";
 
-        // If you're also resetting scoped query here, leave that logic in place
-        if (typeof setScopeForNode === "function") {
-          setScopeForNode(null);
-          if (scopeAnswerContainer) scopeAnswerContainer.innerHTML = "";
-          if (scopeHitsContainer) scopeHitsContainer.innerHTML = "";
-        }
-      
-
-        // Reset scoped query to all documents and clear results
+        // Reset scope to all documents but keep query results visible
         setScopeForNode(null);
-        if (scopeAnswerContainer) scopeAnswerContainer.innerHTML = "";
-        if (scopeHitsContainer) scopeHitsContainer.innerHTML = "";
       });
     }
 
@@ -1194,10 +1205,19 @@
           const div = document.createElement("div");
           div.className = "hit";
 
-          // Clicking a result opens the document reader
+          // Clicking a result zooms to the document bubble on the D3 map
           div.addEventListener("click", () => {
             if (hit.document_id) {
-              openReader(hit.document_id);
+              const docNode = findNodeByDocId(hit.document_id);
+              if (docNode && zoomToNode) {
+                lastDocClickedId = hit.document_id;
+                zoomToNode(docNode);
+                updateInfoPanel(docNode);
+                setScopeForNode(docNode);
+              } else {
+                // Fallback: open reader if node not found in current hierarchy
+                openReader(hit.document_id);
+              }
             }
           });
 
@@ -1206,7 +1226,20 @@
 
           const titleSpan = document.createElement("span");
           titleSpan.className = "hit-title";
-          titleSpan.textContent = hit.document_title || "(no title)";
+          // If sentence text is available, show first 200 chars of sentence, otherwise show document title
+          if (hit.sent_text) {
+            // Clean up prefixes: remove [Header], replace [captured] with ": "
+            let cleanedText = hit.sent_text
+              .replace(/^\[Header\]\s*/i, '')  // Remove [Header] prefix
+              .replace(/\[captured\]/gi, ': '); // Replace [captured] with ": "
+            
+            const sentencePreview = cleanedText.length > 200 
+              ? cleanedText.substring(0, 200) + "…" 
+              : cleanedText;
+            titleSpan.textContent = sentencePreview;
+          } else {
+            titleSpan.textContent = hit.document_title || "(no title)";
+          }
 
           const simTag = document.createElement("span");
           simTag.className = "tag";

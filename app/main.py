@@ -162,19 +162,43 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     )
 
     hits: List[ChunkHit] = []
+    seen_sentence_texts = set()
+    
     for sentence, chunk, doc, similarity in rows:
-        hits.append(
-            ChunkHit(
-                document_id=str(doc.id),
-                document_title=doc.title,
-                url=doc.url,
-                chunk_index=chunk.chunk_index,
-                chunk_text=chunk.chunk_text,
-                sent_text=sentence.sent_text,
-                sent_index=sentence.sent_index,
-                similarity=float(similarity),
+        # Deduplicate by sentence text content to avoid showing same text multiple times
+        sent_text_normalized = (sentence.sent_text or "").strip()
+        
+        if sent_text_normalized and sent_text_normalized not in seen_sentence_texts:
+            seen_sentence_texts.add(sent_text_normalized)
+            hits.append(
+                ChunkHit(
+                    document_id=str(doc.id),
+                    document_title=doc.title,
+                    url=doc.url,
+                    chunk_index=chunk.chunk_index,
+                    chunk_text=chunk.chunk_text,
+                    sent_text=sentence.sent_text,
+                    sent_index=sentence.sent_index,
+                    similarity=float(similarity),
+                )
             )
-        )
+        elif not sent_text_normalized:
+            # If no sentence text, still add but deduplicate by position
+            pos_key = (str(doc.id), chunk.chunk_index, sentence.sent_index)
+            if pos_key not in seen_sentence_texts:
+                seen_sentence_texts.add(pos_key)
+                hits.append(
+                    ChunkHit(
+                        document_id=str(doc.id),
+                        document_title=doc.title,
+                        url=doc.url,
+                        chunk_index=chunk.chunk_index,
+                        chunk_text=chunk.chunk_text,
+                        sent_text=sentence.sent_text,
+                        sent_index=sentence.sent_index,
+                        similarity=float(similarity),
+                    )
+                )
 
     answer = None
     if payload.with_answer and hits:
