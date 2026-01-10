@@ -346,12 +346,24 @@ def get_settings():
 
 @app.put("/settings", response_model=SettingsResponse)
 def update_settings(payload: SettingsUpdateRequest):
-    """Update settings including chat provider and OpenAI API key."""
+    """Update settings including providers and OpenAI API key."""
     # Update chat provider if provided
     if payload.chat_provider is not None:
         if payload.chat_provider not in ["openai", "ollama"]:
             raise HTTPException(status_code=400, detail="Invalid chat_provider. Must be 'openai' or 'ollama'")
         PREFERENCES.models.chat_provider = payload.chat_provider
+    
+    # Update embedding provider if provided
+    if payload.embedding_provider is not None:
+        if payload.embedding_provider not in ["openai", "ollama"]:
+            raise HTTPException(status_code=400, detail="Invalid embedding_provider. Must be 'openai' or 'ollama'")
+        PREFERENCES.models.embedding_provider = payload.embedding_provider
+    
+    # Update topic provider if provided
+    if payload.topic_provider is not None:
+        if payload.topic_provider not in ["openai", "ollama"]:
+            raise HTTPException(status_code=400, detail="Invalid topic_provider. Must be 'openai' or 'ollama'")
+        PREFERENCES.models.topic_provider = payload.topic_provider
     
     # Update OpenAI API key if provided
     if payload.openai_api_key is not None:

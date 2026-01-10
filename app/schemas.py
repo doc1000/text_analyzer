@@ -66,4 +66,6 @@ class SettingsResponse(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     chat_provider: Optional[Literal["openai", "ollama"]] = None
+    embedding_provider: Optional[Literal["openai", "ollama"]] = None
+    topic_provider: Optional[Literal["openai", "ollama"]] = None
     openai_api_key: Optional[str] = None  # If provided, will update the API key

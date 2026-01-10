@@ -233,7 +233,10 @@ def _generate_title_and_summary_mmr(
     prompt = (
         "You are categorizing a cluster of documents.\n"
         "Below are the most representative sentences from this cluster.\n"
-        "Create a concise topic title (max 15 words) capturing the main theme.\n\n"
+        "Create a SHORT topic title (3-6 words max) that captures the BROAD, HIGH-LEVEL theme connecting these documents.\n"
+        "Focus on the overarching concept or pattern, NOT specific details or particulars.\n"
+        "Think about what connects these documents at a conceptual level - what is the common thread?\n"
+        "Examples: 'Machine Learning Research', 'Financial Planning', 'Health & Wellness', 'Product Development'\n\n"
         "REPRESENTATIVE SENTENCES:\n"
         f"{context}\n\n"
         "Respond ONLY with:\n"
@@ -297,7 +300,7 @@ def _generate_title_and_summary_mmr(
     return title, summary
 
 
-def _generate_title_from_document_titles(docs: List[Document], max_words: int = 15) -> str:
+def _generate_title_from_document_titles(docs: List[Document], max_words: int = 6) -> str:
     """
     Generate a title from document titles as a final fallback.
     Creates a concise title from the first few document titles.
@@ -407,9 +410,11 @@ def _generate_title_and_summary_fallback(docs: List[Document]) -> Tuple[str, str
     prompt = (
         "You are helping categorize a cluster of documents. "
         "Based on the titles and snippets below, create:\n"
-        "A SHORT topic title (max 15 words) that captures the main theme of the documents.\n"
-        "Include information from each document in the title, if relevant. "
-        "Do not return an exact copy of the document titles, but use the information to create a concise title.\n"
+        "A SHORT topic title (3-6 words max) that captures the BROAD, HIGH-LEVEL theme connecting these documents.\n"
+        "Focus on the overarching concept or pattern that connects them, NOT specific details or particulars.\n"
+        "Think about what connects these documents at a conceptual level - what is the common thread?\n"
+        "Examples: 'Machine Learning Research', 'Financial Planning', 'Health & Wellness', 'Product Development'\n"
+        "Do not return an exact copy of the document titles, but identify the broad theme.\n"
         "Respond in the format:\n"
         "TITLE: <short title>\n"
         f"DOCUMENTS:\n{context}"
