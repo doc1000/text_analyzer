@@ -823,6 +823,19 @@ def compute_topics(
         topics.append(topic)
         print(f"♻ Reusing pre-assigned topic: {topic_title} ({len(docs_out)} docs)")
     
+    # Check if number of pre-assigned topic groups exceeds k_topics_max
+    # If so, re-cluster all pre-assigned documents instead of reusing their assignments
+    if len(topics) > cfg.k_topics_max:
+        print(f"[Topics] {len(topics)} pre-assigned topics exceeds k_topics_max ({cfg.k_topics_max}), re-clustering...")
+        # Collect all documents from pre-assigned groups and add them to unassigned_docs
+        docs_to_recluster = []
+        for topic_db_id, docs_in_group in pre_assigned_groups.items():
+            docs_to_recluster.extend(docs_in_group)
+        unassigned_docs.extend(docs_to_recluster)
+        # Clear the topics list since we're re-clustering
+        topics = []
+        topic_idx_counter = 0
+    
     # ---------- Cluster unassigned documents ----------
     # Filter unassigned docs to those with embeddings
     unassigned_docs = [d for d in unassigned_docs if d.id in doc_embeddings]
