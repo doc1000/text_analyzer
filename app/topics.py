@@ -823,9 +823,9 @@ def compute_topics(
         topics.append(topic)
         print(f"♻ Reusing pre-assigned topic: {topic_title} ({len(docs_out)} docs)")
     
-    # Check if number of pre-assigned topic groups exceeds k_topics_max
+    # Check if number of pre-assigned topic groups exceeds k_topics_recluster
     # If so, re-cluster all pre-assigned documents instead of reusing their assignments
-    if len(topics) > cfg.k_topics_max:
+    if len(topics) > cfg.k_topics_recluster:
         print(f"[Topics] {len(topics)} pre-assigned topics exceeds k_topics_max ({cfg.k_topics_max}), re-clustering...")
         # Collect all documents from pre-assigned groups and add them to unassigned_docs
         docs_to_recluster = []
