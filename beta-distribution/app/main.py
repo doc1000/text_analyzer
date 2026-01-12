@@ -336,6 +336,9 @@ def delete_document(document_id: str, db: Session = Depends(get_db)):
     db.delete(doc)
     db.commit()
     
+    # Clear topics cache after successful deletion since document deletion affects topic composition
+    clear_topics_cache()
+    
     return {"status": "ok", "message": f"Document '{doc_title}' deleted successfully"}
 
 @app.get("/model_configs")
