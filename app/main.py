@@ -625,9 +625,13 @@ def update_document_topic(
     if payload.topic_id:
         # Option 1: Assign to existing topic
         try:
-            topic_uuid = PyUUID(payload.topic_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid topic_id format")
+            # Handle both string UUIDs and UUID objects
+            if isinstance(payload.topic_id, str):
+                topic_uuid = PyUUID(payload.topic_id)
+            else:
+                topic_uuid = payload.topic_id
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid topic_id format: {e}")
         
         topic = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id == topic_uuid).first()
         if not topic:

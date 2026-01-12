@@ -533,21 +533,30 @@ def _save_topic_to_db(
     Returns:
         UUID of created topic
     """
-    topic_record = TOPIC_TABLE(
-        parent_id=parent_id,
-        level_index=level_index,
-        title_text=title,
-        embedding=centroid.tolist(),
-        document_count=document_count,
-        summary_text=summary,
-        match_count=0
-    )
-    
-    db.add(topic_record)
-    db.commit()
-    db.refresh(topic_record)
-    
-    return topic_record.id
+    try:
+        topic_record = TOPIC_TABLE(
+            parent_id=parent_id,
+            level_index=level_index,
+            title_text=title,
+            embedding=centroid.tolist(),
+            document_count=document_count,
+            summary_text=summary,
+            match_count=0
+        )
+        
+        db.add(topic_record)
+        db.flush()  # Flush before commit to catch any errors early
+        db.commit()
+        db.refresh(topic_record)
+        
+        print(f"[DEBUG] Successfully saved topic '{title}' to database (ID: {topic_record.id})")
+        return topic_record.id
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] Failed to save topic '{title}' to database: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 def _find_matching_topic(
@@ -992,6 +1001,12 @@ def compute_topics(
         
         topic_db_id = None
         
+        # Debug logging
+        if not PREFERENCES.topic_persistence.persist_topics:
+            print(f"[DEBUG] Topic persistence is DISABLED - topics will not be saved to database")
+        if centroid is None:
+            print(f"[DEBUG] No centroid computed for topic cluster (doc_emb_list length: {len(doc_emb_list) if doc_emb_list else 0})")
+        
         # Check if we have an existing topic that matches (if persistence enabled and centroid available)
         if PREFERENCES.topic_persistence.persist_topics and centroid is not None:
             existing_match = _find_matching_topic(
@@ -1009,15 +1024,22 @@ def compute_topics(
                 topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
                 
                 # Save to database
-                topic_db_id = _save_topic_to_db(
-                    db=db,
-                    title=topic_title,
-                    centroid=centroid,
-                    document_count=len(docs_list),
-                    summary=topic_summary,
-                    level_index=0
-                )
-                print(f"✓ Created new topic: {topic_title}")
+                try:
+                    topic_db_id = _save_topic_to_db(
+                        db=db,
+                        title=topic_title,
+                        centroid=centroid,
+                        document_count=len(docs_list),
+                        summary=topic_summary,
+                        level_index=0
+                    )
+                    print(f"✓ Created new topic: {topic_title} (ID: {topic_db_id})")
+                except Exception as e:
+                    print(f"[ERROR] Failed to save topic '{topic_title}' to database: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue without topic_db_id - topic won't be persisted
+                    topic_db_id = None
         else:
             # Persistence disabled or no centroid - just generate title
             topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
