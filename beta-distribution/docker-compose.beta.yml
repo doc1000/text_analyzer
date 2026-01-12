@@ -12,6 +12,12 @@ services:
     volumes:
       - badger_db_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U badger -d badgerdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   ollama:
     image: ollama/ollama:0.13.5
@@ -36,7 +42,8 @@ services:
        until curl -sf http://ollama:11434/api/tags >/dev/null; do sleep 1; done &&
        echo 'Seeding models...' &&
        curl -s http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"all-minilm\"}' >/dev/null &&
-       curl -s http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"phi3.5-mini-q2k\"}' >/dev/null &&
+       curl -s http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"llama3.2:3b\"}' >/dev/null &&
+       curl -s http://ollama:11434/api/pull -H 'Content-Type: application/json' -d '{\"name\":\"gemma3:1b-it-q4_K_M\"}' >/dev/null &&
        echo 'Done seeding.'"
 
 
@@ -49,17 +56,22 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb
 
-      # Ollama wiring
-      MODEL_PROVIDER: ollama
+      # Ollama wiring - separate providers for different functions
+      CHAT_PROVIDER: ollama
+      EMBEDDING_PROVIDER: ollama
+      TOPIC_PROVIDER: ollama
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_CHAT_MODEL: phi3.5-mini-q2k
+      OLLAMA_CHAT_MODEL: llama3.2:3b
+      OLLAMA_TOPIC_MODEL: gemma3:1b-it-q4_K_M
       OLLAMA_EMBED_MODEL: all-minilm
 
     ports:
       - "8000:8000"
     depends_on:
-      - db
-      - ollama_seed
+      db:
+        condition: service_healthy
+      ollama_seed:
+        condition: service_completed_successfully
 
 volumes:
   badger_db_data:

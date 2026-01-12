@@ -1,0 +1,1205 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Document Viewer - VaultBubble</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      font-size: 1.3rem;
+      margin: 0;
+    }
+
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    button {
+      padding: 0.3rem 0.9rem;
+      border-radius: 6px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    button:hover {
+      background: #1f2937;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    main {
+      padding: 1.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    #documentTitle {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 1.3rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      box-sizing: border-box;
+    }
+
+    #documentTitle:focus {
+      outline: none;
+      border-color: #60a5fa;
+    }
+
+    .topic-meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+      gap: 1rem;
+    }
+
+    #documentMeta {
+      color: #9ca3af;
+      font-size: 0.85rem;
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.25rem;
+    }
+
+    #documentMeta a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+
+    #documentMeta a:hover {
+      text-decoration: underline;
+    }
+
+    #documentBody {
+      width: 100%;
+      min-height: 400px;
+      padding: 0.75rem;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      font-family: inherit;
+      white-space: pre-wrap;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+
+    #documentBody:focus {
+      outline: none;
+      border-color: #60a5fa;
+    }
+
+    .save-status {
+      font-size: 0.85rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 4px;
+    }
+
+    .save-status.unsaved {
+      color: #fbbf24;
+    }
+
+    .save-status.saving {
+      color: #60a5fa;
+    }
+
+    .save-status.saved {
+      color: #10b981;
+    }
+
+    .save-status.error {
+      color: #ef4444;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+      font-weight: 600;
+    }
+
+    .delete-btn {
+      background: #7f1d1d;
+      border-color: #991b1b;
+      color: #fca5a5;
+    }
+
+    .delete-btn:hover {
+      background: #991b1b;
+      border-color: #7f1d1d;
+    }
+
+    .export-btn {
+      background: #1e3a5f;
+      border-color: #3b82f6;
+      color: #93c5fd;
+    }
+
+    .export-btn:hover {
+      background: #2563eb;
+      border-color: #60a5fa;
+    }
+
+    /* Modal styles */
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-content {
+      background-color: #111827;
+      margin: 15% auto;
+      padding: 0;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 500px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+      padding: 1.5rem;
+      border-bottom: 1px solid #374151;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: #e5e7eb;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: #9ca3af;
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-close:hover {
+      color: #e5e7eb;
+    }
+
+    .modal-body {
+      padding: 1.5rem;
+      color: #d1d5db;
+    }
+
+    .modal-body p {
+      margin: 0 0 1rem 0;
+      line-height: 1.6;
+    }
+
+    .modal-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid #374151;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+    }
+
+    .modal-btn-danger {
+      background: #7f1d1d;
+      border-color: #991b1b;
+      color: #fca5a5;
+    }
+
+    .modal-btn-danger:hover {
+      background: #991b1b;
+      border-color: #7f1d1d;
+    }
+
+    /* Topic Badge - Clickable in meta section */
+    .topic-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.6rem;
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      margin-top: 0.5rem;
+    }
+
+    .topic-badge:hover {
+      background: #374151;
+      border-color: #4b5563;
+    }
+
+    .topic-badge-label {
+      color: #9ca3af;
+      font-size: 0.8rem;
+    }
+
+    .topic-badge-value {
+      color: #60a5fa;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .topic-badge-value.unassigned {
+      color: #6b7280;
+      font-style: italic;
+    }
+
+    .topic-badge-icon {
+      color: #6b7280;
+      font-size: 0.7rem;
+      transition: transform 0.2s ease;
+    }
+
+    .topic-badge.expanded .topic-badge-icon {
+      transform: rotate(180deg);
+    }
+
+    /* Topic Ribbon - Expandable panel */
+    .topic-ribbon {
+      display: none;
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .topic-ribbon.open {
+      display: block;
+    }
+
+    .topic-ribbon-row {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .topic-ribbon-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .topic-dropdown {
+      flex: 1;
+      padding: 0.4rem 0.5rem;
+      border-radius: 4px;
+      border: 1px solid #374151;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.85rem;
+    }
+
+    .topic-dropdown:focus {
+      outline: none;
+      border-color: #60a5fa;
+    }
+
+    .topic-dropdown option {
+      background: #111827;
+    }
+
+    .topic-input {
+      flex: 1;
+      padding: 0.4rem 0.5rem;
+      border-radius: 4px;
+      border: 1px solid #374151;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.85rem;
+    }
+
+    .topic-input:focus {
+      outline: none;
+      border-color: #60a5fa;
+    }
+
+    .topic-input::placeholder {
+      color: #6b7280;
+    }
+
+    .topic-btn {
+      padding: 0.4rem 0.75rem;
+      white-space: nowrap;
+      font-size: 0.8rem;
+    }
+
+    .topic-btn-primary {
+      background: #1d4ed8;
+      border-color: #2563eb;
+      color: white;
+    }
+
+    .topic-btn-primary:hover {
+      background: #2563eb;
+    }
+
+    .topic-btn-secondary {
+      background: #374151;
+      border-color: #4b5563;
+    }
+
+    .topic-btn-secondary:hover {
+      background: #4b5563;
+    }
+
+    .topic-btn-sm {
+      padding: 0.3rem 0.5rem;
+      font-size: 0.75rem;
+      color: #9ca3af;
+    }
+
+    .topic-ribbon-divider {
+      color: #4b5563;
+      font-size: 0.7rem;
+      text-align: center;
+      margin: 0.25rem 0;
+    }
+
+    .topic-status {
+      font-size: 0.8rem;
+      margin-top: 0.4rem;
+      min-height: 1rem;
+    }
+
+    .topic-status.success {
+      color: #10b981;
+    }
+
+    .topic-status.error {
+      color: #ef4444;
+    }
+
+    .topic-status.loading {
+      color: #60a5fa;
+    }
+
+    /* Topic Preview (for AI-generated topics) */
+    .topic-preview {
+      background: #1e3a5f;
+      border: 1px solid #3b82f6;
+      border-radius: 4px;
+      padding: 0.6rem;
+      margin-top: 0.5rem;
+    }
+
+    .topic-preview-label {
+      font-size: 0.75rem;
+      color: #93c5fd;
+      margin-bottom: 0.25rem;
+    }
+
+    .topic-preview-value {
+      color: #e5e7eb;
+      font-size: 0.9rem;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+    }
+
+    .topic-preview-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><img src="/static/icon.svg" alt="V" style="height: 2.6rem; vertical-align: middle; margin-right: -0.3rem; margin-left: -0.2rem;">Document Viewer</h1>
+    <div class="controls">
+      <button id="exportClipboardBtn" class="export-btn" title="Export to clipboard">📋 Copy</button>
+      <button id="exportFileBtn" class="export-btn" title="Export to .md file">💾 Export</button>
+      <button id="saveBtn">Save</button>
+      <span id="saveStatus" class="save-status"></span>
+      <button id="deleteBtn" class="delete-btn">Delete</button>
+    </div>
+  </header>
+
+  <!-- Delete Confirmation Modal -->
+  <div id="deleteModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Delete Document</h2>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to delete this document?</p>
+        <p style="color: #9ca3af; font-size: 0.9rem;">This action cannot be undone. The document will be permanently removed from the vault and database.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelDeleteBtn">Cancel</button>
+        <button id="confirmDeleteBtn" class="modal-btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <input type="text" id="documentTitle" placeholder="Document title..." />
+
+    <!-- Topic Badge and Meta Info on same line -->
+    <div class="topic-meta-row">
+      <div id="topicBadge" class="topic-badge">
+        <span class="topic-badge-label">Topic:</span>
+        <span class="topic-badge-value" id="currentTopicDisplay">Loading...</span>
+        <span class="topic-badge-icon">▼</span>
+      </div>
+      <div id="documentMeta" class="document-meta"></div>
+    </div>
+
+    <div id="topicRibbon" class="topic-ribbon">
+      <div class="topic-ribbon-row">
+        <select id="topicDropdown" class="topic-dropdown">
+          <option value="">Select existing topic...</option>
+        </select>
+        <button id="assignTopicBtn" class="topic-btn topic-btn-primary">Assign</button>
+      </div>
+      <div class="topic-ribbon-divider">— or —</div>
+      <div class="topic-ribbon-row">
+        <input type="text" id="customTopicInput" class="topic-input" placeholder="Custom topic title..." />
+        <button id="createCustomTopicBtn" class="topic-btn topic-btn-secondary">Create</button>
+      </div>
+      <div class="topic-ribbon-row">
+        <button id="generateTopicBtn" class="topic-btn topic-btn-secondary" style="flex: 1;">
+          ✨ Generate with AI
+        </button>
+        <button id="clearTopicBtn" class="topic-btn topic-btn-sm">Clear</button>
+      </div>
+      <!-- AI Preview area (hidden by default) -->
+      <div id="topicPreview" class="topic-preview" style="display: none;">
+        <div class="topic-preview-label">AI suggests:</div>
+        <div class="topic-preview-value" id="previewTopicTitle"></div>
+        <div class="topic-preview-actions">
+          <button id="acceptTopicBtn" class="topic-btn topic-btn-primary">Accept</button>
+          <button id="rejectTopicBtn" class="topic-btn topic-btn-sm">Cancel</button>
+        </div>
+      </div>
+      <div id="topicStatus" class="topic-status"></div>
+    </div>
+
+    <textarea id="documentBody" placeholder="Document content..."></textarea>
+  </main>
+
+  <script>
+    const API_BASE = "http://localhost:8000"; // adjust if needed
+
+    const documentTitle = document.getElementById("documentTitle");
+    const documentMeta = document.getElementById("documentMeta");
+    const documentBody = document.getElementById("documentBody");
+    const saveBtn = document.getElementById("saveBtn");
+    const saveStatus = document.getElementById("saveStatus");
+    const deleteBtn = document.getElementById("deleteBtn");
+    const exportClipboardBtn = document.getElementById("exportClipboardBtn");
+    const exportFileBtn = document.getElementById("exportFileBtn");
+    const deleteModal = document.getElementById("deleteModal");
+    const modalClose = document.getElementById("modalClose");
+    const cancelDeleteBtn = document.getElementById("cancelDeleteBtn");
+    const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
+
+    // Topic management elements
+    const topicBadge = document.getElementById("topicBadge");
+    const topicRibbon = document.getElementById("topicRibbon");
+    const currentTopicDisplay = document.getElementById("currentTopicDisplay");
+    const topicDropdown = document.getElementById("topicDropdown");
+    const assignTopicBtn = document.getElementById("assignTopicBtn");
+    const customTopicInput = document.getElementById("customTopicInput");
+    const createCustomTopicBtn = document.getElementById("createCustomTopicBtn");
+    const generateTopicBtn = document.getElementById("generateTopicBtn");
+    const clearTopicBtn = document.getElementById("clearTopicBtn");
+    const topicStatus = document.getElementById("topicStatus");
+    const topicPreview = document.getElementById("topicPreview");
+    const previewTopicTitle = document.getElementById("previewTopicTitle");
+    const acceptTopicBtn = document.getElementById("acceptTopicBtn");
+    const rejectTopicBtn = document.getElementById("rejectTopicBtn");
+
+    // Get document ID from URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const docId = urlParams.get("id");
+
+    if (!docId) {
+      documentTitle.value = "Error: No document ID provided";
+      documentBody.value = "Please provide a document ID in the URL: ?id=document-id";
+      documentTitle.disabled = true;
+      documentBody.disabled = true;
+      saveBtn.disabled = true;
+    } else {
+      loadDocument(docId);
+    }
+
+    let originalTitle = "";
+    let originalText = "";
+    let originalFullText = ""; // Store the complete original text
+    let hasChanges = false;
+    let currentAssignedTopicId = null;
+    let currentAssignedTopicTitle = null;
+    let currentDocumentUrl = null;
+    let currentCapturedAt = null;
+
+    function extractCapturedContent(fullText) {
+      // Find [Captured] marker (case-insensitive, handles variations)
+      const capturedMarker = /\[captured\]/i;
+      const match = fullText.match(capturedMarker);
+      
+      if (match) {
+        // Get everything after the marker
+        const startIndex = match.index + match[0].length;
+        let capturedContent = fullText.substring(startIndex);
+        
+        // Remove leading whitespace/newlines
+        capturedContent = capturedContent.replace(/^\s+/, '');
+        
+        return capturedContent;
+      }
+      
+      // If no [Captured] marker found, return the full text
+      return fullText;
+    }
+
+    async function loadDocument(docId) {
+      documentTitle.value = "Loading…";
+      documentBody.value = "";
+      saveBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`);
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: Failed to load document`);
+        }
+
+        const doc = await res.json();
+
+        originalTitle = doc.title || "";
+        originalFullText = doc.text || "";
+        
+        // Extract only the captured content (everything after [Captured])
+        const capturedContent = extractCapturedContent(originalFullText);
+        originalText = capturedContent; // Store the extracted content as the "original"
+
+        documentTitle.value = originalTitle;
+        documentBody.value = capturedContent;
+
+        const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
+
+        // Store metadata for export
+        currentDocumentUrl = doc.url || null;
+        currentCapturedAt = captured;
+
+        // Update topic badge directly and store for later use
+        currentAssignedTopicId = doc.assigned_topic_id;
+        currentAssignedTopicTitle = doc.assigned_topic_title;
+        currentTopicDisplay.textContent = currentAssignedTopicTitle || "Not assigned";
+        if (currentAssignedTopicTitle) {
+          currentTopicDisplay.classList.remove("unassigned");
+        } else {
+          currentTopicDisplay.classList.add("unassigned");
+        }
+
+        documentMeta.innerHTML = `
+          <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
+          <div>Captured: ${captured}</div>
+        `;
+
+        // Update page title
+        document.title = `${doc.title || "Untitled"} - VaultBubble`;
+
+        saveBtn.disabled = false;
+        hasChanges = false;
+        updateSaveStatus("");
+
+      } catch (err) {
+        console.error("Load error:", err);
+        documentTitle.value = "Error";
+        documentBody.value = "Failed to load document. See console for details.";
+        updateSaveStatus("Error loading document", "error");
+      }
+    }
+
+    function updateSaveStatus(message, type = "") {
+      saveStatus.textContent = message;
+      saveStatus.className = `save-status ${type}`;
+    }
+
+    // Track changes
+    documentTitle.addEventListener("input", () => {
+      hasChanges = documentTitle.value !== originalTitle || documentBody.value !== originalText;
+      if (hasChanges) {
+        updateSaveStatus("Unsaved changes", "unsaved");
+      } else {
+        updateSaveStatus("");
+      }
+    });
+
+    documentBody.addEventListener("input", () => {
+      hasChanges = documentTitle.value !== originalTitle || documentBody.value !== originalText;
+      if (hasChanges) {
+        updateSaveStatus("Unsaved changes", "unsaved");
+      } else {
+        updateSaveStatus("");
+      }
+    });
+
+    // Save functionality
+    async function saveDocument() {
+      if (!docId || !hasChanges) return;
+
+      const title = documentTitle.value.trim();
+      const text = documentBody.value;
+
+      updateSaveStatus("Saving...", "saving");
+      saveBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title || null,
+            text: text
+          })
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const updatedDoc = await res.json();
+
+        originalTitle = updatedDoc.title || "";
+        originalFullText = updatedDoc.text || "";
+        
+        // Extract only the captured content for display
+        const capturedContent = extractCapturedContent(originalFullText);
+        originalText = capturedContent;
+
+        // Update page title
+        document.title = `${updatedDoc.title || "Untitled"} - VaultBubble`;
+
+        hasChanges = false;
+        updateSaveStatus("Saved", "saved");
+        setTimeout(() => updateSaveStatus(""), 2000);
+
+      } catch (err) {
+        console.error("Save error:", err);
+        updateSaveStatus("Error: " + err.message, "error");
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    saveBtn.addEventListener("click", saveDocument);
+
+    // Keyboard shortcut: Ctrl+S to save
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        saveDocument();
+      }
+    });
+
+    // Warn before closing if there are unsaved changes
+    window.addEventListener("beforeunload", (e) => {
+      if (hasChanges) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
+        return e.returnValue;
+      }
+    });
+
+    // Delete functionality
+    function showDeleteModal() {
+      deleteModal.style.display = "block";
+    }
+
+    function hideDeleteModal() {
+      deleteModal.style.display = "none";
+    }
+
+    async function deleteDocument() {
+      if (!docId) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
+          method: "DELETE"
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const result = await res.json();
+        
+        // Show success message briefly, then redirect
+        updateSaveStatus("Document deleted", "saved");
+        
+        // Redirect to main page after a short delay
+        setTimeout(() => {
+          window.location.href = "/static/index.html";
+        }, 1000);
+
+      } catch (err) {
+        console.error("Delete error:", err);
+        updateSaveStatus("Error: " + err.message, "error");
+        hideDeleteModal();
+      }
+    }
+
+    // Event listeners for delete functionality
+    deleteBtn.addEventListener("click", () => {
+      if (hasChanges) {
+        if (!confirm("You have unsaved changes. Do you want to delete anyway? (Changes will be lost)")) {
+          return;
+        }
+      }
+      showDeleteModal();
+    });
+
+    modalClose.addEventListener("click", hideDeleteModal);
+    cancelDeleteBtn.addEventListener("click", hideDeleteModal);
+    
+    confirmDeleteBtn.addEventListener("click", () => {
+      confirmDeleteBtn.disabled = true;
+      confirmDeleteBtn.textContent = "Deleting...";
+      deleteDocument();
+    });
+
+    // Close modal when clicking outside of it
+    window.addEventListener("click", (e) => {
+      if (e.target === deleteModal) {
+        hideDeleteModal();
+      }
+    });
+
+    // -------- TOPIC MANAGEMENT --------
+    
+    let topicRibbonOpen = false;
+    let pendingGeneratedTitle = null; // Stores AI-generated title pending acceptance
+
+    function toggleTopicRibbon() {
+      topicRibbonOpen = !topicRibbonOpen;
+      topicRibbon.classList.toggle("open", topicRibbonOpen);
+      topicBadge.classList.toggle("expanded", topicRibbonOpen);
+      
+      // Load topics when opening (only if not already loaded)
+      if (topicRibbonOpen && topicDropdown.options.length <= 1) {
+        loadTopicsForDocument();
+      }
+    }
+
+    // Toggle ribbon on badge click
+    topicBadge.addEventListener("click", toggleTopicRibbon);
+
+    function updateTopicStatus(message, type = "") {
+      topicStatus.textContent = message;
+      topicStatus.className = `topic-status ${type}`;
+      if (type === "success") {
+        setTimeout(() => {
+          topicStatus.textContent = "";
+          topicStatus.className = "topic-status";
+        }, 3000);
+      }
+    }
+
+    function updateCurrentTopicDisplay(title) {
+      currentTopicDisplay.textContent = title || "Not assigned";
+      if (title) {
+        currentTopicDisplay.classList.remove("unassigned");
+      } else {
+        currentTopicDisplay.classList.add("unassigned");
+      }
+    }
+
+    async function loadTopicsForDocument() {
+      if (!docId) return;
+
+      updateTopicStatus("Loading topics...", "loading");
+      topicDropdown.innerHTML = '<option value="">Loading topics...</option>';
+      topicDropdown.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topics`);
+
+        if (!res.ok) {
+          if (res.status === 400) {
+            // Document has no embeddings yet
+            topicDropdown.innerHTML = '<option value="">Embeddings not ready yet</option>';
+            updateTopicStatus("Document embeddings still processing. Please try again later.", "");
+            return;
+          }
+          throw new Error(`HTTP ${res.status}: Failed to load topics`);
+        }
+
+        const data = await res.json();
+
+        topicDropdown.innerHTML = '<option value="">Select from existing topics...</option>';
+
+        if (data.topics && data.topics.length > 0) {
+          data.topics.forEach((topic) => {
+            const option = document.createElement("option");
+            option.value = topic.id;
+            const simPercent = (topic.similarity * 100).toFixed(1);
+            option.textContent = `${topic.title} (${simPercent}% similar, ${topic.document_count} docs)`;
+            topicDropdown.appendChild(option);
+          });
+          updateTopicStatus("", "");
+        } else {
+          topicDropdown.innerHTML = '<option value="">No existing topics found</option>';
+          updateTopicStatus("No topics available. Create one below.", "");
+        }
+
+        topicDropdown.disabled = false;
+
+      } catch (err) {
+        console.error("Error loading topics:", err);
+        topicDropdown.innerHTML = '<option value="">Error loading topics</option>';
+        updateTopicStatus("Failed to load topics: " + err.message, "error");
+      }
+    }
+
+    async function assignTopic(topicId = null, customTitle = null, generateNew = false) {
+      if (!docId) return;
+
+      const payload = {};
+      if (topicId) payload.topic_id = topicId;
+      if (customTitle) payload.custom_title = customTitle;
+      if (generateNew) payload.generate_new = true;
+
+      updateTopicStatus(generateNew ? "Generating topic with AI..." : "Updating topic...", "loading");
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topic`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const result = await res.json();
+
+        currentAssignedTopicId = result.assigned_topic_id;
+        currentAssignedTopicTitle = result.assigned_topic_title;
+        updateCurrentTopicDisplay(currentAssignedTopicTitle);
+
+        updateTopicStatus(result.message, "success");
+
+        // Clear inputs
+        customTopicInput.value = "";
+        topicDropdown.value = "";
+
+        // Close ribbon after successful assignment
+        setTimeout(() => {
+          topicRibbonOpen = false;
+          topicRibbon.classList.remove("open");
+          topicBadge.classList.remove("expanded");
+          // Reset dropdown so it reloads next time
+          topicDropdown.innerHTML = '<option value="">Select existing topic...</option>';
+        }, 1500);
+
+      } catch (err) {
+        console.error("Error updating topic:", err);
+        updateTopicStatus("Error: " + err.message, "error");
+      }
+    }
+
+    // Event listeners for topic management
+    assignTopicBtn.addEventListener("click", () => {
+      const selectedTopicId = topicDropdown.value;
+      if (!selectedTopicId) {
+        updateTopicStatus("Please select a topic from the dropdown", "error");
+        return;
+      }
+      assignTopic(selectedTopicId);
+    });
+
+    createCustomTopicBtn.addEventListener("click", () => {
+      const customTitle = customTopicInput.value.trim();
+      if (!customTitle) {
+        updateTopicStatus("Please enter a topic title", "error");
+        return;
+      }
+      assignTopic(null, customTitle);
+    });
+
+    // Generate topic with AI - shows preview first
+    async function generateTopicPreview() {
+      if (!docId) return;
+
+      generateTopicBtn.disabled = true;
+      updateTopicStatus("Generating topic with AI...", "loading");
+      topicPreview.style.display = "none";
+      pendingGeneratedTitle = null;
+
+      try {
+        // Call a special endpoint that just generates without assigning
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topic/generate`, {
+          method: "POST"
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const result = await res.json();
+        pendingGeneratedTitle = result.generated_title;
+
+        // Show preview
+        previewTopicTitle.textContent = pendingGeneratedTitle;
+        topicPreview.style.display = "block";
+        updateTopicStatus("", "");
+
+      } catch (err) {
+        console.error("Error generating topic:", err);
+        updateTopicStatus("Error: " + err.message, "error");
+      } finally {
+        generateTopicBtn.disabled = false;
+      }
+    }
+
+    generateTopicBtn.addEventListener("click", generateTopicPreview);
+
+    // Accept the AI-generated topic
+    acceptTopicBtn.addEventListener("click", () => {
+      if (pendingGeneratedTitle) {
+        assignTopic(null, pendingGeneratedTitle);
+        topicPreview.style.display = "none";
+        pendingGeneratedTitle = null;
+      }
+    });
+
+    // Reject/cancel the AI-generated topic
+    rejectTopicBtn.addEventListener("click", () => {
+      topicPreview.style.display = "none";
+      pendingGeneratedTitle = null;
+      updateTopicStatus("", "");
+    });
+
+    clearTopicBtn.addEventListener("click", () => {
+      if (confirm("Clear topic assignment for this document?")) {
+        assignTopic(); // No params = clear assignment
+      }
+    });
+
+    // Allow Enter key to create custom topic
+    customTopicInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        createCustomTopicBtn.click();
+      }
+    });
+
+    // -------- EXPORT FUNCTIONALITY --------
+
+    function generateExportContent() {
+      const title = documentTitle.value.trim() || "Untitled";
+      const content = documentBody.value;
+      const url = currentDocumentUrl || "N/A";
+      const topic = currentAssignedTopicTitle || "Not assigned";
+      const captured = currentCapturedAt || "N/A";
+
+      return `# ${title}
+
+## Metadata
+
+- **Source URL:** ${url}
+- **Assigned Topic:** ${topic}
+- **Captured:** ${captured}
+
+---
+
+## Content
+
+${content}
+`;
+    }
+
+    async function exportToClipboard() {
+      try {
+        const exportContent = generateExportContent();
+        await navigator.clipboard.writeText(exportContent);
+        
+        // Show temporary success message
+        const originalText = exportClipboardBtn.textContent;
+        exportClipboardBtn.textContent = "✓ Copied!";
+        exportClipboardBtn.style.background = "#10b981";
+        exportClipboardBtn.style.borderColor = "#10b981";
+        
+        setTimeout(() => {
+          exportClipboardBtn.textContent = originalText;
+          exportClipboardBtn.style.background = "";
+          exportClipboardBtn.style.borderColor = "";
+        }, 2000);
+      } catch (err) {
+        console.error("Failed to copy to clipboard:", err);
+        alert("Failed to copy to clipboard. Please try again.");
+      }
+    }
+
+    function exportToFile() {
+      try {
+        const exportContent = generateExportContent();
+        const title = documentTitle.value.trim() || "Untitled";
+        
+        // Sanitize filename: remove invalid characters
+        const sanitizedTitle = title
+          .replace(/[<>:"/\\|?*]/g, "_")
+          .replace(/\s+/g, "_")
+          .substring(0, 100); // Limit length
+        
+        const filename = `${sanitizedTitle}.md`;
+        const blob = new Blob([exportContent], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // Clean up the object URL
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+        
+        // Show temporary success message
+        const originalText = exportFileBtn.textContent;
+        exportFileBtn.textContent = "✓ Exported!";
+        exportFileBtn.style.background = "#10b981";
+        exportFileBtn.style.borderColor = "#10b981";
+        
+        setTimeout(() => {
+          exportFileBtn.textContent = originalText;
+          exportFileBtn.style.background = "";
+          exportFileBtn.style.borderColor = "";
+        }, 2000);
+      } catch (err) {
+        console.error("Failed to export file:", err);
+        alert("Failed to export file. Please try again.");
+      }
+    }
+
+    // Event listeners for export functionality
+    exportClipboardBtn.addEventListener("click", exportToClipboard);
+    exportFileBtn.addEventListener("click", exportToFile);
+
+    // Modify loadDocument to also store topic info (topics load lazily when ribbon opens)
+    const originalLoadDocument = loadDocument;
+    loadDocument = async function(docId) {
+      documentTitle.value = "Loading…";
+      documentBody.value = "";
+      saveBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`);
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: Failed to load document`);
+        }
+
+        const doc = await res.json();
+
+        originalTitle = doc.title || "";
+        originalFullText = doc.text || "";
+        
+        // Extract only the captured content (everything after [Captured])
+        const capturedContent = extractCapturedContent(originalFullText);
+        originalText = capturedContent;
+
+        documentTitle.value = originalTitle;
+        documentBody.value = capturedContent;
+
+        // Store topic info and update badge display
+        currentAssignedTopicId = doc.assigned_topic_id;
+        currentAssignedTopicTitle = doc.assigned_topic_title;
+        updateCurrentTopicDisplay(currentAssignedTopicTitle);
+
+        const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
+
+        // Store metadata for export
+        currentDocumentUrl = doc.url || null;
+        currentCapturedAt = captured;
+
+        // Build meta info (topic is shown in badge, not here)
+        documentMeta.innerHTML = `
+          <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
+          <div>Captured: ${captured}</div>
+        `;
+
+        // Update page title
+        document.title = `${doc.title || "Untitled"} - VaultBubble`;
+
+        saveBtn.disabled = false;
+        hasChanges = false;
+        updateSaveStatus("");
+
+        // Reset topic ribbon state (topics load when user clicks badge)
+        topicRibbonOpen = false;
+        topicRibbon.classList.remove("open");
+        topicBadge.classList.remove("expanded");
+        topicDropdown.innerHTML = '<option value="">Select existing topic...</option>';
+
+      } catch (err) {
+        console.error("Load error:", err);
+        documentTitle.value = "Error";
+        documentBody.value = "Failed to load document. See console for details.";
+        updateSaveStatus("Error loading document", "error");
+      }
+    };
+  </script>
+</body>
+</html>

@@ -43,41 +43,17 @@ async function analyzeAndIngest(tab) {
       return;
     }
 
-    // 2) Call /analyzer with the text
-    const analyzerRes = await fetch(`${API_BASE}/analyzer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text })
-    });
-
-    console.log("[VB] /analyzer status:", analyzerRes.status);
-
-    if (!analyzerRes.ok) {
-      const errText = await analyzerRes.text();
-      console.error("[VB] Analyzer error:", analyzerRes.status, errText);
-      await browserAPI.tabs.sendMessage(tab.id, {
-        type: "show-error",
-        error: `Analyzer error: ${analyzerRes.status} ${errText}`
-      });
-      return;
-    }
-
-    const analyzerResult = await analyzerRes.json();
-    console.log("[VB] Analyzer result:", analyzerResult);
-
-    // 3) Show the pretty overlay using analyzerResult
+    // Show success overlay
     await browserAPI.tabs.sendMessage(tab.id, {
       type: "show-result",
-      result: analyzerResult
+      result: { captured: true }
     });
 
-    // 4) Build ingest payload that INCLUDES the scores from analyzer
+    // Build ingest payload
     const ingestPayload = {
       url,
       title,
       text,
-      score_info: analyzerResult.infoScore,
-      score_ai_slop: analyzerResult.aiScore,
       captured_at: new Date().toISOString(),
       mode: "page",
       tags: null
@@ -182,8 +158,6 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
       text: body,
       mode: "selection",
       tags: null,
-      score_info: null,
-      score_ai_slop: null,
       captured_at: new Date().toISOString()
     };
 
@@ -307,8 +281,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       text: combinedText,
       mode: mode || "note",
       tags: tags && tags.length ? tags : null,
-      score_info: null,
-      score_ai_slop: null,
       captured_at: new Date().toISOString()
     };
 

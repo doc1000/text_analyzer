@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>VaultBubble</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <style>
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -129,14 +130,37 @@
     }
 
     #info-panel {
-      width: 320px;
-      max-width: 40vw;
+      width: 33vw;
+      min-width: 300px;
+      max-width: 50vw;
       border-left: 1px solid #1f2937;
       padding: 0.75rem 0.9rem;
       box-sizing: border-box;
       font-size: 0.9rem;
       background: #020617;
       overflow-y: auto;
+      position: relative;
+    }
+
+    #info-panel-resize-handle {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      cursor: ew-resize;
+      background: transparent;
+      z-index: 10;
+    }
+
+    #info-panel-resize-handle:hover {
+      background: #3b82f6;
+      opacity: 0.5;
+    }
+
+    #info-panel-resize-handle.dragging {
+      background: #3b82f6;
+      opacity: 0.8;
     }
 
     #info-panel h2 {
@@ -278,103 +302,6 @@
       text-decoration: underline;
     }
 
-    /* PAGE 2: QUERY LAYOUT (global query) */
-
-    #page-query {
-      flex-direction: column;
-    }
-
-    #query-panel {
-      flex: 1;
-      padding: 1rem 1.5rem;
-      overflow-y: auto;
-    }
-
-    #query-panel h2 {
-      margin: 0 0 0.5rem 0;
-      font-size: 1.1rem;
-    }
-
-    #query-panel p {
-      margin: 0 0 0.75rem 0;
-      font-size: 0.9rem;
-      color: #9ca3af;
-    }
-
-    #queryInput {
-      width: 100%;
-      min-height: 90px;
-      max-height: 220px;
-      padding: 0.6rem;
-      box-sizing: border-box;
-      border-radius: 6px;
-      border: 1px solid #374151;
-      background: #020617;
-      color: #e5e7eb;
-      resize: vertical;
-      font-size: 0.9rem;
-      margin-bottom: 0.5rem;
-    }
-
-    #query-controls {
-      display: flex;
-      gap: 0.75rem;
-      align-items: center;
-      margin-bottom: 0.6rem;
-      font-size: 0.85rem;
-    }
-
-    #query-controls input[type="number"] {
-      width: 3rem;
-      padding: 0.1rem 0.3rem;
-      border-radius: 4px;
-      border: 1px solid #4b5563;
-      background: #020617;
-      color: #e5e7eb;
-    }
-
-    #query-controls button {
-      padding: 0.3rem 0.9rem;
-      border-radius: 999px;
-      border: 1px solid #4b5563;
-      background: #111827;
-      color: #e5e7eb;
-      cursor: pointer;
-      font-size: 0.85rem;
-    }
-
-    #query-controls button:hover {
-      background: #1f2937;
-    }
-
-    #answerContainer {
-      margin-bottom: 0.75rem;
-    }
-
-    #hitsContainer {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      padding-bottom: 1rem;
-    }
-
-    #hitsContainer .hit {
-      border-radius: 6px;
-      border: 1px solid #1f2937;
-      padding: 0.5rem 0.6rem;
-      background: #020617;
-    }
-
-    #hitsContainer .hit-meta {
-      font-size: 0.78rem;
-      color: #9ca3af;
-      margin-bottom: 0.25rem;
-    }
-
-    #hitsContainer .hit-text {
-      font-size: 0.83rem;
-      line-height: 1.3;
-    }
 
     .answer-box {
       padding: 0.75rem;
@@ -394,15 +321,186 @@
       border: 1px solid #374151;
       margin-left: 0.2rem;
     }
+
+    /* Settings Modal Styles */
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    .modal-content {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #374151;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 1.2rem;
+    }
+
+    .close-btn {
+      background: none;
+      border: none;
+      color: #9ca3af;
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .close-btn:hover {
+      color: #e5e7eb;
+    }
+
+    .modal-body {
+      padding: 1.5rem;
+    }
+
+    .settings-section {
+      margin-bottom: 2rem;
+    }
+
+    .settings-section h3 {
+      margin: 0 0 0.75rem 0;
+      font-size: 1rem;
+      color: #e5e7eb;
+    }
+
+    .settings-section label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
+      color: #d1d5db;
+    }
+
+    .settings-section input[type="password"],
+    .settings-section input[type="text"],
+    .settings-section select {
+      width: 100%;
+      padding: 0.5rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .settings-section input[type="password"]:focus,
+    .settings-section input[type="text"]:focus,
+    .settings-section select:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+
+    .model-info {
+      background: #020617;
+      border: 1px solid #374151;
+      border-radius: 4px;
+      padding: 1rem;
+    }
+
+    .model-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    .model-row:last-child {
+      border-bottom: none;
+    }
+
+    .model-label {
+      color: #9ca3af;
+      font-size: 0.85rem;
+    }
+
+    .model-value {
+      color: #e5e7eb;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .save-btn {
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      border: 1px solid #3b82f6;
+      background: #3b82f6;
+      color: white;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-right: 0.5rem;
+    }
+
+    .save-btn:hover {
+      background: #2563eb;
+    }
+
+    .cancel-btn {
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
+    .cancel-btn:hover {
+      background: #1f2937;
+    }
+
+    .settings-actions {
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #374151;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    #keyStatus {
+      margin-top: 0.25rem;
+      font-size: 0.8rem;
+    }
+
+    #keyStatus.has-key {
+      color: #10b981;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>VaultBubble</h1>
+    <h1><img src="/static/icon.svg" alt="V" style="height: 2.6rem; vertical-align: middle; margin-right: -0.3rem; margin-left: -0.2rem;">aultBubble</h1>
     <div class="controls">
       <div class="tabs">
         <button id="tabTopics" class="tab-btn active">Topics Map</button>
-        <button id="tabQuery" class="tab-btn">Query</button>
       </div>
 
       <span>Days:</span>
@@ -415,9 +513,69 @@
       </select>
 
       <button id="reloadBtn">Reload</button>
+      <button id="settingsBtn" title="Settings">⚙️</button>
       <span class="hint" id="headerHint">Click big bubbles to zoom · click document bubbles to open</span>
     </div>
   </header>
+
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button id="closeSettingsBtn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section">
+          <h3>Current Models</h3>
+          <div class="model-info">
+            <div class="model-row">
+              <span class="model-label">Chat Model:</span>
+              <span class="model-value" id="currentChatModel">-</span>
+            </div>
+            <div class="model-row">
+              <span class="model-label">Topic Model:</span>
+              <span class="model-value" id="currentTopicModel">-</span>
+            </div>
+            <div class="model-row">
+              <span class="model-label">Embedding Model:</span>
+              <span class="model-value" id="currentEmbeddingModel">-</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Providers</h3>
+          <label for="chatProviderSelect">Chat Provider (for queries):</label>
+          <select id="chatProviderSelect">
+            <option value="ollama">Ollama (default)</option>
+            <option value="openai">OpenAI</option>
+          </select>
+          
+          <label for="topicProviderSelect" style="margin-top: 1rem;">Topic Provider (for topic generation):</label>
+          <select id="topicProviderSelect">
+            <option value="ollama">Ollama (default)</option>
+            <option value="openai">OpenAI</option>
+          </select>
+          
+          <p class="hint">Choose which provider to use for each function. Ollama is the default and runs locally.</p>
+        </div>
+
+        <div class="settings-section">
+          <h3>OpenAI API Key</h3>
+          <label for="openaiKeyInput">API Key:</label>
+          <input type="password" id="openaiKeyInput" placeholder="sk-..." />
+          <p class="hint" id="keyStatus">No API key set</p>
+          <button id="saveKeyBtn" class="save-btn">Save API Key</button>
+        </div>
+
+        <div class="settings-actions">
+          <button id="saveSettingsBtn" class="save-btn">Save Settings</button>
+          <button id="cancelSettingsBtn" class="cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <main>
     <!-- PAGE 1: Topics Map -->
@@ -427,6 +585,7 @@
         <div id="tooltip"></div>
       </div>
       <aside id="info-panel">
+        <div id="info-panel-resize-handle"></div>
         <h2>Topic Details</h2>
         <p>Select a topic, subtopic, or document bubble to see more information.</p>
         <div id="info-content"></div>
@@ -434,7 +593,7 @@
         <div id="scope-query-panel">
           <h3>Ask within this scope</h3>
           <div id="scope-label" class="meta">Scope: All documents</div>
-          <textarea id="scopeQueryInput" placeholder="Ask about this topic, subtopic, or document…"></textarea>
+          <textarea id="scopeQueryInput" placeholder="Ask questions or for summaries about topics in this bubble.&#10;Can be specific like names or confirm numbers... or more general"></textarea>
           <div class="scope-query-controls">
             <button id="scopeQueryBtn" type="button">Ask</button>
             <span class="hint">Ctrl+Enter to query · scoped to current bubble</span>
@@ -445,43 +604,7 @@
       </aside>
     </section>
 
-    <!-- PAGE 2: Query -->
-    <section id="page-query" class="page">
-      <div id="query-panel">
-        <h2>Ask your vault</h2>
-        <p>Query across your captured documents using semantic search and optional answer synthesis.</p>
 
-        <textarea id="queryInput" placeholder="Ask something across your whole vault, e.g. 'What are the main themes in my recent security-related articles?'"></textarea>
-
-        <div id="query-controls">
-          <label>
-            Top K:
-            <input type="number" id="topK" value="5" min="1" max="20" />
-          </label>
-          <button id="queryBtn">Search</button>
-          <span class="hint">Ctrl+Enter to run query</span>
-        </div>
-
-        <div id="answerContainer"></div>
-        <div id="hitsContainer"></div>
-      </div>
-    </section>
-
-    <!-- PAGE 3: Reader -->
-    <section id="page-reader" class="page">
-      <div id="reader-panel" style="flex:1; padding: 1rem 1.5rem; overflow-y:auto;">
-        <div style="display:flex; gap: 0.75rem; align-items:center; margin-bottom: 0.75rem;">
-          <button id="readerBackBtn" class="tab-btn">← Back</button>
-          <div style="font-size: 0.95rem; color:#9ca3af;">Document Reader</div>
-        </div>
-
-        <h2 id="readerTitle" style="margin:0 0 0.4rem 0;"></h2>
-
-        <div id="readerMeta" style="color:#9ca3af; font-size:0.85rem; margin-bottom: 0.8rem;"></div>
-
-        <div id="readerBody" style="white-space: pre-wrap; line-height: 1.45; font-size: 0.95rem; color:#e5e7eb;"></div>
-      </div>
-    </section>
 
   </main>
 
@@ -492,10 +615,7 @@
     const API_BASE = "http://localhost:8000"; // adjust if needed
 
     // -------- SPA TAB LOGIC --------
-    const tabTopics = document.getElementById("tabTopics");
-    const tabQuery = document.getElementById("tabQuery");
     const pageTopics = document.getElementById("page-topics");
-    const pageQuery = document.getElementById("page-query");
     const headerHint = document.getElementById("headerHint");
 
     const scopeLabel = document.getElementById("scope-label");
@@ -509,37 +629,6 @@
       label: "All documents",
       docIds: null
     };
-
-    const pageReader = document.getElementById("page-reader");
-
-    function showPage(page) {
-      // hide all pages
-      pageTopics.classList.remove("active");
-      pageQuery.classList.remove("active");
-      pageReader.classList.remove("active");
-
-      // reset tabs
-      tabTopics.classList.remove("active");
-      tabQuery.classList.remove("active");
-
-      if (page === "topics") {
-        pageTopics.classList.add("active");
-        tabTopics.classList.add("active");
-        headerHint.textContent = "Click big bubbles to zoom · click document bubbles to open";
-      } else if (page === "query") {
-        pageQuery.classList.add("active");
-        tabQuery.classList.add("active");
-        headerHint.textContent = "Global query across all documents";
-      } else if (page === "reader") {
-        // ✅ this was missing
-        pageReader.classList.add("active");
-        headerHint.textContent = "Reading captured document";
-      }
-    }
-
-
-    tabTopics.addEventListener("click", () => showPage("topics"));
-    tabQuery.addEventListener("click", () => showPage("query"));
 
     // -------- TOPICS MAP (D3) --------
 
@@ -561,6 +650,7 @@
     let circle;        // selection of circles
     let labels;        // selection of text labels
     let lastDocClickedId = null;
+    let zoomToNode = null;  // Will be set by renderBubbleMap to enable zooming from outside
     
     function updateInfoPanel(d) {
       const data = d.data;
@@ -572,12 +662,6 @@
       title.textContent = data.name || "(no name)";
       el.appendChild(title);
 
-      if (data.summary) {
-        const summaryP = document.createElement("p");
-        summaryP.textContent = data.summary;
-        el.appendChild(summaryP);
-      }
-
       if (data.url) {
         const meta = document.createElement("div");
         meta.className = "meta";
@@ -587,11 +671,6 @@
         a.textContent = "Open document";
         meta.appendChild(a);
 
-        if (data.score_info != null || data.score_ai_slop != null) {
-          const scores = document.createElement("div");
-          scores.textContent = ` info: ${data.score_info ?? ""} · ai slop: ${data.score_ai_slop ?? ""}`;
-          meta.appendChild(scores);
-        }
 
         if (data.captured_at) {
           const dt = document.createElement("div");
@@ -600,11 +679,6 @@
           meta.appendChild(dt);
         }
 
-        el.appendChild(meta);
-      } else {
-        const meta = document.createElement("div");
-        meta.className = "meta";
-        meta.textContent = "Aggregated topic / subtopic";
         el.appendChild(meta);
       }
 
@@ -645,6 +719,23 @@
       return ids;
     }
 
+    // Find a node in the hierarchy by document ID
+    function findNodeByDocId(docId) {
+      if (!rootNode) return null;
+      let found = null;
+      (function walk(n) {
+        if (found) return;
+        if (n.data && n.data.doc_id === docId) {
+          found = n;
+          return;
+        }
+        if (n.children) {
+          n.children.forEach(child => walk(child));
+        }
+      })(rootNode);
+      return found;
+    }
+
     function setScopeForNode(d) {
       if (!scopeLabel) return;
 
@@ -674,7 +765,7 @@
       const count = docIds.length;
       currentScope = {
         type: typeLabel.toLowerCase(),
-        label: `${typeLabel}: ${name} (${count} doc${count === 1 ? "" : "s"})`,
+        label: `${typeLabel}: ${name}`,
         docIds
       };
       scopeLabel.textContent = `Scope: ${currentScope.label}`;
@@ -764,13 +855,21 @@
       const res = await fetch(`${API_BASE}/topics/hierarchy?days=${days}`);
       const data = await res.json();
 
+      // Increase size for topics (depth 1) to make them bigger
       const root = d3.hierarchy(data)
-        .sum(d => d.size || 1)
+        .sum(d => {
+          const baseSize = d.size || 1;
+          // Make topics (depth 1) bigger by multiplying their size
+          if (d.depth === 1) {
+            return baseSize * 1.5; // Increase topic bubble size by 50%
+          }
+          return baseSize;
+        })
         .sort((a, b) => (b.value || 0) - (a.value || 0));
 
       const pack = d3.pack()
         .size([width, height])
-        .padding(3);
+        .padding(8); // Increased padding to space bubbles more
 
       const packedRoot = pack(root);
       rootNode = packedRoot;
@@ -791,7 +890,9 @@
         .attr("fill", d => colorByTopicDepth(d))
         .attr("fill-opacity", d => d.depth >= 3 ? 0.55 : 0.9)
         .attr("stroke", "#020617")
-        .attr("stroke-width", 0.6)
+        .attr("stroke-width", 0.4)
+        // Add subtle blur to reduce fine lines and visual noise
+        .style("filter", d => d.depth >= 3 ? "blur(0.5px)" : "blur(0.3px)")
         .on("mouseover", (event, d) => showTooltip(event, d))
         .on("mouseout", hideTooltip)
         .on("click", (event, d) => {
@@ -839,6 +940,19 @@
 
       // Separate group for labels, so they're rendered above circles
       labelGroup = svg.append("g");
+      
+      // Create background rectangles for labels to improve readability
+      // Only show at root level (initially focusNode === rootNode)
+      const labelRects = labelGroup.selectAll("rect.label-bg")
+        .data(nodes)
+        .join("rect")
+        .attr("class", "label-bg")
+        .style("fill", "#e5e9f1")
+        .style("fill-opacity", 0.92)
+        .style("stroke", "none")
+        .style("pointer-events", "none")
+        .style("opacity", 0) // Start hidden, will be shown only at root level
+        .style("display", "none");
 
       labels = labelGroup.selectAll("text.label")
         .data(nodes)
@@ -850,6 +964,9 @@
         .style("pointer-events", "none")
         .style("fill", "#020617")
         .style("font-size", d => d.depth === 1 ? "0.9rem" : "0.9rem")
+        .style("font-weight", "600") // Keep all labels bold for readability
+        // Add subtle text shadow for better readability
+        .style("text-shadow", "0 1px 2px rgba(229, 233, 241, 0.8)")
         // Initial: show ONLY top-level labels
         .style("opacity", d => d.depth === 1 ? 1 : 0)
         .style("display", d => d.depth === 1 ? "inline" : "none")
@@ -859,11 +976,52 @@
         });
 
       // Wrap labels to multiple lines if needed
-      labels.call(d => wrapLabel(
-        d,
-        d.depth === 1 ? 24 : 20,   // chars per line
-        d.depth === 1 ? 4 : 6     // max lines
-      ));
+      // Limit width to bubble diameter (2 * radius)
+      labels.each(function(d) {
+        const bubbleDiameter = d.r * 2;
+        // Estimate character width - font size is 0.9rem ≈ 14.4px
+        const fontSize = 14.4;
+        const estimatedCharWidth = fontSize * 0.6; // Average character width estimate
+        const maxCharsPerLine = Math.floor(bubbleDiameter / estimatedCharWidth);
+        
+        // Use calculated max width, but ensure minimum readability
+        const charsPerLine = Math.max(8, Math.min(maxCharsPerLine, d.depth === 1 ? 30 : 24));
+        const maxLines = d.depth === 1 ? 4 : 6;
+        
+        wrapLabel(d3.select(this), charsPerLine, maxLines);
+      });
+      
+      // Update background rectangles after text wrapping
+      function updateLabelBackgrounds() {
+        labelRects.each(function(d, i) {
+          const textNodes = labelGroup.selectAll("text.label").nodes();
+          const textEl = textNodes[i];
+          if (!textEl || textEl.style.display === "none") {
+            d3.select(this).style("display", "none");
+            return;
+          }
+          
+          try {
+            const bbox = textEl.getBBox();
+            const padding = 5;
+            const transform = d3.select(textEl).attr("transform");
+            
+            d3.select(this)
+              .attr("x", bbox.x - padding)
+              .attr("y", bbox.y - padding)
+              .attr("width", bbox.width + padding * 2)
+              .attr("height", bbox.height + padding * 2)
+              .attr("rx", 4)
+              .attr("transform", transform);
+          } catch (e) {
+            // Skip if bbox not available
+            d3.select(this).style("display", "none");
+          }
+        });
+      }
+      
+      // Update backgrounds after initial render
+      setTimeout(updateLabelBackgrounds, 100);
 
       // Ensure labels are above nodes
       labelGroup.raise();
@@ -882,8 +1040,13 @@
           `translate(${(d.x - v[0]) * k + width / 2},${(d.y - v[1]) * k + height / 2})`;
 
         nodeGroup.selectAll("circle").attr("transform", transform);
-        labelGroup.selectAll("text.label").attr("transform", transform);
         nodeGroup.selectAll("circle").attr("r", d => d.r * k);
+        
+        // Transform labels
+        labelGroup.selectAll("text.label").attr("transform", transform);
+        
+        // Update background rectangles after zoom
+        setTimeout(updateLabelBackgrounds, 50);
       }
 
       function zoom(d) {
@@ -900,35 +1063,64 @@
 
         transition.selectAll("text.label")
           .style("opacity", n => {
-            // Always show top-level topics
-            if (n.depth === 1) return 0.7;
+            // At root, show top-level topics and depth 2 labels
+            if (focusNode === rootNode) {
+              if (n.depth === 1) return 1;
+              if (n.depth === 2) return 1;
+              return 0;
+            }
 
-            // At root, show depth 2 labels as well
-            if (focusNode === rootNode && n.depth === 2) return 1;
-
-            // When zoomed into a topic/subtopic, show its children
+            // When zoomed into a topic/subtopic, show its children (but not the parent)
             if (n.parent === focusNode) return 1;
 
-            // NEW: when focused on a leaf doc, show its own label
+            // When focused on a leaf doc, show its own label
             if (isLeafFocus && n === focusNode) return 1;
 
             return 0;
           })
           .on("end", function (n) {
             const show =
-              (n.depth === 1) ||
-              (focusNode === rootNode && n.depth === 2) ||
+              (focusNode === rootNode && (n.depth === 1 || n.depth === 2)) ||
               (n.parent === focusNode) ||
-              (isLeafFocus && n === focusNode); // NEW
+              (isLeafFocus && n === focusNode);
 
             this.style.display = show ? "inline" : "none";
           });
+        
+        // Update background rectangles visibility - only show at root level
+        transition.selectAll("rect.label-bg")
+          .style("opacity", n => {
+            // Only show backgrounds when at root level (zoomed out)
+            if (focusNode === rootNode) {
+              if (n.depth === 1) return 0.92;
+              return 0;
+            }
+            // Hide backgrounds when zoomed in
+            return 0;
+          })
+          .on("end", function (n) {
+            // Only show backgrounds at root level for top-level topics
+            const show = focusNode === rootNode && n.depth === 1;
+            this.style.display = show ? "inline" : "none";
+            // Update background positions after visibility changes
+            if (show) {
+              setTimeout(updateLabelBackgrounds, 50);
+            }
+          });
       }
+      
+      // Expose zoom function for use outside renderBubbleMap
+      zoomToNode = zoom;
 
 
       // Initial zoom
       zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
       infoContent.innerHTML = "<p>Click a topic bubble to see details. Zoom in to see subtopics.</p>";
+      
+      // Hide all background rectangles initially - they only appear on zoom out
+      labelRects
+        .style("opacity", 0)
+        .style("display", "none");
 
       // Reset zoom & labels on background click: restore top-level labels only
       svg.on("click", () => {
@@ -950,18 +1142,8 @@
 
         infoContent.innerHTML = "<p>Click a topic, subtopic, or document bubble to see details.</p>";
 
-        // If you're also resetting scoped query here, leave that logic in place
-        if (typeof setScopeForNode === "function") {
-          setScopeForNode(null);
-          if (scopeAnswerContainer) scopeAnswerContainer.innerHTML = "";
-          if (scopeHitsContainer) scopeHitsContainer.innerHTML = "";
-        }
-      
-
-        // Reset scoped query to all documents and clear results
+        // Reset scope to all documents but keep query results visible
         setScopeForNode(null);
-        if (scopeAnswerContainer) scopeAnswerContainer.innerHTML = "";
-        if (scopeHitsContainer) scopeHitsContainer.innerHTML = "";
       });
     }
 
@@ -1054,10 +1236,19 @@
           const div = document.createElement("div");
           div.className = "hit";
 
-          // Clicking a result opens the document reader
+          // Clicking a result zooms to the document bubble on the D3 map
           div.addEventListener("click", () => {
             if (hit.document_id) {
-              openReader(hit.document_id);
+              const docNode = findNodeByDocId(hit.document_id);
+              if (docNode && zoomToNode) {
+                lastDocClickedId = hit.document_id;
+                zoomToNode(docNode);
+                updateInfoPanel(docNode);
+                setScopeForNode(docNode);
+              } else {
+                // Fallback: open reader if node not found in current hierarchy
+                openReader(hit.document_id);
+              }
             }
           });
 
@@ -1066,7 +1257,20 @@
 
           const titleSpan = document.createElement("span");
           titleSpan.className = "hit-title";
-          titleSpan.textContent = hit.document_title || "(no title)";
+          // If sentence text is available, show first 200 chars of sentence, otherwise show document title
+          if (hit.sent_text) {
+            // Clean up prefixes: remove [Header], replace [captured] with ": "
+            let cleanedText = hit.sent_text
+              .replace(/^\[Header\]\s*/i, '')  // Remove [Header] prefix
+              .replace(/\[captured\]/gi, ': '); // Replace [captured] with ": "
+            
+            const sentencePreview = cleanedText.length > 200 
+              ? cleanedText.substring(0, 200) + "…" 
+              : cleanedText;
+            titleSpan.textContent = sentencePreview;
+          } else {
+            titleSpan.textContent = hit.document_title || "(no title)";
+          }
 
           const simTag = document.createElement("span");
           simTag.className = "tag";
@@ -1077,21 +1281,8 @@
             simTag.textContent = "sim: n/a";
           }
 
-          const infoTag = document.createElement("span");
-          infoTag.className = "tag";
-          if (hit.score_info != null) {
-            if (hit.score_ai_slop != null) {
-              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info} · slop: ${hit.score_ai_slop.toFixed ? hit.score_ai_slop.toFixed(2) : hit.score_ai_slop}`;
-            } else {
-              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info}`;
-            }
-          } else {
-            infoTag.textContent = "score: n/a";
-          }
-
           meta.appendChild(titleSpan);
           meta.appendChild(simTag);
-          meta.appendChild(infoTag);
           div.appendChild(meta);
 
           scopeHitsContainer.appendChild(div);
@@ -1114,179 +1305,221 @@
       });
     }
 
-    // -------- QUERY PAGE LOGIC --------
 
-    const queryInput = document.getElementById("queryInput");
-    const topKInput = document.getElementById("topK");
-    const queryBtn = document.getElementById("queryBtn");
-    const answerContainer = document.getElementById("answerContainer");
-    const hitsContainer = document.getElementById("hitsContainer");
+    // -------- DOCUMENT OPENING --------
+    async function openReader(docId) {
+      // Open document in a new browser tab
+      const documentUrl = `/static/document.html?id=${encodeURIComponent(docId)}`;
+      window.open(documentUrl, '_blank');
+    }
 
-    async function runQuery() {
-      const query = (queryInput.value || "").trim();
-      const topK = parseInt(topKInput.value, 10) || 5;
+    // -------- SETTINGS MODAL --------
+    const settingsBtn = document.getElementById("settingsBtn");
+    const settingsModal = document.getElementById("settingsModal");
+    const closeSettingsBtn = document.getElementById("closeSettingsBtn");
+    const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+    const cancelSettingsBtn = document.getElementById("cancelSettingsBtn");
+    const chatProviderSelect = document.getElementById("chatProviderSelect");
+    const topicProviderSelect = document.getElementById("topicProviderSelect");
+    const openaiKeyInput = document.getElementById("openaiKeyInput");
+    const saveKeyBtn = document.getElementById("saveKeyBtn");
+    const keyStatus = document.getElementById("keyStatus");
+    const currentChatModel = document.getElementById("currentChatModel");
+    const currentTopicModel = document.getElementById("currentTopicModel");
+    const currentEmbeddingModel = document.getElementById("currentEmbeddingModel");
 
-      if (!query) {
-        alert("Type a question first.");
+    let currentSettings = null;
+
+    // Load settings from API
+    async function loadSettings() {
+      try {
+        const res = await fetch(`${API_BASE}/settings`);
+        if (!res.ok) {
+          console.error("Failed to load settings");
+          return;
+        }
+        currentSettings = await res.json();
+        
+        // Update UI with current settings
+        currentChatModel.textContent = currentSettings.chat_model;
+        currentTopicModel.textContent = currentSettings.topic_model;
+        currentEmbeddingModel.textContent = currentSettings.embedding_model;
+        chatProviderSelect.value = currentSettings.chat_provider;
+        if (topicProviderSelect) {
+          topicProviderSelect.value = currentSettings.topic_provider || "ollama";
+        }
+        
+        // Update API key status
+        if (currentSettings.has_openai_key) {
+          keyStatus.textContent = "✓ API key is set";
+          keyStatus.classList.add("has-key");
+          openaiKeyInput.value = ""; // Don't show the actual key
+          openaiKeyInput.placeholder = "••••••••••••";
+        } else {
+          keyStatus.textContent = "No API key set";
+          keyStatus.classList.remove("has-key");
+          openaiKeyInput.value = "";
+          openaiKeyInput.placeholder = "sk-...";
+        }
+      } catch (error) {
+        console.error("Error loading settings:", error);
+      }
+    }
+
+    // Save settings
+    async function saveSettings() {
+      const updates = {};
+      
+      // Check if chat provider changed
+      if (chatProviderSelect.value !== currentSettings.chat_provider) {
+        updates.chat_provider = chatProviderSelect.value;
+      }
+      
+      // Check if topic provider changed
+      if (topicProviderSelect && topicProviderSelect.value !== (currentSettings.topic_provider || "ollama")) {
+        updates.topic_provider = topicProviderSelect.value;
+      }
+      
+      // Check if API key was entered
+      if (openaiKeyInput.value.trim()) {
+        updates.openai_api_key = openaiKeyInput.value.trim();
+      }
+      
+      if (Object.keys(updates).length === 0) {
+        alert("No changes to save");
         return;
       }
-
-      answerContainer.innerHTML = "";
-      hitsContainer.innerHTML = "<p class='hint'>Searching…</p>";
-
+      
       try {
-        const res = await fetch(`${API_BASE}/query`, {
-          method: "POST",
+        const res = await fetch(`${API_BASE}/settings`, {
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query,
-            top_k: topK,
-            with_answer: true
-          })
+          body: JSON.stringify(updates)
         });
-
-        const data = await res.json();
-
-        hitsContainer.innerHTML = "";
-
-        if (data.answer) {
-          const box = document.createElement("div");
-          box.className = "answer-box";
-          box.textContent = data.answer;
-          answerContainer.innerHTML = "";
-          answerContainer.appendChild(box);
-        } else {
-          answerContainer.innerHTML = "<p class='hint'>No synthesized answer.</p>";
-        }
-
-        if (!data.hits || data.hits.length === 0) {
-          hitsContainer.innerHTML = "<p class='hint'>No matching chunks found.</p>";
-          return;
-        }
-
-        data.hits.forEach((hit, idx) => {
-          const div = document.createElement("div");
-          div.className = "hit";
-
-          const meta = document.createElement("div");
-          meta.className = "hit-meta";
-
-          const link = document.createElement("a");
-          link.href = hit.url;
-          link.target = "_blank";
-          link.textContent = hit.document_title || "(no title)";
-
-          const simTag = document.createElement("span");
-          simTag.className = "tag";
-          const simVal = hit.similarity ?? hit.distance;
-          if (simVal != null) {
-            simTag.textContent = simVal.toFixed ? `sim: ${simVal.toFixed(3)}` : `sim: ${simVal}`;
-          } else {
-            simTag.textContent = "sim: n/a";
-          }
-
-          const infoTag = document.createElement("span");
-          infoTag.className = "tag";
-          if (hit.score_info != null) {
-            if (hit.score_ai_slop != null) {
-              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info} · slop: ${hit.score_ai_slop.toFixed ? hit.score_ai_slop.toFixed(2) : hit.score_ai_slop}`;
-            } else {
-              infoTag.textContent = `info: ${hit.score_info.toFixed ? hit.score_info.toFixed(2) : hit.score_info}`;
-            }
-          } else {
-            infoTag.textContent = "score: n/a";
-          }
-
-          meta.appendChild(link);
-          meta.appendChild(simTag);
-          meta.appendChild(infoTag);
-
-          const text = document.createElement("div");
-          text.className = "hit-text";
-          text.textContent = hit.chunk_text;
-
-          div.appendChild(meta);
-          div.appendChild(text);
-          hitsContainer.appendChild(div);
-        });
-
-      } catch (err) {
-        console.error("Query error:", err);
-        hitsContainer.innerHTML = "<p class='hint'>Error during query. See console.</p>";
-      }
-    }
-
-    if (queryBtn) {
-      queryBtn.addEventListener("click", runQuery);
-    }
-
-    if (queryInput) {
-      queryInput.addEventListener("keydown", (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-          runQuery();
-        }
-      });
-    }
-
-    // -------- READER PAGE HELPERS --------
-    const readerTitle = document.getElementById("readerTitle");
-    const readerMeta = document.getElementById("readerMeta");
-    const readerBody = document.getElementById("readerBody");
-    const readerBackBtn = document.getElementById("readerBackBtn");
-
-    // simple history stack so Back returns where you came from
-    let lastPage = "topics";
-
-    async function openReader(docId) {
-      lastPage = pageTopics.classList.contains("active") ? "topics" : "query";
-      showPage("reader");
-
-      readerTitle.textContent = "Loading…";
-      readerMeta.textContent = "";
-      readerBody.textContent = "";
-
-      const url = `${API_BASE}/documents/${encodeURIComponent(docId)}`;
-      console.log("openReader docId:", docId);
-      console.log("openReader GET:", url);
-
-      try {
-        const res = await fetch(url);
-        console.log("openReader status:", res.status, res.statusText);
-
+        
         if (!res.ok) {
-          readerTitle.textContent = "Error";
-          readerBody.textContent = `Failed to load document ${docId} (HTTP ${res.status})`;
+          const error = await res.json();
+          alert(`Failed to save settings: ${error.detail || "Unknown error"}`);
           return;
         }
-
-        const doc = await res.json();
-        console.log("openReader json ok. text length:", (doc.text || "").length);
-
-        readerTitle.textContent = doc.title || "(no title)";
-
-        const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
-        const info = (doc.score_info != null) ? Number(doc.score_info).toFixed(2) : "n/a";
-        const slop = (doc.score_ai_slop != null) ? Number(doc.score_ai_slop).toFixed(2) : "n/a";
-
-        readerMeta.innerHTML = `
-          <div><a href="${doc.url}" target="_blank">Open source URL</a></div>
-          <div>Captured: ${captured}</div>
-          <div>info: ${info} · ai slop: ${slop}</div>
-        `;
-
-        readerBody.textContent = doc.text || "";
-
-      } catch (err) {
-        console.error("openReader error:", err);
-        readerTitle.textContent = "Error";
-        readerBody.textContent = "Failed to load document. See console for details.";
+        
+        // Reload settings to get updated values
+        await loadSettings();
+        alert("Settings saved successfully!");
+        
+        // Clear the API key input after saving
+        if (updates.openai_api_key) {
+          openaiKeyInput.value = "";
+        }
+      } catch (error) {
+        console.error("Error saving settings:", error);
+        alert("Failed to save settings. Please try again.");
       }
     }
 
+    // Save API key separately
+    async function saveApiKey() {
+      const apiKey = openaiKeyInput.value.trim();
+      if (!apiKey) {
+        alert("Please enter an API key");
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ openai_api_key: apiKey })
+        });
+        
+        if (!res.ok) {
+          const error = await res.json();
+          alert(`Failed to save API key: ${error.detail || "Unknown error"}`);
+          return;
+        }
+        
+        await loadSettings();
+        alert("API key saved successfully!");
+        openaiKeyInput.value = "";
+      } catch (error) {
+        console.error("Error saving API key:", error);
+        alert("Failed to save API key. Please try again.");
+      }
+    }
 
+    // Open settings modal
+    settingsBtn.addEventListener("click", async () => {
+      await loadSettings();
+      settingsModal.style.display = "flex";
+    });
 
+    // Close settings modal
+    function closeSettings() {
+      settingsModal.style.display = "none";
+    }
 
-    readerBackBtn.addEventListener("click", () => showPage(lastPage));
+    closeSettingsBtn.addEventListener("click", closeSettings);
+    cancelSettingsBtn.addEventListener("click", closeSettings);
+    
+    // Close modal when clicking outside
+    settingsModal.addEventListener("click", (e) => {
+      if (e.target === settingsModal) {
+        closeSettings();
+      }
+    });
+
+    // Save settings button
+    saveSettingsBtn.addEventListener("click", async () => {
+      await saveSettings();
+    });
+
+    // Save API key button
+    saveKeyBtn.addEventListener("click", async () => {
+      await saveApiKey();
+    });
+
+    // Load settings on page load
+    loadSettings();
+
+    // -------- INFO PANEL RESIZE --------
+    const infoPanel = document.getElementById("info-panel");
+    const resizeHandle = document.getElementById("info-panel-resize-handle");
+    
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    resizeHandle.addEventListener("mousedown", (e) => {
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = parseInt(window.getComputedStyle(infoPanel).width, 10);
+      resizeHandle.classList.add("dragging");
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+      e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (!isResizing) return;
+      
+      const diff = startX - e.clientX; // Reverse because we're resizing from the left
+      const newWidth = startWidth + diff;
+      const minWidth = 300;
+      const maxWidth = Math.min(window.innerWidth * 0.5, 800); // Max 50vw or 800px
+      
+      if (newWidth >= minWidth && newWidth <= maxWidth) {
+        infoPanel.style.width = newWidth + "px";
+      }
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (isResizing) {
+        isResizing = false;
+        resizeHandle.classList.remove("dragging");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    });
 
   </script>
 </body>

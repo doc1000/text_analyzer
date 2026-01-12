@@ -1031,10 +1031,16 @@ def compute_topics(
                 doc.assigned_topic_id = topic_db_id
                 doc.assigned_topic_title = topic_title
             try:
+                db.flush()  # Flush changes before commit
                 db.commit()
+                # Refresh documents to ensure changes are persisted
+                for doc in docs_list:
+                    db.refresh(doc)
             except Exception as e:
                 db.rollback()
                 print(f"[WARN] Failed to save topic assignments: {e}")
+                import traceback
+                traceback.print_exc()
 
         topic = Topic(
             topic_id=topic_id,

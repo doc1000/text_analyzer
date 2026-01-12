@@ -1,34 +1,9 @@
 -- db/init.sql
+-- Database initialization script for VaultBubble
+-- This script runs automatically when the database container starts for the first time
 
--- Enable pgvector
+-- Enable pgvector extension for vector similarity search
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Example schema; tweak as needed
-
-CREATE TABLE IF NOT EXISTS documents (
-    id UUID PRIMARY KEY,
-    url TEXT,
-    title TEXT,
-    full_text TEXT,
-    score_info REAL,
-    score_ai_slop REAL,
-    captured_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Adjust dimension to match your embedding model
--- e.g. 1536 for OpenAI text-embedding-3-large
-CREATE TABLE IF NOT EXISTS chunks (
-    id UUID PRIMARY KEY,
-    document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
-    chunk_index INT,
-    chunk_text TEXT,
-    embedding vector(1536),
-    score_info REAL,
-    score_ai_slop REAL
-);
-
--- Example index for cosine similarity
-CREATE INDEX IF NOT EXISTS idx_chunks_embedding
-ON chunks
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
+-- Note: Tables are created automatically by SQLAlchemy's Base.metadata.create_all()
+-- in app/db.py when the backend starts. This script only enables the pgvector extension.

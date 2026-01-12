@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # VaultBubble Installation Health Check
 # Linux/macOS script to verify installation
 

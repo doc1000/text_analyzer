@@ -213,6 +213,34 @@ function Test-PortAvailable {
     return -not $connection.TcpTestSucceeded
 }
 
+function Find-AvailablePort {
+    param([int]$StartPort)
+    $port = $StartPort
+    $maxPort = $StartPort + 10
+    
+    while ($port -le $maxPort) {
+        if (Test-PortAvailable -Port $port) {
+            return $port
+        }
+        $port++
+    }
+    
+    # If no port found, return original
+    return $StartPort
+}
+
+function Update-DockerComposePort {
+    param([int]$OldPort, [int]$NewPort)
+    $composeFile = Join-Path $InstallDir "docker-compose.beta.yml"
+    
+    if (Test-Path $composeFile) {
+        $content = Get-Content $composeFile -Raw
+        $content = $content -replace "`"$OldPort`:5432`"", "`"$NewPort`:5432`""
+        Set-Content -Path $composeFile -Value $content -NoNewline
+        Write-Log "Updated docker-compose.beta.yml to use port $NewPort for database" "Green"
+    }
+}
+
 # Main installation process
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -236,11 +264,24 @@ if (-not $SkipDockerCheck) {
 }
 
 # Check port availability
+$dbPort = 5433
 if (-not (Test-PortAvailable -Port 8000)) {
     Write-Log "Warning: Port 8000 is already in use. VaultBubble may not start correctly." "Yellow"
     $continue = Read-Host "Continue anyway? (Y/N)"
     if ($continue -notmatch "^[Yy]") {
         exit 1
+    }
+}
+
+# Check database port and find alternative if needed
+if (-not (Test-PortAvailable -Port $dbPort)) {
+    Write-Log "Port $dbPort is in use. Searching for alternative port..." "Yellow"
+    $dbPort = Find-AvailablePort -StartPort $dbPort
+    if ($dbPort -ne 5433) {
+        Write-Log "Using port $dbPort for database instead of 5433" "Green"
+        Update-DockerComposePort -OldPort 5433 -NewPort $dbPort
+    } else {
+        Write-Log "Warning: Could not find available port. Using 5433 anyway." "Yellow"
     }
 }
 

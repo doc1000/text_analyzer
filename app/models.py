@@ -104,6 +104,12 @@ def register_embedding_model(
     version: str,
     dim: int,
 ) -> EmbeddingModel:
+    """
+    Register an embedding model in the embedding.embedding_model table.
+    
+    Note: This function assumes init_db() has been called first to create
+    the embedding.embedding_model table. If called before init_db(), it will fail.
+    """
     table_name = make_safe_table_name(model_name, version, dim)
     table_location = f"embedding.{table_name}"
 

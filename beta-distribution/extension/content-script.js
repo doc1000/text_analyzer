@@ -79,29 +79,17 @@ function showResultOverlay(result) {
   overlay.style.maxWidth = "260px";
   overlay.style.boxShadow = "0 4px 10px rgba(0,0,0,0.4)";
 
-  const score = (result.score ?? 0).toFixed(1);
-  const lexical = (result.lexical_density ?? 0).toFixed(3);
-  const spec = (result.specificity ?? 0).toFixed(3);
-  const ratio = (result.compression_ratio ?? 0).toFixed(2);
-
-  
-  overlay.textContent = `
+  overlay.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-      <strong style="font-size:14px;">Info Density</strong>
+      <strong style="font-size:14px;">VaultBubble</strong>
       <button id="info-density-close"
               style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;">✕</button>
     </div>
     <div style="margin-bottom:6px;">
-      <span style="font-size:24px;font-weight:bold;">${score}</span>
-      <span style="font-size:11px;opacity:0.7;">/100</span>
+      <span style="font-size:18px;font-weight:bold;">✓ Captured</span>
     </div>
-    <div style="font-size:12px;line-height:1.4;">
-      <div><strong>Lexical density:</strong> ${lexical}</div>
-      <div><strong>Specificity:</strong> ${spec}</div>
-      <div><strong>Compression ratio:</strong> ${ratio}</div>
-    </div>
-    <div style="margin-top:6px;font-size:11px;opacity:0.8;">
-      Higher scores ≈ more specific, information-dense text.
+    <div style="font-size:12px;opacity:0.8;">
+      Page content saved to VaultBubble.
     </div>
   `;
 
@@ -111,6 +99,11 @@ function showResultOverlay(result) {
   if (btn) {
     btn.addEventListener("click", () => overlay.remove());
   }
+  
+  // Auto-hide after 3 seconds
+  setTimeout(() => {
+    if (overlay.parentNode) overlay.remove();
+  }, 3000);
 }
 
 function makeOverlayHeader(titleText) {
@@ -149,52 +142,6 @@ function showErrorOverlay(overlay, errorText) {
   overlay.append(header, body);
 }
 
-function showScoreOverlay(overlay, { score, lexical, spec, ratio }) {
-  overlay.replaceChildren(); // clear
-  const header = makeOverlayHeader("Info Density");
-  header.querySelector("strong").style.fontSize = "14px";
-
-  const scoreRow = document.createElement("div");
-  scoreRow.style.marginBottom = "6px";
-
-  const scoreBig = document.createElement("span");
-  scoreBig.style.fontSize = "24px";
-  scoreBig.style.fontWeight = "bold";
-  scoreBig.textContent = String(score);
-
-  const scoreDenom = document.createElement("span");
-  scoreDenom.style.fontSize = "11px";
-  scoreDenom.style.opacity = "0.7";
-  scoreDenom.textContent = "/100";
-
-  scoreRow.append(scoreBig, document.createTextNode(" "), scoreDenom);
-
-  const stats = document.createElement("div");
-  stats.style.fontSize = "12px";
-  stats.style.lineHeight = "1.4";
-
-  const mkLine = (label, value) => {
-    const line = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = label + ":";
-    line.append(strong, document.createTextNode(" " + String(value)));
-    return line;
-  };
-
-  stats.append(
-    mkLine("Lexical density", lexical),
-    mkLine("Specificity", spec),
-    mkLine("Compression ratio", ratio)
-  );
-
-  const footer = document.createElement("div");
-  footer.style.marginTop = "6px";
-  footer.style.fontSize = "11px";
-  footer.style.opacity = "0.8";
-  footer.textContent = "Higher scores ≈ more specific, information-dense text.";
-
-  overlay.append(header, scoreRow, stats, footer);
-}
 
 
 

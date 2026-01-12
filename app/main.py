@@ -3,6 +3,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import asyncio
 from pydantic import BaseModel
@@ -216,6 +217,19 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 #print("STATIC DIR:", STATIC_DIR)  # optional debug
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/")
+def read_root():
+    """Serve the main index.html page."""
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="index.html not found")
+
+@app.get("/index.html")
+def read_index():
+    """Serve the main index.html page."""
+    return read_root()
 
 @app.get("/topics", response_model=TopicsResponse)
 def get_topics(days: int = 10, db: Session = Depends(get_db)):
@@ -432,6 +446,7 @@ def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
     Get all existing topics sorted by semantic similarity to the document's embedding.
     Most similar topics appear first.
     
+    If the document has an assigned topic, it will be included in the results.
     Uses efficient SQL with pgvector's cosine distance operator.
     """
     # Verify document exists
@@ -443,9 +458,29 @@ def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
     embed_table_name = EMBED_TABLE.__tablename__
     topic_table_name = TOPIC_TABLE.__tablename__
     
+    # Check if document has embeddings
+    check_sql = text(f"""
+        SELECT COUNT(*) FROM embedding.{embed_table_name}
+        WHERE document_id = :doc_id AND embedding IS NOT NULL
+    """)
+    count_result = db.execute(check_sql, {"doc_id": document_id}).scalar()
+    if count_result == 0:
+        raise HTTPException(status_code=400, detail="Document has no embeddings. Please wait for embedding processing.")
+    
+    # Check if any topics exist at all
+    topic_check_sql = text(f"""
+        SELECT COUNT(*) FROM embedding.{topic_table_name}
+        WHERE level_index = 0 AND embedding IS NOT NULL
+    """)
+    topic_count = db.execute(topic_check_sql).scalar()
+    if topic_count == 0:
+        # No topics exist yet - user needs to generate topics first
+        return TopicsListResponse(topics=[])
+    
     # Use raw SQL for efficient pgvector operations:
     # 1. Compute average embedding for document's chunks
     # 2. Order topics by cosine distance (similarity = 1 - distance)
+    # 3. Include assigned topic even if not most similar (using UNION)
     sql = text(f"""
         WITH doc_embedding AS (
             SELECT AVG(embedding) as avg_emb
@@ -461,6 +496,7 @@ def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
         FROM embedding.{topic_table_name} t
         CROSS JOIN doc_embedding de
         WHERE t.level_index = 0
+        AND t.embedding IS NOT NULL
         AND de.avg_emb IS NOT NULL
         ORDER BY t.embedding <=> de.avg_emb ASC
         LIMIT 100
@@ -469,16 +505,51 @@ def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
     result = db.execute(sql, {"doc_id": document_id})
     rows = result.fetchall()
     
+    # If document has an assigned topic, ensure it's in the results
+    assigned_topic_id = doc.assigned_topic_id
+    if assigned_topic_id:
+        # Check if assigned topic is already in results
+        assigned_in_results = any(str(row.id) == str(assigned_topic_id) for row in rows)
+        
+        if not assigned_in_results:
+            # Fetch the assigned topic separately
+            assigned_sql = text(f"""
+                SELECT id, title_text, document_count
+                FROM embedding.{topic_table_name}
+                WHERE id = :topic_id AND level_index = 0
+            """)
+            assigned_result = db.execute(assigned_sql, {"topic_id": assigned_topic_id}).fetchone()
+            
+            if assigned_result:
+                # Calculate similarity for assigned topic
+                similarity_sql = text(f"""
+                    WITH doc_embedding AS (
+                        SELECT AVG(embedding) as avg_emb
+                        FROM embedding.{embed_table_name}
+                        WHERE document_id = :doc_id
+                        AND embedding IS NOT NULL
+                    )
+                    SELECT 1 - (t.embedding <=> de.avg_emb) as similarity
+                    FROM embedding.{topic_table_name} t
+                    CROSS JOIN doc_embedding de
+                    WHERE t.id = :topic_id AND t.embedding IS NOT NULL AND de.avg_emb IS NOT NULL
+                """)
+                similarity_result = db.execute(similarity_sql, {"doc_id": document_id, "topic_id": assigned_topic_id}).scalar()
+                
+                if similarity_result is not None:
+                    # Create a row-like object for the assigned topic
+                    from collections import namedtuple
+                    TopicRow = namedtuple('TopicRow', ['id', 'title_text', 'document_count', 'similarity'])
+                    assigned_row = TopicRow(
+                        id=assigned_result.id,
+                        title_text=assigned_result.title_text,
+                        document_count=assigned_result.document_count,
+                        similarity=float(similarity_result)
+                    )
+                    # Add to beginning of results (most relevant)
+                    rows = [assigned_row] + list(rows)
+    
     if not rows:
-        # Check if it's because document has no embeddings
-        check_sql = text(f"""
-            SELECT COUNT(*) FROM embedding.{embed_table_name}
-            WHERE document_id = :doc_id AND embedding IS NOT NULL
-        """)
-        count_result = db.execute(check_sql, {"doc_id": document_id}).scalar()
-        if count_result == 0:
-            raise HTTPException(status_code=400, detail="Document has no embeddings. Please wait for embedding processing.")
-        # Otherwise, just no topics exist
         return TopicsListResponse(topics=[])
     
     topic_options = [

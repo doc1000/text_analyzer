@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # VaultBubble Beta Installer for Linux/macOS
 # This script installs and configures VaultBubble for beta testing
 
@@ -280,6 +280,42 @@ test_port_available() {
     return 0
 }
 
+find_available_port() {
+    local start_port=$1
+    local port=$start_port
+    local max_port=$((start_port + 10))
+    
+    while [ $port -le $max_port ]; do
+        if test_port_available $port; then
+            echo $port
+            return 0
+        fi
+        port=$((port + 1))
+    done
+    
+    # If no port found, return original
+    echo $start_port
+    return 1
+}
+
+update_docker_compose_port() {
+    local old_port=$1
+    local new_port=$2
+    local compose_file="$INSTALL_DIR/docker-compose.beta.yml"
+    
+    if [ -f "$compose_file" ]; then
+        # Use sed to replace the port mapping
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS uses BSD sed
+            sed -i '' "s/\"${old_port}:5432\"/\"${new_port}:5432\"/g" "$compose_file"
+        else
+            # Linux uses GNU sed
+            sed -i "s/\"${old_port}:5432\"/\"${new_port}:5432\"/g" "$compose_file"
+        fi
+        log "Updated docker-compose.beta.yml to use port $new_port for database" "green"
+    fi
+}
+
 # Main installation process
 echo ""
 echo "========================================"
@@ -303,12 +339,25 @@ if [ "$SKIP_DOCKER_CHECK" = false ]; then
 fi
 
 # Check port availability
+DB_PORT=5433
 if ! test_port_available 8000; then
     log "Warning: Port 8000 is already in use. VaultBubble may not start correctly." "yellow"
     echo -n "Continue anyway? (y/n): "
     read -r continue_response
     if [[ ! "$continue_response" =~ ^[Yy] ]]; then
         exit 1
+    fi
+fi
+
+# Check database port and find alternative if needed
+if ! test_port_available $DB_PORT; then
+    log "Port $DB_PORT is in use. Searching for alternative port..." "yellow"
+    DB_PORT=$(find_available_port $DB_PORT)
+    if [ "$DB_PORT" != "5433" ]; then
+        log "Using port $DB_PORT for database instead of 5433" "green"
+        update_docker_compose_port 5433 $DB_PORT
+    else
+        log "Warning: Could not find available port. Using 5433 anyway." "yellow"
     fi
 fi
 

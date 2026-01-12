@@ -117,9 +117,19 @@ def chunk_text(text: str, max_char: int = MAX_CHARS_PER_CHUNK) -> List[str]:
 _client_instance = None
 
 def get_openai_client():
-    """Get or create OpenAI client with current API key."""
+    """Get or create OpenAI client with current API key.
+    
+    Only creates client if API key is available. Returns None if no key is set.
+    """
     global _client_instance
     api_key = os.getenv("OPENAI_API_KEY")
+    
+    # Don't create client if no API key is set
+    if not api_key or api_key.strip() == "":
+        _client_instance = None
+        return None
+    
+    # Create or update client if key changed
     if _client_instance is None or (hasattr(_client_instance, 'api_key') and _client_instance.api_key != api_key):
         _client_instance = OpenAI(api_key=api_key)
     return _client_instance
@@ -127,13 +137,19 @@ def get_openai_client():
 def update_openai_client(api_key: str):
     """Update the OpenAI client with a new API key."""
     global _client_instance
-    os.environ["OPENAI_API_KEY"] = api_key
-    _client_instance = OpenAI(api_key=api_key)
-
-# Initialize client
-client = get_openai_client()
+    if api_key and api_key.strip():
+        os.environ["OPENAI_API_KEY"] = api_key
+        _client_instance = OpenAI(api_key=api_key)
+    else:
+        # Clear the client if empty key provided
+        os.environ.pop("OPENAI_API_KEY", None)
+        _client_instance = None
 
 def _openai_chat(prompt: str) -> str:
+    client = get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI API key not set. Please configure it in settings or set OPENAI_API_KEY environment variable.")
+    
     model_name = PREFERENCES.models.llm_model
     
     # Ensure we're using a valid OpenAI model (not an Ollama model name)
@@ -143,7 +159,7 @@ def _openai_chat(prompt: str) -> str:
         # Fallback to a default OpenAI model if llm_model is set to an Ollama model
         model_name = "gpt-4o-mini"
     
-    resp = get_openai_client().chat.completions.create(
+    resp = client.chat.completions.create(
         model=model_name,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -388,8 +404,11 @@ def get_embedding(text: str) -> List[float]:
         vec = _ollama_embed(text)
     else:
         # OpenAI embeddings
+        client = get_openai_client()
+        if client is None:
+            raise RuntimeError("OpenAI API key not set. Please configure it in settings or set OPENAI_API_KEY environment variable.")
         model_name = PREFERENCES.models.embedding_model
-        resp = get_openai_client().embeddings.create(model=model_name, input=text)
+        resp = client.embeddings.create(model=model_name, input=text)
         vec = resp.data[0].embedding
     
     # Ensure consistent array format
@@ -501,8 +520,11 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
         return _ollama_embed_batch(texts)
     
     # OpenAI batch embedding
+    client = get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI API key not set. Please configure it in settings or set OPENAI_API_KEY environment variable.")
     model_name = PREFERENCES.models.embedding_model
-    resp = get_openai_client().embeddings.create(
+    resp = client.embeddings.create(
         model=model_name,
         input=texts  # OpenAI accepts list of strings
     )
