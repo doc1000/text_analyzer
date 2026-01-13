@@ -85,6 +85,18 @@ class QueryConfig:
     """Configuration for query answer generation."""
     max_prompt_chars: int = 2000                 # Maximum chars in prompt sent to LLM (prevents timeouts with small models)
     max_context_chars: int = 1500                 # Maximum chars for context portion (leaves room for prompt template)
+    
+    def get_max_context_chars(self, chat_provider: str = "ollama") -> int:
+        """Get context limit based on chat provider. OpenAI gets more context."""
+        if chat_provider == "openai":
+            return 5000  # OpenAI models can handle longer context
+        return self.max_context_chars  # Default for Ollama
+    
+    def get_max_prompt_chars(self, chat_provider: str = "ollama") -> int:
+        """Get prompt limit based on chat provider. OpenAI gets more context."""
+        if chat_provider == "openai":
+            return 6000  # OpenAI models can handle longer prompts
+        return self.max_prompt_chars  # Default for Ollama
 
 @dataclass
 class OllamaConfig:

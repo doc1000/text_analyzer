@@ -279,9 +279,11 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
     )
     template_size = len(prompt_template)
     
-    # Get max context size from config (leaves room for prompt template)
-    max_context_chars = PREFERENCES.query.max_context_chars
-    max_prompt_chars = PREFERENCES.query.max_prompt_chars
+    # Get max context size from config based on chat provider
+    # OpenAI gets longer context limits than Ollama
+    chat_provider = getattr(PREFERENCES.models, "chat_provider", "ollama")
+    max_context_chars = PREFERENCES.query.get_max_context_chars(chat_provider)
+    max_prompt_chars = PREFERENCES.query.get_max_prompt_chars(chat_provider)
     
     # Group hits by chunk (document_id + chunk_index) and sort sentences within each chunk by sent_index
     from collections import defaultdict
@@ -372,8 +374,6 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
         else:
             # Even template is too large (shouldn't happen), use minimal prompt
             prompt = f"Question: {query}\n\nAnswer based on the provided context."
-
-    chat_provider = getattr(PREFERENCES.models, "chat_provider", "ollama")
 
     if chat_provider == "ollama":
         text = _ollama_chat(prompt)

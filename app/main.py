@@ -229,20 +229,34 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     # Convert to numpy array for pgvector compatibility
     q_emb = np.array(q_emb, dtype=np.float32)
 
-    # 2) cosine distance → similarity
-    # Use pgvector's cosine distance operator (<=>) directly
-    # cosine_distance returns distance (0=same, 1=opposite), so similarity = 1 - distance
-    # Query sentence embeddings instead of chunk embeddings
-    similarity_expr = 1 - SENTENCE_TABLE.embedding.cosine_distance(q_emb)
-
-    # base query: sentences with non-null embeddings joined to chunks and documents
-    # Join path: SENTENCE_TABLE → EMBED_TABLE → Document
-    base_query = (
-        db.query(SENTENCE_TABLE, EMBED_TABLE, Document, similarity_expr.label("similarity"))
-        .join(EMBED_TABLE, SENTENCE_TABLE.chunk_id == EMBED_TABLE.id)
-        .join(Document, EMBED_TABLE.document_id == Document.id)
-        .filter(SENTENCE_TABLE.embedding != None)  # ← ignore NULL embeddings
-    )
+    # 2) Choose embedding table based on chat provider
+    # OpenAI: use chunk embeddings (longer context, better for OpenAI models)
+    # Ollama: use sentence embeddings (shorter context, better for smaller models)
+    chat_provider = getattr(PREFERENCES.models, "chat_provider", "ollama")
+    use_chunk_embeddings = (chat_provider == "openai")
+    
+    if use_chunk_embeddings:
+        # Query chunk embeddings directly
+        similarity_expr = 1 - EMBED_TABLE.embedding.cosine_distance(q_emb)
+        
+        # base query: chunks with non-null embeddings joined to documents
+        base_query = (
+            db.query(EMBED_TABLE, Document, similarity_expr.label("similarity"))
+            .join(Document, EMBED_TABLE.document_id == Document.id)
+            .filter(EMBED_TABLE.embedding != None)  # ← ignore NULL embeddings
+        )
+    else:
+        # Query sentence embeddings (default for Ollama)
+        similarity_expr = 1 - SENTENCE_TABLE.embedding.cosine_distance(q_emb)
+        
+        # base query: sentences with non-null embeddings joined to chunks and documents
+        # Join path: SENTENCE_TABLE → EMBED_TABLE → Document
+        base_query = (
+            db.query(SENTENCE_TABLE, EMBED_TABLE, Document, similarity_expr.label("similarity"))
+            .join(EMBED_TABLE, SENTENCE_TABLE.chunk_id == EMBED_TABLE.id)
+            .join(Document, EMBED_TABLE.document_id == Document.id)
+            .filter(SENTENCE_TABLE.embedding != None)  # ← ignore NULL embeddings
+        )
 
     # 2b) Optional scoping by document IDs
     if payload.doc_ids:
@@ -274,31 +288,36 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     )
 
     hits: List[ChunkHit] = []
-    seen_sentence_texts = set()
+    seen_chunks = set()
     
-    for sentence, chunk, doc, similarity in rows:
-        # Deduplicate by sentence text content to avoid showing same text multiple times
-        sent_text_normalized = (sentence.sent_text or "").strip()
-        
-        if sent_text_normalized and sent_text_normalized not in seen_sentence_texts:
-            seen_sentence_texts.add(sent_text_normalized)
-            hits.append(
-                ChunkHit(
-                    document_id=str(doc.id),
-                    document_title=doc.title,
-                    url=doc.url,
-                    chunk_index=chunk.chunk_index,
-                    chunk_text=chunk.chunk_text,
-                    sent_text=sentence.sent_text,
-                    sent_index=sentence.sent_index,
-                    similarity=float(similarity),
+    if use_chunk_embeddings:
+        # Process chunk embeddings (OpenAI)
+        for chunk, doc, similarity in rows:
+            # Deduplicate by chunk position
+            chunk_key = (str(doc.id), chunk.chunk_index)
+            if chunk_key not in seen_chunks:
+                seen_chunks.add(chunk_key)
+                hits.append(
+                    ChunkHit(
+                        document_id=str(doc.id),
+                        document_title=doc.title,
+                        url=doc.url,
+                        chunk_index=chunk.chunk_index,
+                        chunk_text=chunk.chunk_text,
+                        sent_text=None,  # No sentence text when using chunks
+                        sent_index=None,
+                        similarity=float(similarity),
+                    )
                 )
-            )
-        elif not sent_text_normalized:
-            # If no sentence text, still add but deduplicate by position
-            pos_key = (str(doc.id), chunk.chunk_index, sentence.sent_index)
-            if pos_key not in seen_sentence_texts:
-                seen_sentence_texts.add(pos_key)
+    else:
+        # Process sentence embeddings (Ollama)
+        seen_sentence_texts = set()
+        for sentence, chunk, doc, similarity in rows:
+            # Deduplicate by sentence text content to avoid showing same text multiple times
+            sent_text_normalized = (sentence.sent_text or "").strip()
+            
+            if sent_text_normalized and sent_text_normalized not in seen_sentence_texts:
+                seen_sentence_texts.add(sent_text_normalized)
                 hits.append(
                     ChunkHit(
                         document_id=str(doc.id),
@@ -311,6 +330,23 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
                         similarity=float(similarity),
                     )
                 )
+            elif not sent_text_normalized:
+                # If no sentence text, still add but deduplicate by position
+                pos_key = (str(doc.id), chunk.chunk_index, sentence.sent_index)
+                if pos_key not in seen_sentence_texts:
+                    seen_sentence_texts.add(pos_key)
+                    hits.append(
+                        ChunkHit(
+                            document_id=str(doc.id),
+                            document_title=doc.title,
+                            url=doc.url,
+                            chunk_index=chunk.chunk_index,
+                            chunk_text=chunk.chunk_text,
+                            sent_text=sentence.sent_text,
+                            sent_index=sentence.sent_index,
+                            similarity=float(similarity),
+                        )
+                    )
 
     answer = None
     if payload.with_answer and hits:
