@@ -617,6 +617,63 @@ def _find_matching_topic(
     return None
 
 
+def assign_document_to_best_topic(
+    db: Session,
+    doc: Document,
+    similarity_threshold: float = 0.75
+) -> bool:
+    """
+    Assign a document to the best matching existing topic based on semantic similarity.
+    
+    Args:
+        db: Database session
+        doc: Document to assign
+        similarity_threshold: Minimum similarity to assign (default 0.75)
+    
+    Returns:
+        True if document was assigned to a topic, False otherwise
+    """
+    try:
+        # Skip if document already has a topic assignment
+        if doc.assigned_topic_id:
+            return True
+        
+        # Compute document embedding
+        doc_embeddings = compute_document_embeddings(db, [doc])
+        if doc.id not in doc_embeddings:
+            print(f"[Topic Assignment] Document {doc.id} has no embeddings, skipping topic assignment")
+            return False
+        
+        doc_embedding = doc_embeddings[doc.id]
+        
+        # Find best matching topic
+        match_result = _find_matching_topic(
+            db=db,
+            centroid=doc_embedding,
+            similarity_threshold=similarity_threshold,
+            level_index=0  # Top-level topics only
+        )
+        
+        if match_result:
+            topic_id, topic_title, topic_summary = match_result
+            # Assign document to topic
+            doc.assigned_topic_id = topic_id
+            doc.assigned_topic_title = topic_title
+            db.commit()
+            print(f"[Topic Assignment] Assigned document {doc.id} to topic: {topic_title}")
+            return True
+        else:
+            print(f"[Topic Assignment] No matching topic found for document {doc.id} (threshold: {similarity_threshold})")
+            return False
+            
+    except Exception as e:
+        print(f"[Topic Assignment] Error assigning document {doc.id} to topic: {e}")
+        import traceback
+        traceback.print_exc()
+        db.rollback()
+        return False
+
+
 # ---------- URL canonicalization ----------
 
 def canonicalize_url(url: str) -> str:
@@ -854,6 +911,60 @@ def compute_topics(
         if unassigned_docs:
             topic_docs = [TopicDoc.model_validate(d) for d in unassigned_docs]
             title, summary = _generate_title_and_summary(unassigned_docs, db=db, doc_embeddings=doc_embeddings)
+            
+            # Try to persist topic if persistence is enabled
+            topic_db_id = None
+            if PREFERENCES.topic_persistence.persist_topics:
+                # Compute centroid for this small group
+                from .mmr import compute_centroid
+                doc_emb_list = [doc_embeddings[d.id] for d in unassigned_docs if d.id in doc_embeddings]
+                centroid = compute_centroid(doc_emb_list, normalize=True) if doc_emb_list else None
+                
+                if centroid is not None:
+                    # Check for existing match
+                    existing_match = _find_matching_topic(
+                        db, centroid,
+                        similarity_threshold=PREFERENCES.topic_persistence.similarity_threshold_topic,
+                        level_index=0
+                    )
+                    
+                    if existing_match:
+                        topic_db_id, title, summary = existing_match
+                        print(f"♻ Reusing existing topic for small group: {title}")
+                    else:
+                        # Save new topic
+                        try:
+                            topic_db_id = _save_topic_to_db(
+                                db=db,
+                                title=title,
+                                centroid=centroid,
+                                document_count=len(unassigned_docs),
+                                summary=summary,
+                                level_index=0
+                            )
+                            print(f"✓ Created new topic for small group: {title} (ID: {topic_db_id})")
+                        except Exception as e:
+                            print(f"[ERROR] Failed to save topic for small group: {e}")
+                            topic_db_id = None
+            
+            # Assign documents to topic
+            for doc in unassigned_docs:
+                doc.assigned_topic_title = title
+                if topic_db_id:
+                    doc.assigned_topic_id = topic_db_id
+            
+            try:
+                db.flush()
+                db.commit()
+                for doc in unassigned_docs:
+                    db.refresh(doc)
+                print(f"[Topics] Assigned {len(unassigned_docs)} documents to topic: {title}")
+            except Exception as e:
+                db.rollback()
+                print(f"[WARN] Failed to save topic assignments for small group: {e}")
+                import traceback
+                traceback.print_exc()
+            
             single_topic = Topic(
                 topic_id=f"T{topic_idx_counter}",
                 title=title,
@@ -1048,21 +1159,26 @@ def compute_topics(
         subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title, topic_db_id)
 
         # Save topic assignment to each document in this cluster
-        if topic_db_id:
-            for doc in docs_list:
+        # Always assign documents to topics, even if topic_db_id is None (persistence disabled)
+        # This ensures documents show up with their topic assignments in the UI
+        for doc in docs_list:
+            doc.assigned_topic_title = topic_title
+            if topic_db_id:
                 doc.assigned_topic_id = topic_db_id
-                doc.assigned_topic_title = topic_title
-            try:
-                db.flush()  # Flush changes before commit
-                db.commit()
-                # Refresh documents to ensure changes are persisted
-                for doc in docs_list:
-                    db.refresh(doc)
-            except Exception as e:
-                db.rollback()
-                print(f"[WARN] Failed to save topic assignments: {e}")
-                import traceback
-                traceback.print_exc()
+            # If topic_db_id is None, leave assigned_topic_id as None but still set the title
+        
+        try:
+            db.flush()  # Flush changes before commit
+            db.commit()
+            # Refresh documents to ensure changes are persisted
+            for doc in docs_list:
+                db.refresh(doc)
+            print(f"[Topics] Assigned {len(docs_list)} documents to topic: {topic_title}")
+        except Exception as e:
+            db.rollback()
+            print(f"[WARN] Failed to save topic assignments: {e}")
+            import traceback
+            traceback.print_exc()
 
         topic = Topic(
             topic_id=topic_id,

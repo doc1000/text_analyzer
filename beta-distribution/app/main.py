@@ -32,6 +32,7 @@ from .topics import (
     build_topics_hierarchy,
     get_topics_with_cache,
     clear_topics_cache,
+    assign_document_to_best_topic,
 )
 from .config import PREFERENCES
 from .helpers import update_openai_client
@@ -102,6 +103,18 @@ def _process_document_embeddings_background(document_id: str):
             print(f"[INFO] Starting background embedding for document {document_id}")
             chunk_len = embed_doc_chunks(doc)
             print(f"[INFO] Completed embedding for document {document_id}: {chunk_len} chunks")
+            
+            # Refresh document to get latest state
+            db.refresh(doc)
+            
+            # Try to assign document to best matching topic (if topics exist)
+            if chunk_len > 0:
+                print(f"[INFO] Attempting topic assignment for document {document_id}")
+                assigned = assign_document_to_best_topic(db, doc, similarity_threshold=0.75)
+                if assigned:
+                    print(f"[INFO] Document {document_id} assigned to topic")
+                else:
+                    print(f"[INFO] Document {document_id} left unassigned (will be assigned during topic computation)")
         except Exception as e:
             print(f"[ERROR] Failed to process embeddings for document {document_id}: {e}")
             import traceback
@@ -119,8 +132,9 @@ def _process_document_embeddings_background(document_id: str):
 @app.post("/ingest")
 def ingest(payload: IngestPayload, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
-    Ingest a new document. The document is saved immediately with a temporary topic.
+    Ingest a new document. The document is saved immediately without a topic assignment.
     Embedding and chunking happen asynchronously in the background.
+    Topics will be assigned automatically during topic computation.
     
     If PDF URLs are provided, they will be parsed and their text appended to the document.
     """
@@ -158,13 +172,13 @@ def ingest(payload: IngestPayload, background_tasks: BackgroundTasks, db: Sessio
             detail="No text content found. Please ensure the page has text or PDFs are accessible."
         )
 
-    # Create document with temporary topic assignment
+    # Create document without topic assignment - topics will be assigned during topic computation
     doc = models.Document(
         url=payload.url,
         title=payload.title,
         full_text=full_text,
         captured_at=captured_at,
-        assigned_topic_title="Temporary Topic",  # Assign temporary topic immediately
+        # No topic assignment - documents will be assigned to topics during topic computation
     )
 
     db.add(doc)
