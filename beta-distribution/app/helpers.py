@@ -39,7 +39,7 @@ class DocumentOut(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    top_k: int = 15
+    top_k: int = 25
     with_answer: bool = True
     doc_ids: Optional[List[str]] = None
 
@@ -270,7 +270,7 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
     prompt_template = (
         "You are a helpful assistant. Using ONLY the context below, "
         "Only respond with the answer to the question, do not include any other text.\n"
-        "answer the user's question concisely.\n\n"
+        #"answer the user's question concisely.\n\n"
         f"Question: {query}\n\n"
         "Context:\n"
     )
