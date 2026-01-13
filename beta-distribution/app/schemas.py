@@ -12,6 +12,7 @@ class IngestPayload(BaseModel):
     mode: Literal["page", "selection", "note"] = "page"
     tags: Optional[List[str]] = None
     captured_at: Optional[datetime] = None
+    pdf_urls: Optional[List[str]] = None  # URLs of embedded PDFs to parse
 
     # ---------- Pydantic response models ----------
 
@@ -64,9 +65,7 @@ class SettingsResponse(BaseModel):
     chat_provider: str
     embedding_provider: str
     topic_provider: str
-    has_openai_key: bool  # Whether API key is set (without revealing it)
-
-class SettingsUpdateRequest(BaseModel):
+    has_openai_key: bool  # Whether API key is set (without revealing it)class SettingsUpdateRequest(BaseModel):
     chat_provider: Optional[Literal["openai", "ollama"]] = None
     embedding_provider: Optional[Literal["openai", "ollama"]] = None
     topic_provider: Optional[Literal["openai", "ollama"]] = None

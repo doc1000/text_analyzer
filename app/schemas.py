@@ -12,6 +12,7 @@ class IngestPayload(BaseModel):
     mode: Literal["page", "selection", "note"] = "page"
     tags: Optional[List[str]] = None
     captured_at: Optional[datetime] = None
+    pdf_urls: Optional[List[str]] = None  # URLs of embedded PDFs to parse
 
     # ---------- Pydantic response models ----------
 

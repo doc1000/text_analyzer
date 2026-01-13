@@ -1,5 +1,105 @@
 function extractPageText() {
-  return document.body ? (document.body.innerText || "") : "";
+  let text = document.body ? (document.body.innerText || "") : "";
+  
+  // Detect PDF iframes/embeds and extract their URLs
+  const pdfUrls = [];
+  const currentUrl = window.location.href;
+  
+  // Check if current page is a direct PDF URL (common on arxiv.org, etc.)
+  // Pattern: /pdf/ or ends with .pdf or content-type is application/pdf
+  const isDirectPdf = currentUrl.match(/\/pdf\//) || 
+                      currentUrl.endsWith('.pdf') || 
+                      currentUrl.includes('/pdf?') ||
+                      document.contentType === 'application/pdf';
+  
+  if (isDirectPdf) {
+    // Current page IS a PDF - add it to PDF URLs
+    pdfUrls.push(currentUrl);
+    console.log("[VB CS] Detected direct PDF URL:", currentUrl);
+  }
+  
+  // Special handling for arxiv.org abstract pages - extract PDF URL
+  if (currentUrl.includes('arxiv.org/abs/')) {
+    // Convert abstract URL to PDF URL
+    // e.g., https://arxiv.org/abs/2512.13564 -> https://arxiv.org/pdf/2512.13564.pdf
+    const paperId = currentUrl.match(/arxiv\.org\/abs\/([^\/?#]+)/);
+    if (paperId && paperId[1]) {
+      const pdfUrl = `https://arxiv.org/pdf/${paperId[1]}.pdf`;
+      pdfUrls.push(pdfUrl);
+      console.log("[VB CS] Extracted arxiv PDF URL:", pdfUrl);
+    }
+  }
+  
+  // Check for PDF iframes
+  const pdfIframes = document.querySelectorAll('iframe[src*=".pdf"], iframe[src*="/pdf"], iframe[src*="application/pdf"]');
+  pdfIframes.forEach(iframe => {
+    const src = iframe.src || iframe.getAttribute('data-src') || iframe.getAttribute('data-url');
+    if (src) {
+      // Resolve relative URLs
+      try {
+        const absoluteUrl = new URL(src, window.location.href).href;
+        if (absoluteUrl.includes('.pdf') || absoluteUrl.includes('/pdf') || absoluteUrl.includes('application/pdf')) {
+          pdfUrls.push(absoluteUrl);
+        }
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+  });
+  
+  // Check for embed tags
+  const pdfEmbeds = document.querySelectorAll('embed[type="application/pdf"], object[type="application/pdf"]');
+  pdfEmbeds.forEach(embed => {
+    const src = embed.src || embed.getAttribute('data') || embed.getAttribute('data-src');
+    if (src) {
+      try {
+        const absoluteUrl = new URL(src, window.location.href).href;
+        pdfUrls.push(absoluteUrl);
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+  });
+  
+  // Check for links to PDFs (common on academic sites)
+  const pdfLinks = document.querySelectorAll('a[href$=".pdf"], a[href*=".pdf?"], a[href*="/pdf"]');
+  pdfLinks.forEach(link => {
+    const href = link.href;
+    if (href && !pdfUrls.includes(href)) {
+      try {
+        const absoluteUrl = new URL(href, window.location.href).href;
+        if (absoluteUrl.includes('.pdf')) {
+          pdfUrls.push(absoluteUrl);
+        }
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+  });
+  
+  // For arxiv abstract pages, also look for "Download PDF" links
+  if (currentUrl.includes('arxiv.org/abs/')) {
+    const downloadLinks = document.querySelectorAll('a[href*="/pdf/"], a[href*=".pdf"]');
+    downloadLinks.forEach(link => {
+      const href = link.href || link.getAttribute('href');
+      if (href && href.includes('/pdf/') && !pdfUrls.includes(href)) {
+        try {
+          const absoluteUrl = new URL(href, window.location.href).href;
+          pdfUrls.push(absoluteUrl);
+        } catch (e) {
+          // Invalid URL, skip
+        }
+      }
+    });
+  }
+  
+  // Remove duplicates
+  const uniquePdfUrls = [...new Set(pdfUrls)];
+  
+  return {
+    text: text,
+    pdfUrls: uniquePdfUrls
+  };
 }
 
 // Handle analyzer-related messages + overlay
@@ -7,8 +107,33 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[VB CS] message received:", message);
   
   if (message && message.type === "VB_GET_SELECTION_CONTEXT") {
+      let selectionText = "";
+      
+      // Try to get selection from window.getSelection() (works for HTML pages)
       const selection = window.getSelection();
-      const selectionText = selection ? selection.toString() : "";
+      if (selection && selection.toString().trim()) {
+        selectionText = selection.toString();
+      } else {
+        // For PDF pages or when selection doesn't work, try alternative methods
+        // Check if we're on a PDF page
+        const isPdf = window.location.href.match(/\/pdf\//) || 
+                     window.location.href.endsWith('.pdf') ||
+                     document.contentType === 'application/pdf';
+        
+        if (isPdf) {
+          // On PDF pages, selection might not work via getSelection()
+          // Try to get selected text from clipboard or document
+          // Note: This is limited by browser security, but we can try
+          try {
+            // For PDFs, we'll need to rely on the PDF URL being captured
+            // Selection from PDF viewer is very limited due to browser security
+            selectionText = "";
+            console.log("[VB CS] PDF page detected - selection capture limited");
+          } catch (e) {
+            console.log("[VB CS] Could not get selection from PDF:", e);
+          }
+        }
+      }
 
       sendResponse({
         selectionText,
@@ -20,11 +145,14 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
   }
   if (message.type === "collect-text") {
-    const text = extractPageText();
-    console.log("[VB CS] collect-text returning", text.length, "chars");
+    const result = extractPageText();
+    const text = result.text || "";
+    const pdfUrls = result.pdfUrls || [];
+    console.log("[VB CS] collect-text returning", text.length, "chars", pdfUrls.length, "PDFs");
 
     sendResponse({
       text,
+      pdfUrls: pdfUrls,
       url: window.location.href,
       title: document.title
     });

@@ -1,6 +1,6 @@
 # save as app/main.py
 ## IMPORTS
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -25,7 +25,7 @@ from . import models
 from .models import Document
 from .helpers import (get_embedding,embed_doc_chunks,
     _answer_from_hits,DocumentOut, QueryRequest, ChunkHit,
-    QueryResponse, fill_empty_embed_docs
+    QueryResponse, fill_empty_embed_docs, parse_pdfs_from_urls
 )
 from .topics import (
     TopicsResponse,
@@ -74,29 +74,122 @@ def test_db(db: Session = Depends(get_db)):
 
 from . import models
 
+def _process_document_embeddings_background(document_id: str):
+    """
+    Background task to process document embeddings and chunking.
+    This runs in the background and won't block the ingest response.
+    """
+    try:
+        # Convert string UUID to UUID object if needed
+        from uuid import UUID as PyUUID
+        try:
+            doc_uuid = PyUUID(document_id) if isinstance(document_id, str) else document_id
+        except (ValueError, TypeError):
+            print(f"[ERROR] Invalid document_id format: {document_id}")
+            return
+        
+        # Get a new database session for this background task
+        db_gen = get_db()
+        db: Session = next(db_gen)
+        try:
+            # Fetch the document
+            doc = db.query(Document).filter(Document.id == doc_uuid).first()
+            if not doc:
+                print(f"[WARN] Document {document_id} not found for embedding processing")
+                return
+            
+            # Process embeddings and chunking
+            print(f"[INFO] Starting background embedding for document {document_id}")
+            chunk_len = embed_doc_chunks(doc)
+            print(f"[INFO] Completed embedding for document {document_id}: {chunk_len} chunks")
+        except Exception as e:
+            print(f"[ERROR] Failed to process embeddings for document {document_id}: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
+    except Exception as e:
+        print(f"[ERROR] Failed to get database session for document {document_id}: {e}")
+        import traceback
+        traceback.print_exc()
+
 @app.post("/ingest")
-def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
+def ingest(payload: IngestPayload, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """
+    Ingest a new document. The document is saved immediately with a temporary topic.
+    Embedding and chunking happen asynchronously in the background.
+    
+    If PDF URLs are provided, they will be parsed and their text appended to the document.
+    """
     # Use captured_at from payload if provided, else now
     captured_at = payload.captured_at or datetime.utcnow()
 
+    # Start with the page text
+    full_text = payload.text or ""
+    
+    # Parse PDFs if provided (this happens synchronously before saving)
+    pdf_text = ""
+    if payload.pdf_urls and len(payload.pdf_urls) > 0:
+        print(f"[INFO] Parsing {len(payload.pdf_urls)} PDF(s) for document")
+        try:
+            pdf_text = parse_pdfs_from_urls(payload.pdf_urls, max_pages_per_pdf=50)  # Limit to 50 pages per PDF
+            if pdf_text:
+                # Combine page text and PDF text
+                if full_text:
+                    full_text = f"{full_text}\n\n--- PDF Content ---\n\n{pdf_text}"
+                else:
+                    full_text = pdf_text
+                print(f"[INFO] Successfully parsed PDFs, total text length: {len(full_text)}")
+            else:
+                print(f"[WARN] No text extracted from PDFs")
+        except Exception as e:
+            print(f"[ERROR] Failed to parse PDFs: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue with just the page text if PDF parsing fails
+    
+    # Ensure we have some text
+    if not full_text or not full_text.strip():
+        raise HTTPException(
+            status_code=400, 
+            detail="No text content found. Please ensure the page has text or PDFs are accessible."
+        )
+
+    # Create document with temporary topic assignment
     doc = models.Document(
         url=payload.url,
         title=payload.title,
-        full_text=payload.text,
+        full_text=full_text,
         captured_at=captured_at,
+        assigned_topic_title="Temporary Topic",  # Assign temporary topic immediately
     )
 
     db.add(doc)
-    #db.flush() # get doc.id without committing yet
+    db.flush()  # Get doc.id without committing yet
+    document_id = doc.id
+    
+    # Commit the document immediately - this ensures it's saved before any async processing
     db.commit()
+    
+    # Refresh to ensure we have the latest state
+    db.refresh(doc)
+    
+    print(f"[INFO] Document {document_id} saved successfully, queuing background embedding")
 
-    chunk_len = embed_doc_chunks(doc)
-    #db.commit()
+    # Process embeddings in the background - this won't block the response
+    # The existing fill_empty_embed_docs process will also catch any documents
+    # that don't get embedded successfully
+    background_tasks.add_task(_process_document_embeddings_background, str(document_id))
 
     return {
         "status": "ok",
-        "document_id": str(doc.id),
-        "num_chunks": int(chunk_len),
+        "document_id": str(document_id),
+        "num_chunks": 0,  # Will be updated asynchronously
+        "message": "Document saved. Embedding in progress.",
+        "pdfs_parsed": len(payload.pdf_urls) if payload.pdf_urls else 0
     }
 
 @app.get("/documents", response_model=List[DocumentOut])
