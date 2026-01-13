@@ -589,11 +589,15 @@ def _find_matching_topic(
     )
     
     if not existing_topics:
+        print(f"[DEBUG] _find_matching_topic: No existing topics at level {level_index}")
         return None
+    
+    print(f"[DEBUG] _find_matching_topic: Checking {len(existing_topics)} existing topics (threshold: {similarity_threshold})")
     
     # Find best match using cosine similarity
     best_match = None
     best_similarity = similarity_threshold
+    actual_best_similarity = 0.0  # Track the actual best even if below threshold
     
     for topic in existing_topics:
         topic_emb = normalize_embedding(topic.embedding)
@@ -601,6 +605,9 @@ def _find_matching_topic(
             centroid.reshape(1, -1),
             topic_emb.reshape(1, -1)
         )[0, 0])
+        
+        if similarity > actual_best_similarity:
+            actual_best_similarity = similarity
         
         if similarity > best_similarity:
             best_similarity = similarity
@@ -612,8 +619,10 @@ def _find_matching_topic(
         best_match.match_count = (best_match.match_count or 0) + 1
         db.commit()
         
+        print(f"[DEBUG] _find_matching_topic: Found match '{best_match.title_text}' (similarity: {best_similarity:.4f})")
         return (best_match.id, best_match.title_text, best_match.summary_text or "")
     
+    print(f"[DEBUG] _find_matching_topic: No match above threshold (best similarity: {actual_best_similarity:.4f})")
     return None
 
 
@@ -858,49 +867,61 @@ def compute_topics(
     
     print(f"[Topics] {len(pre_assigned_groups)} existing topic groups, {len(unassigned_docs)} unassigned docs")
 
-    # ---------- Process pre-assigned document groups first ----------
+    # ---------- Check if we should force reclustering ----------
+    # Force reclustering if number of pre-assigned groups exceeds k_topics_recluster
+    # Use /topics/recluster endpoint to manually force fresh clustering
+    total_pre_assigned_docs = sum(len(docs) for docs in pre_assigned_groups.values())
+    should_recluster = len(pre_assigned_groups) > cfg.k_topics_recluster
+    
     topics: List[Topic] = []
     topic_idx_counter = 0
     
-    # Create topics from pre-assigned groups (documents with existing topic assignments)
-    for topic_db_id, docs_in_group in pre_assigned_groups.items():
-        # Use the stored topic title from the first document
-        topic_title = docs_in_group[0].assigned_topic_title or "Assigned Topic"
-        topic_id = f"T{topic_idx_counter}"
-        topic_idx_counter += 1
-        
-        docs_out = [TopicDoc.model_validate(d) for d in docs_in_group]
-        
-        # Create a simple single-subtopic structure for pre-assigned groups
-        topic = Topic(
-            topic_id=topic_id,
-            title=topic_title,
-            summary=None,
-            documents_count=len(docs_out),
-            subtopics=[
-                Subtopic(
-                    subtopic_id=f"{topic_id}-S0",
-                    title=topic_title,
-                    summary=None,
-                    documents=docs_out,
-                )
-            ],
-        )
-        topics.append(topic)
-        print(f"♻ Reusing pre-assigned topic: {topic_title} ({len(docs_out)} docs)")
-    
-    # Check if number of pre-assigned topic groups exceeds k_topics_recluster
-    # If so, re-cluster all pre-assigned documents instead of reusing their assignments
-    if len(topics) > cfg.k_topics_recluster:
-        print(f"[Topics] {len(topics)} pre-assigned topics exceeds k_topics_max ({cfg.k_topics_max}), re-clustering...")
+    if should_recluster:
+        print(f"[Topics] Forcing recluster: {len(pre_assigned_groups)} pre-assigned groups, {total_pre_assigned_docs} total docs (threshold: {cfg.k_topics_recluster})")
         # Collect all documents from pre-assigned groups and add them to unassigned_docs
+        # Also clear their topic assignments so they get fresh assignments
         docs_to_recluster = []
         for topic_db_id, docs_in_group in pre_assigned_groups.items():
+            for doc in docs_in_group:
+                doc.assigned_topic_id = None
+                doc.assigned_topic_title = None
             docs_to_recluster.extend(docs_in_group)
         unassigned_docs.extend(docs_to_recluster)
-        # Clear the topics list since we're re-clustering
-        topics = []
-        topic_idx_counter = 0
+        # Commit the cleared assignments
+        try:
+            db.commit()
+            print(f"[Topics] Cleared topic assignments for {len(docs_to_recluster)} documents")
+        except Exception as e:
+            db.rollback()
+            print(f"[WARN] Failed to clear topic assignments: {e}")
+    else:
+        # Keep pre-assigned groups - create topics from them
+        # Note: these will be simple single-subtopic topics, subtopics will be built later if needed
+        print(f"[Topics] Keeping {len(pre_assigned_groups)} pre-assigned topic groups")
+        for topic_db_id, docs_in_group in pre_assigned_groups.items():
+            topic_title = docs_in_group[0].assigned_topic_title or "Assigned Topic"
+            topic_id = f"T{topic_idx_counter}"
+            topic_idx_counter += 1
+            
+            docs_out = [TopicDoc.model_validate(d) for d in docs_in_group]
+            
+            # Create a simple single-subtopic structure for pre-assigned groups
+            topic = Topic(
+                topic_id=topic_id,
+                title=topic_title,
+                summary=None,
+                documents_count=len(docs_out),
+                subtopics=[
+                    Subtopic(
+                        subtopic_id=f"{topic_id}-S0",
+                        title=topic_title,
+                        summary=None,
+                        documents=docs_out,
+                    )
+                ],
+            )
+            topics.append(topic)
+            print(f"♻ Reusing pre-assigned topic: {topic_title} ({len(docs_out)} docs)")
     
     # ---------- Cluster unassigned documents ----------
     # Filter unassigned docs to those with embeddings
@@ -1263,3 +1284,44 @@ def build_topics_hierarchy(resp: TopicsResponse) -> dict:
         root["children"].append(topic_node)
 
     return root
+
+
+def clear_all_topic_assignments(db: Session) -> int:
+    """
+    Clear all topic assignments from documents to force fresh reclustering.
+    
+    Args:
+        db: Database session
+    
+    Returns:
+        Number of documents cleared
+    """
+    try:
+        # Get count of documents with topic assignments
+        docs_with_topics = (
+            db.query(Document)
+            .filter(Document.assigned_topic_id != None)
+            .all()
+        )
+        
+        count = len(docs_with_topics)
+        
+        if count > 0:
+            # Clear all topic assignments
+            for doc in docs_with_topics:
+                doc.assigned_topic_id = None
+                doc.assigned_topic_title = None
+            
+            db.commit()
+            print(f"[Topics] Cleared topic assignments for {count} documents")
+        
+        # Also clear the topics cache
+        clear_topics_cache()
+        
+        return count
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] Failed to clear topic assignments: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0

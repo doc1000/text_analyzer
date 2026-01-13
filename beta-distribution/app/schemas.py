@@ -65,7 +65,9 @@ class SettingsResponse(BaseModel):
     chat_provider: str
     embedding_provider: str
     topic_provider: str
-    has_openai_key: bool  # Whether API key is set (without revealing it)class SettingsUpdateRequest(BaseModel):
+    has_openai_key: bool  # Whether API key is set (without revealing it)
+
+class SettingsUpdateRequest(BaseModel):
     chat_provider: Optional[Literal["openai", "ollama"]] = None
     embedding_provider: Optional[Literal["openai", "ollama"]] = None
     topic_provider: Optional[Literal["openai", "ollama"]] = None

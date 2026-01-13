@@ -33,6 +33,7 @@ from .topics import (
     get_topics_with_cache,
     clear_topics_cache,
     assign_document_to_best_topic,
+    clear_all_topic_assignments,
 )
 from .config import PREFERENCES
 from .helpers import update_openai_client
@@ -393,6 +394,20 @@ def get_topics_hierarchy(days: int = 10, db: Session = Depends(get_db)):
 @app.get("/topics/clear_cache")
 def clear_cache():
     clear_topics_cache()
+    return {"status": "ok", "message": "Topics cache cleared"}
+
+@app.post("/topics/recluster")
+def force_recluster(db: Session = Depends(get_db)):
+    """
+    Force a fresh reclustering of all documents by clearing their topic assignments.
+    Call /topics/hierarchy after this to get newly computed topics.
+    """
+    count = clear_all_topic_assignments(db)
+    return {
+        "status": "ok", 
+        "message": f"Cleared topic assignments for {count} documents. Call /topics/hierarchy to recompute.",
+        "documents_cleared": count
+    }
 
 @app.get("/documents/{document_id}", response_model=DocumentDetailResponse)
 def get_document_detail(document_id: str, db: Session = Depends(get_db)):
