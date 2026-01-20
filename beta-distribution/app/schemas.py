@@ -90,8 +90,6 @@ class TopicOption(BaseModel):
 class TopicsListResponse(BaseModel):
     """List of topics for selection, sorted by similarity."""
     topics: List[TopicOption]
-
-
 class TopicAssignmentRequest(BaseModel):
     """Request to update document's topic assignment."""
     topic_id: Optional[str] = None  # UUID of existing topic, or None to clear
