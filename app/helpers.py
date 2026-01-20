@@ -362,6 +362,313 @@ def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
         text = _openai_chat(prompt)
     return text
 
+
+# ---------- Summary Generation Functions ----------
+
+def generate_chunk_summary(chunk_text: str) -> str:
+    """
+    Generate a concise summary for a single chunk of text using LLM.
+    
+    Args:
+        chunk_text: The text chunk to summarize
+    
+    Returns:
+        Summary string (truncated to max_chunk_summary_chars)
+    """
+    cfg = PREFERENCES.summary
+    max_chars = cfg.max_chunk_summary_chars
+    
+    # Skip if chunk is already very short
+    if len(chunk_text) < 100:
+        return chunk_text
+    
+    prompt = (
+        "Summarize the following text in 2-3 sentences. "
+        "Preserve key facts, terminology, and important details. "
+        "Be concise but comprehensive.\n\n"
+        f"Text:\n{chunk_text[:1500]}\n\n"
+        "Summary:"
+    )
+    
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+    
+    try:
+        if topic_provider == "ollama":
+            # Use topic_model for faster summarization
+            topic_model = PREFERENCES.models.ollama.topic_model
+            summary = _ollama_chat(prompt, model=topic_model)
+        else:
+            summary = _openai_chat(prompt)
+        
+        # Truncate if needed
+        summary = summary.strip()
+        if len(summary) > max_chars:
+            summary = summary[:max_chars-3] + "..."
+        
+        return summary
+    
+    except Exception as e:
+        print(f"[WARN] Chunk summary generation failed: {e}")
+        # Fallback: return truncated original text
+        return chunk_text[:max_chars-3] + "..." if len(chunk_text) > max_chars else chunk_text
+
+
+def generate_chunk_summaries_batch(
+    chunk_texts: List[str], 
+    max_workers: int = None,
+    parallel: bool = True
+) -> List[str]:
+    """
+    Generate summaries for multiple chunks using parallel processing.
+    
+    Args:
+        chunk_texts: List of text chunks to summarize
+        max_workers: Number of parallel workers (default: 4 for Ollama, 10 for OpenAI)
+        parallel: If False, process sequentially (useful for debugging)
+    
+    Returns:
+        List of summary strings (same order as input)
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    if not chunk_texts:
+        return []
+    
+    # Determine default workers based on provider
+    if max_workers is None:
+        topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+        # Ollama typically runs locally, so fewer workers to avoid overload
+        # OpenAI can handle more concurrent requests
+        max_workers = 4 if topic_provider == "ollama" else 10
+    
+    max_chars = PREFERENCES.summary.max_chunk_summary_chars
+    
+    def _generate_with_fallback(idx_and_text):
+        """Generate summary with fallback to truncated text."""
+        idx, chunk_text = idx_and_text
+        try:
+            summary = generate_chunk_summary(chunk_text)
+            return idx, summary, None
+        except Exception as e:
+            # Fallback to truncated text
+            fallback = chunk_text[:max_chars-3] + "..." if len(chunk_text) > max_chars else chunk_text
+            return idx, fallback, str(e)
+    
+    # Sequential processing
+    if not parallel or len(chunk_texts) <= 2:
+        summaries = []
+        for i, chunk_text in enumerate(chunk_texts):
+            _, summary, error = _generate_with_fallback((i, chunk_text))
+            if error:
+                print(f"[WARN] Failed to summarize chunk {i}: {error}")
+            summaries.append(summary)
+            if (i + 1) % 5 == 0:
+                print(f"  Generated {i + 1}/{len(chunk_texts)} chunk summaries")
+        return summaries
+    
+    # Parallel processing
+    print(f"  Processing {len(chunk_texts)} chunks with {max_workers} workers...")
+    
+    # Initialize results list with None placeholders
+    summaries = [None] * len(chunk_texts)
+    completed = 0
+    errors = 0
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        futures = {
+            executor.submit(_generate_with_fallback, (i, text)): i 
+            for i, text in enumerate(chunk_texts)
+        }
+        
+        # Process as they complete
+        for future in as_completed(futures):
+            try:
+                idx, summary, error = future.result()
+                summaries[idx] = summary
+                completed += 1
+                
+                if error:
+                    errors += 1
+                    print(f"  [WARN] Chunk {idx} fallback: {error[:50]}...")
+                
+                if completed % 10 == 0 or completed == len(chunk_texts):
+                    print(f"  Progress: {completed}/{len(chunk_texts)} chunks ({errors} fallbacks)")
+                    
+            except Exception as e:
+                # This shouldn't happen since _generate_with_fallback catches errors
+                idx = futures[future]
+                summaries[idx] = chunk_texts[idx][:max_chars-3] + "..."
+                errors += 1
+                print(f"  [ERROR] Chunk {idx}: {e}")
+    
+    print(f"  ✓ Completed {len(chunk_texts)} chunk summaries ({errors} fallbacks)")
+    return summaries
+
+
+def generate_document_summary(chunk_summaries: List[str], title: str = None) -> str:
+    """
+    Generate a document-level summary by synthesizing chunk summaries.
+    
+    Args:
+        chunk_summaries: List of chunk summary strings
+        title: Optional document title for context
+    
+    Returns:
+        Document summary string
+    """
+    cfg = PREFERENCES.summary
+    max_chars = cfg.max_doc_summary_chars
+    max_chunks = cfg.max_chunks_for_doc_summary
+    
+    if not chunk_summaries:
+        return ""
+    
+    # Limit number of chunk summaries to include
+    summaries_to_use = chunk_summaries[:max_chunks]
+    
+    # Build context from chunk summaries
+    context = "\n".join(f"- {s}" for s in summaries_to_use)
+    
+    # Truncate context if too long (reserve space for prompt template)
+    if len(context) > 2000:
+        context = context[:2000] + "..."
+    
+    title_context = f"Document title: {title}\n\n" if title else ""
+    
+    prompt = (
+        "Synthesize the following section summaries into a cohesive 3-5 sentence summary "
+        "of the entire document. Capture the main themes, key points, and important details.\n\n"
+        f"{title_context}"
+        f"Section summaries:\n{context}\n\n"
+        "Document summary:"
+    )
+    
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+    
+    try:
+        if topic_provider == "ollama":
+            topic_model = PREFERENCES.models.ollama.topic_model
+            summary = _ollama_chat(prompt, model=topic_model)
+        else:
+            summary = _openai_chat(prompt)
+        
+        # Truncate if needed
+        summary = summary.strip()
+        if len(summary) > max_chars:
+            summary = summary[:max_chars-3] + "..."
+        
+        return summary
+    
+    except Exception as e:
+        print(f"[WARN] Document summary generation failed: {e}")
+        # Fallback: concatenate first few chunk summaries
+        fallback = " ".join(summaries_to_use[:3])
+        return fallback[:max_chars-3] + "..." if len(fallback) > max_chars else fallback
+
+
+def generate_cluster_summary(doc_summaries: List[str], doc_titles: List[str] = None) -> str:
+    """
+    Generate a summary for a cluster of documents based on their summaries.
+    
+    This provides richer context for topic naming than just titles/snippets.
+    
+    Args:
+        doc_summaries: List of document summary strings
+        doc_titles: Optional list of document titles
+    
+    Returns:
+        Cluster summary string suitable for topic naming
+    """
+    if not doc_summaries:
+        return ""
+    
+    # Build context from document summaries
+    context_parts = []
+    for i, summary in enumerate(doc_summaries[:10]):  # Limit to 10 docs
+        if doc_titles and i < len(doc_titles) and doc_titles[i]:
+            context_parts.append(f"Doc {i+1} ({doc_titles[i][:50]}): {summary}")
+        else:
+            context_parts.append(f"Doc {i+1}: {summary}")
+    
+    context = "\n".join(context_parts)
+    
+    # Truncate if too long
+    if len(context) > 2500:
+        context = context[:2500] + "..."
+    
+    prompt = (
+        "These documents are grouped together in a cluster. "
+        "Describe the common theme or pattern that connects them in 2-3 sentences. "
+        "Focus on what makes these documents similar - the shared topic, subject matter, or purpose.\n\n"
+        f"Document summaries:\n{context}\n\n"
+        "Common theme:"
+    )
+    
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+    
+    try:
+        if topic_provider == "ollama":
+            topic_model = PREFERENCES.models.ollama.topic_model
+            summary = _ollama_chat(prompt, model=topic_model)
+        else:
+            summary = _openai_chat(prompt)
+        
+        return summary.strip()
+    
+    except Exception as e:
+        print(f"[WARN] Cluster summary generation failed: {e}")
+        return ""
+
+
+def _generate_summary_from_text(text: str, title: str = None) -> str:
+    """
+    Generate a summary directly from raw text (when chunk summaries aren't available).
+    
+    Args:
+        text: The raw text to summarize
+        title: Optional document title for context
+    
+    Returns:
+        Summary string
+    """
+    cfg = PREFERENCES.summary
+    max_chars = cfg.max_doc_summary_chars
+    
+    if not text or not text.strip():
+        return ""
+    
+    title_context = f"Document title: {title}\n\n" if title else ""
+    
+    prompt = (
+        "Summarize the following text in 3-5 sentences. "
+        "Capture the main topic, key points, and important details.\n\n"
+        f"{title_context}"
+        f"Text:\n{text}\n\n"
+        "Summary:"
+    )
+    
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+    
+    try:
+        if topic_provider == "ollama":
+            topic_model = PREFERENCES.models.ollama.topic_model
+            summary = _ollama_chat(prompt, model=topic_model)
+        else:
+            summary = _openai_chat(prompt)
+        
+        summary = summary.strip()
+        if len(summary) > max_chars:
+            summary = summary[:max_chars-3] + "..."
+        
+        return summary
+    
+    except Exception as e:
+        print(f"[WARN] Text summary generation failed: {e}")
+        # Fallback to truncated text
+        return text[:max_chars-3] + "..." if len(text) > max_chars else text
+
+
 def normalize_embedding(emb):
     # Already a numpy array
     if isinstance(emb, np.ndarray):
@@ -526,7 +833,7 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
 
 # Table definitions moved to app/db.py to avoid circular dependencies
 # Import them from there
-from .db import EMBED_TABLE, SENTENCE_TABLE, EMBED_DIM, EMBED_MODEL
+from .db import EMBED_TABLE, SENTENCE_TABLE, DOCUMENT_TABLE, EMBED_DIM, EMBED_MODEL
 
 def fill_empty_embed_docs(embed_type: Literal["chunk", "sent"] = "chunk", batch_size: int = None):
     """
@@ -626,21 +933,36 @@ def fill_empty_embed_docs(embed_type: Literal["chunk", "sent"] = "chunk", batch_
 def embed_doc_chunks(
     doc: Document | type[EMBED_TABLE],
     chunk_type: Literal["chunk", "sent"] = "chunk",
-    batch_size: int = None
+    batch_size: int = None,
+    generate_summaries: bool = None
 ) -> int:
     """
     Embed chunks/sentences using batch processing for much better performance.
+    
+    When processing chunks (chunk_type="chunk"), this function will:
+    1. Create chunk embeddings
+    2. Generate chunk summaries (if enabled in config)
+    3. Create sentence embeddings for each chunk
+    4. Create a document-level record with average embedding and aggregated summary
     
     Args:
         doc: Document or chunk to embed
         chunk_type: "chunk" or "sent"
         batch_size: Number of texts to embed per API call (defaults to config)
+        generate_summaries: Override config setting for summary generation
     
     Returns:
         Number of chunks successfully embedded
     """
     if batch_size is None:
         batch_size = PREFERENCES.embedding.batch_size
+    
+    # Determine if we should generate summaries
+    summary_cfg = PREFERENCES.summary
+    if generate_summaries is None:
+        generate_summaries = (
+            chunk_type == "chunk" and summary_cfg.generate_chunk_summaries
+        )
     
     db_gen = get_db()
     db: Session = next(db_gen)
@@ -675,13 +997,22 @@ def embed_doc_chunks(
                 # Fill with None for failed batches
                 all_embeddings.extend([None] * len(batch))
         
-        # 3. Prepare bulk insert data
+        # 3. Generate chunk summaries if enabled (only for chunk type)
+        chunk_summaries = []
+        if generate_summaries and chunk_type == "chunk":
+            print(f"Generating summaries for {len(chunks)} chunks...")
+            chunk_summaries = generate_chunk_summaries_batch(chunks)
+        
+        # 4. Prepare bulk insert data
         objects_to_insert = []
+        valid_embeddings = []  # Track valid embeddings for document-level averaging
         
         for idx, (chunk_text_value, embedding) in enumerate(zip(chunks, all_embeddings)):
             if embedding is None:
                 print(f"  [WARN] Skipping {chunk_type} {idx} (embedding failed)")
                 continue
+            
+            valid_embeddings.append(embedding)
             
             if chunk_type == "chunk":
                 obj_data = {
@@ -690,6 +1021,9 @@ def embed_doc_chunks(
                     "chunk_text": chunk_text_value,
                     "embedding": embedding
                 }
+                # Add summary if available
+                if chunk_summaries and idx < len(chunk_summaries):
+                    obj_data["summary_text"] = chunk_summaries[idx]
                 objects_to_insert.append(obj_data)
             else:
                 obj_data = {
@@ -700,7 +1034,7 @@ def embed_doc_chunks(
                 }
                 objects_to_insert.append(obj_data)
         
-        # 4. Bulk insert
+        # 5. Bulk insert
         success_count = 0
         if objects_to_insert:
             try:
@@ -736,7 +1070,7 @@ def embed_doc_chunks(
                         db.rollback()
                         print(f"  [WARN] Failed to insert {chunk_type} {obj_data.get('chunk_index', obj_data.get('sent_index'))}: {e2}")
         
-        # 5. Recursively embed sentences for chunks
+        # 6. Recursively embed sentences for chunks
         if chunk_type == "chunk" and success_count > 0:
             # Get inserted chunks and embed their sentences
             inserted_chunks = (
@@ -748,6 +1082,14 @@ def embed_doc_chunks(
             
             for chunk in inserted_chunks:
                 embed_doc_chunks(chunk, chunk_type="sent", batch_size=batch_size)
+            
+            # 7. Create document-level record with average embedding and summary
+            _create_document_embedding_record(
+                db=db,
+                doc=doc,
+                chunk_embeddings=valid_embeddings,
+                chunk_summaries=chunk_summaries
+            )
         
         return success_count
         
@@ -760,6 +1102,422 @@ def embed_doc_chunks(
             next(db_gen)
         except StopIteration:
             pass
+
+
+def _create_document_embedding_record(
+    db: Session,
+    doc: Document,
+    chunk_embeddings: List[List[float]],
+    chunk_summaries: List[str]
+) -> bool:
+    """
+    Create a document-level embedding record with average embedding and aggregated summary.
+    
+    Args:
+        db: Database session
+        doc: Document being processed
+        chunk_embeddings: List of chunk embedding vectors
+        chunk_summaries: List of chunk summary strings
+    
+    Returns:
+        True if record created successfully, False otherwise
+    """
+    if not chunk_embeddings:
+        return False
+    
+    try:
+        # Compute average embedding
+        embeddings_array = np.array(chunk_embeddings)
+        avg_embedding = np.mean(embeddings_array, axis=0)
+        
+        # L2-normalize the average embedding
+        from .mmr import l2_normalize_vector
+        avg_embedding = l2_normalize_vector(avg_embedding)
+        
+        # Generate document summary from chunk summaries
+        doc_summary = None
+        if chunk_summaries and PREFERENCES.summary.generate_document_summaries:
+            # Get document title if available
+            doc_title = getattr(doc, 'title', None)
+            doc_summary = generate_document_summary(chunk_summaries, title=doc_title)
+        
+        # Check if document record already exists
+        existing = (
+            db.query(DOCUMENT_TABLE)
+            .filter(DOCUMENT_TABLE.document_id == doc.id)
+            .first()
+        )
+        
+        if existing:
+            # Update existing record
+            existing.embedding = avg_embedding.tolist()
+            if doc_summary:
+                existing.summary_text = doc_summary
+            db.commit()
+            print(f"✓ Updated document embedding record for {doc.id}")
+        else:
+            # Create new record
+            doc_record = DOCUMENT_TABLE(
+                document_id=doc.id,
+                summary_text=doc_summary,
+                embedding=avg_embedding.tolist()
+            )
+            db.add(doc_record)
+            db.commit()
+            print(f"✓ Created document embedding record for {doc.id}")
+        
+        return True
+        
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] Failed to create document embedding record: {e}")
+        return False
+
+def backfill_chunk_summaries(batch_size: int = 50, max_workers: int = None) -> dict:
+    """
+    Backfill summaries for chunks that don't have them using parallel batch processing.
+    
+    Args:
+        batch_size: Number of chunks to process in each batch (default: 50)
+        max_workers: Number of parallel workers (default: auto-detect based on provider)
+    
+    Returns:
+        Dict with statistics: {total: int, updated: int, skipped: int, errors: int}
+    """
+    db_gen = get_db()
+    db: Session = next(db_gen)
+    
+    stats = {"total": 0, "updated": 0, "skipped": 0, "errors": 0}
+    
+    try:
+        # Find chunks without summaries - just get IDs and text
+        chunks_without_summaries = (
+            db.query(EMBED_TABLE.id, EMBED_TABLE.chunk_text)
+            .filter(EMBED_TABLE.summary_text == None)
+            .filter(EMBED_TABLE.chunk_text != None)
+            .all()
+        )
+        
+        stats["total"] = len(chunks_without_summaries)
+        
+        print(f"\n{'='*60}")
+        print(f"Backfilling chunk summaries (parallel batch processing)")
+        print(f"Chunks to process: {stats['total']}")
+        print(f"Batch size: {batch_size}")
+        print(f"{'='*60}\n")
+        
+        if not chunks_without_summaries:
+            print("No chunks need summary backfill.")
+            return stats
+        
+        # Process in batches
+        chunk_data = [(c[0], c[1]) for c in chunks_without_summaries]  # (id, text) tuples
+        
+        for batch_start in range(0, len(chunk_data), batch_size):
+            batch = chunk_data[batch_start:batch_start + batch_size]
+            batch_ids = [c[0] for c in batch]
+            batch_texts = [c[1] for c in batch]
+            
+            batch_num = batch_start // batch_size + 1
+            total_batches = (len(chunk_data) + batch_size - 1) // batch_size
+            print(f"\nBatch {batch_num}/{total_batches}: Processing {len(batch)} chunks...")
+            
+            # Generate summaries in parallel
+            summaries = generate_chunk_summaries_batch(
+                batch_texts, 
+                max_workers=max_workers,
+                parallel=True
+            )
+            
+            # Update database with generated summaries
+            for chunk_id, summary in zip(batch_ids, summaries):
+                try:
+                    if summary:
+                        db.query(EMBED_TABLE).filter(EMBED_TABLE.id == chunk_id).update(
+                            {"summary_text": summary},
+                            synchronize_session="fetch"
+                        )
+                        stats["updated"] += 1
+                    else:
+                        stats["skipped"] += 1
+                except Exception as e:
+                    print(f"  [ERROR] Updating chunk {chunk_id}: {e}")
+                    stats["errors"] += 1
+            
+            # Commit after each batch
+            try:
+                db.commit()
+                print(f"  ✓ Batch {batch_num} committed: {stats['updated']} total updated")
+            except Exception as e:
+                db.rollback()
+                print(f"  [ERROR] Batch commit failed: {e}")
+                stats["errors"] += len(batch)
+        
+        print(f"\n{'='*60}")
+        print(f"Chunk summary backfill complete: {stats}")
+        print(f"{'='*60}\n")
+        
+        return stats
+        
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+
+def backfill_document_embeddings(generate_summaries: bool = False) -> dict:
+    """
+    Comprehensive backfill for document-level embeddings and summaries.
+    
+    This function:
+    1. If generate_summaries=True, first backfills chunk summaries for chunks that don't have them
+    2. Creates DOCUMENT_TABLE records for documents that don't have them
+    3. If generate_summaries=True, updates existing DOCUMENT_TABLE records with null summary_text
+    
+    Args:
+        generate_summaries: If True, generate chunk and document summaries via LLM
+    
+    Returns:
+        Dict with statistics
+    """
+    from .models import Document
+    from .mmr import l2_normalize_vector
+    
+    db_gen = get_db()
+    db: Session = next(db_gen)
+    
+    stats = {
+        "chunk_summaries": {"total": 0, "updated": 0, "skipped": 0, "errors": 0},
+        "doc_embeddings": {"processed": 0, "created": 0, "skipped": 0, "errors": 0},
+        "doc_summaries": {"processed": 0, "updated": 0, "skipped": 0, "errors": 0}
+    }
+    
+    try:
+        # ===== PHASE 1: Backfill chunk summaries (if generating summaries) =====
+        if generate_summaries:
+            print("\n" + "="*60)
+            print("PHASE 1: Backfilling chunk summaries (parallel batch)")
+            print("="*60)
+            
+            # Find chunks without summaries - get IDs and text
+            chunks_without_summaries = (
+                db.query(EMBED_TABLE.id, EMBED_TABLE.chunk_text)
+                .filter(EMBED_TABLE.summary_text == None)
+                .filter(EMBED_TABLE.chunk_text != None)
+                .all()
+            )
+            
+            chunk_data = [(c[0], c[1]) for c in chunks_without_summaries]
+            stats["chunk_summaries"]["total"] = len(chunk_data)
+            
+            print(f"Chunks needing summaries: {len(chunk_data)}")
+            
+            if chunk_data:
+                # Process in batches of 50
+                batch_size = 50
+                for batch_start in range(0, len(chunk_data), batch_size):
+                    batch = chunk_data[batch_start:batch_start + batch_size]
+                    batch_ids = [c[0] for c in batch]
+                    batch_texts = [c[1] for c in batch]
+                    
+                    batch_num = batch_start // batch_size + 1
+                    total_batches = (len(chunk_data) + batch_size - 1) // batch_size
+                    print(f"\n  Batch {batch_num}/{total_batches}: Processing {len(batch)} chunks...")
+                    
+                    # Generate summaries in parallel
+                    summaries = generate_chunk_summaries_batch(batch_texts, parallel=True)
+                    
+                    # Update database with generated summaries
+                    for chunk_id, summary in zip(batch_ids, summaries):
+                        try:
+                            if summary:
+                                db.query(EMBED_TABLE).filter(EMBED_TABLE.id == chunk_id).update(
+                                    {"summary_text": summary},
+                                    synchronize_session="fetch"
+                                )
+                                stats["chunk_summaries"]["updated"] += 1
+                            else:
+                                stats["chunk_summaries"]["skipped"] += 1
+                        except Exception as e:
+                            print(f"  [ERROR] Updating chunk {chunk_id}: {e}")
+                            stats["chunk_summaries"]["errors"] += 1
+                    
+                    # Commit after each batch
+                    try:
+                        db.commit()
+                    except Exception as e:
+                        db.rollback()
+                        print(f"  [ERROR] Batch commit failed: {e}")
+            
+            print(f"✓ Chunk summaries complete: {stats['chunk_summaries']}")
+        
+        # ===== PHASE 2: Create document embeddings for docs that don't have them =====
+        print("\n" + "="*60)
+        print("PHASE 2: Creating document embeddings")
+        print("="*60)
+        
+        # Find documents without document embeddings
+        existing_doc_ids = db.query(DOCUMENT_TABLE.document_id).subquery()
+        
+        docs_without_embeddings = (
+            db.query(Document)
+            .filter(~Document.id.in_(db.query(existing_doc_ids)))
+            .all()
+        )
+        
+        print(f"Documents needing embeddings: {len(docs_without_embeddings)}")
+        
+        for i, doc in enumerate(docs_without_embeddings):
+            stats["doc_embeddings"]["processed"] += 1
+            
+            try:
+                # Get chunk embeddings for this document
+                chunks = (
+                    db.query(EMBED_TABLE)
+                    .filter(EMBED_TABLE.document_id == doc.id)
+                    .filter(EMBED_TABLE.embedding != None)
+                    .all()
+                )
+                
+                if not chunks:
+                    print(f"  [SKIP] Doc {doc.id}: No chunk embeddings")
+                    stats["doc_embeddings"]["skipped"] += 1
+                    continue
+                
+                # Compute average embedding
+                chunk_embeddings = [normalize_embedding(c.embedding) for c in chunks]
+                embeddings_array = np.array(chunk_embeddings)
+                avg_embedding = np.mean(embeddings_array, axis=0)
+                avg_embedding = l2_normalize_vector(avg_embedding)
+                
+                # Generate document summary if enabled
+                doc_summary = None
+                if generate_summaries:
+                    chunk_summaries = [c.summary_text for c in chunks if c.summary_text]
+                    
+                    if chunk_summaries:
+                        doc_summary = generate_document_summary(chunk_summaries, title=doc.title)
+                        if doc_summary:
+                            print(f"  ✓ Generated doc summary: {doc.title[:40] if doc.title else 'untitled'}...")
+                    else:
+                        # Fallback: generate from raw text
+                        chunk_texts = [c.chunk_text for c in chunks if c.chunk_text]
+                        if chunk_texts:
+                            max_chunks = PREFERENCES.summary.max_chunks_for_doc_summary
+                            combined_text = "\n\n".join(chunk_texts[:max_chunks])
+                            if len(combined_text) > 8000:
+                                combined_text = combined_text[:8000] + "..."
+                            doc_summary = _generate_summary_from_text(combined_text, title=doc.title)
+                            if doc_summary:
+                                print(f"  ✓ Generated doc summary (from text): {doc.title[:40] if doc.title else 'untitled'}...")
+                
+                # Create document record
+                doc_record = DOCUMENT_TABLE(
+                    document_id=doc.id,
+                    summary_text=doc_summary,
+                    embedding=avg_embedding.tolist()
+                )
+                db.add(doc_record)
+                db.commit()
+                
+                stats["doc_embeddings"]["created"] += 1
+                
+                if (i + 1) % 10 == 0:
+                    print(f"  Doc progress: {i + 1}/{len(docs_without_embeddings)} ({stats['doc_embeddings']['created']} created)")
+                    
+            except Exception as e:
+                db.rollback()
+                print(f"  [ERROR] Doc {doc.id}: {e}")
+                stats["doc_embeddings"]["errors"] += 1
+        
+        print(f"✓ Document embeddings complete: {stats['doc_embeddings']}")
+        
+        # ===== PHASE 3: Update existing doc records with null summary_text =====
+        if generate_summaries:
+            print("\n" + "="*60)
+            print("PHASE 3: Updating document summaries")
+            print("="*60)
+            
+            # Find doc records with null summary
+            docs_needing_summary = (
+                db.query(DOCUMENT_TABLE.id, DOCUMENT_TABLE.document_id)
+                .filter(DOCUMENT_TABLE.summary_text == None)
+                .all()
+            )
+            
+            print(f"Document records needing summaries: {len(docs_needing_summary)}")
+            
+            for i, (record_id, document_id) in enumerate(docs_needing_summary):
+                stats["doc_summaries"]["processed"] += 1
+                
+                try:
+                    # Get the parent document
+                    doc = db.query(Document).filter(Document.id == document_id).first()
+                    if not doc:
+                        stats["doc_summaries"]["skipped"] += 1
+                        continue
+                    
+                    # Get chunks with summaries
+                    chunks = (
+                        db.query(EMBED_TABLE)
+                        .filter(EMBED_TABLE.document_id == document_id)
+                        .all()
+                    )
+                    
+                    chunk_summaries = [c.summary_text for c in chunks if c.summary_text]
+                    
+                    doc_summary = None
+                    if chunk_summaries:
+                        doc_summary = generate_document_summary(chunk_summaries, title=doc.title)
+                    else:
+                        # Fallback to raw text
+                        chunk_texts = [c.chunk_text for c in chunks if c.chunk_text]
+                        if chunk_texts:
+                            max_chunks = PREFERENCES.summary.max_chunks_for_doc_summary
+                            combined_text = "\n\n".join(chunk_texts[:max_chunks])
+                            if len(combined_text) > 8000:
+                                combined_text = combined_text[:8000] + "..."
+                            doc_summary = _generate_summary_from_text(combined_text, title=doc.title)
+                    
+                    if doc_summary:
+                        db.query(DOCUMENT_TABLE).filter(DOCUMENT_TABLE.id == record_id).update(
+                            {"summary_text": doc_summary},
+                            synchronize_session="fetch"
+                        )
+                        db.commit()
+                        stats["doc_summaries"]["updated"] += 1
+                        print(f"  ✓ Updated: {doc.title[:40] if doc.title else 'untitled'}...")
+                    else:
+                        stats["doc_summaries"]["skipped"] += 1
+                    
+                    if (i + 1) % 10 == 0:
+                        print(f"  Summary progress: {i + 1}/{len(docs_needing_summary)} ({stats['doc_summaries']['updated']} updated)")
+                        
+                except Exception as e:
+                    db.rollback()
+                    print(f"  [ERROR] Doc record {record_id}: {e}")
+                    stats["doc_summaries"]["errors"] += 1
+            
+            print(f"✓ Document summaries complete: {stats['doc_summaries']}")
+        
+        # ===== Final Summary =====
+        print("\n" + "="*60)
+        print("BACKFILL COMPLETE")
+        print("="*60)
+        print(f"Chunk summaries: {stats['chunk_summaries']}")
+        print(f"Doc embeddings:  {stats['doc_embeddings']}")
+        print(f"Doc summaries:   {stats['doc_summaries']}")
+        print("="*60 + "\n")
+        
+        return stats
+        
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
 
 def new_embedding_model_example():
     # Example: after containers are up and DB is reachable

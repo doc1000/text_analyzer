@@ -14,7 +14,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
 #Internal imports
-from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE
+from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE, DOCUMENT_TABLE
 from .schemas import (
     IngestPayload, DocumentDetailResponse, DocumentUpdateRequest, 
     SettingsResponse, SettingsUpdateRequest, TopicOption, TopicsListResponse,
@@ -236,6 +236,164 @@ def get_topics_hierarchy(days: int = 10, db: Session = Depends(get_db)):
 @app.get("/topics/clear_cache")
 def clear_cache():
     clear_topics_cache()
+    return {"status": "ok", "message": "Topics cache cleared"}
+
+
+@app.post("/topics/backfill")
+def backfill_document_embeddings_endpoint(
+    generate_summaries: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    Comprehensive backfill for chunk summaries, document embeddings, and document summaries.
+    
+    When generate_summaries=True, this runs three phases:
+    1. Generate summaries for chunks that don't have them
+    2. Create document embedding records (with summaries) for documents that don't have them
+    3. Update existing document records that have null summary_text
+    
+    When generate_summaries=False, only creates document embedding records without summaries.
+    
+    Args:
+        generate_summaries: If True, generate chunk and document summaries via LLM
+    
+    Returns:
+        Statistics about the backfill operation for each phase
+    """
+    from .helpers import backfill_document_embeddings
+    
+    stats = backfill_document_embeddings(generate_summaries=generate_summaries)
+    
+    return {
+        "status": "ok",
+        "message": "Backfill complete" if not generate_summaries else "Backfill with summaries complete",
+        "stats": stats
+    }
+
+
+@app.post("/topics/backfill/chunks")
+def backfill_chunk_summaries_endpoint(
+    batch_size: int = 50,
+    max_workers: int = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Backfill summaries for chunks that don't have them using parallel batch processing.
+    
+    This is useful if you want to only generate chunk summaries without
+    running the full document backfill.
+    
+    Args:
+        batch_size: Number of chunks per batch (default: 50)
+        max_workers: Number of parallel workers (default: 4 for Ollama, 10 for OpenAI)
+    
+    Returns:
+        Statistics about the chunk summary backfill
+    """
+    from .helpers import backfill_chunk_summaries
+    
+    stats = backfill_chunk_summaries(batch_size=batch_size, max_workers=max_workers)
+    
+    return {
+        "status": "ok",
+        "message": "Chunk summary backfill complete",
+        "stats": stats
+    }
+
+
+@app.post("/topics/recluster")
+def recluster_topics(
+    days: int = 30,
+    clear_assignments: bool = True,
+    db: Session = Depends(get_db)
+):
+    """
+    Force reclustering of all documents using hierarchical agglomerative clustering.
+    
+    Creates topics at 3 levels:
+    - Level 0: Fine-grained (cosine sim >= 0.85)
+    - Level 1: Topics (cosine sim >= 0.75)
+    - Level 2: Super-topics/Categories (cosine sim >= 0.60)
+    
+    Topics at each level are linked to their parent at the next level up.
+    
+    Args:
+        days: Number of days of documents to include
+        clear_assignments: If True, clear existing topic assignments first
+    
+    Returns:
+        Statistics about created topics at each level
+    """
+    from .topics import compute_hierarchical_topics, clear_topics_cache
+    
+    # Optionally clear existing topic assignments
+    if clear_assignments:
+        updated = (
+            db.query(Document)
+            .filter(Document.assigned_topic_id != None)
+            .update({
+                Document.assigned_topic_id: None,
+                Document.assigned_topic_title: None
+            }, synchronize_session=False)
+        )
+        db.commit()
+        print(f"Cleared topic assignments from {updated} documents")
+    
+    # Clear cache first
+    clear_topics_cache()
+    
+    # Compute hierarchical topics
+    result = compute_hierarchical_topics(db, days=days)
+    
+    return result
+
+
+@app.get("/topics/stats")
+def get_clustering_stats(days: int = 30, db: Session = Depends(get_db)):
+    """
+    Get statistics about the current clustering without recomputing.
+    
+    Returns info about document counts, cluster distribution, etc.
+    """
+    from .db import DOCUMENT_TABLE
+    from datetime import timedelta
+    
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    
+    # Count documents
+    total_docs = db.query(func.count(Document.id)).filter(Document.captured_at >= cutoff).scalar()
+    
+    # Count documents with embeddings in DOCUMENT_TABLE
+    docs_with_embeddings = db.query(func.count(DOCUMENT_TABLE.id)).scalar()
+    
+    # Count documents with topic assignments
+    docs_with_topics = (
+        db.query(func.count(Document.id))
+        .filter(Document.captured_at >= cutoff)
+        .filter(Document.assigned_topic_id != None)
+        .scalar()
+    )
+    
+    # Count topics at each level (0=fine, 1=topics, 2=categories)
+    topic_counts = {}
+    level_names = {0: "fine_topics", 1: "topics", 2: "categories"}
+    for level in range(3):
+        count = (
+            db.query(func.count(TOPIC_TABLE.id))
+            .filter(TOPIC_TABLE.level_index == level)
+            .scalar()
+        )
+        topic_counts[level_names.get(level, f"level_{level}")] = count
+    
+    return {
+        "time_range_days": days,
+        "total_documents": total_docs,
+        "documents_with_embeddings": docs_with_embeddings,
+        "documents_with_topics": docs_with_topics,
+        "topic_counts_by_level": topic_counts,
+        "agglomerative_enabled": PREFERENCES.agglomerative.enabled,
+        "clustering_thresholds": PREFERENCES.agglomerative.level_thresholds
+    }
 
 @app.get("/documents/{document_id}", response_model=DocumentDetailResponse)
 def get_document_detail(document_id: str, db: Session = Depends(get_db)):

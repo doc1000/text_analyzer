@@ -2,7 +2,7 @@
 
 import os
 from datetime import datetime, timedelta
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from uuid import UUID
 import numpy as np
 from sqlalchemy.orm import Session
@@ -22,8 +22,18 @@ from .schemas import (         # whatever pydantic models you use
     TopicDoc,
     TopicsResponse,
 )
-from .helpers import _openai_chat, _ollama_chat, get_embedding, get_openai_client, update_openai_client
-from .db import EMBED_TABLE, TOPIC_TABLE
+from .helpers import (
+    _openai_chat, _ollama_chat, get_embedding, get_openai_client, 
+    update_openai_client, generate_cluster_summary
+)
+from .db import EMBED_TABLE, TOPIC_TABLE, DOCUMENT_TABLE
+from .agglomerative import (
+    cluster_embeddings_hierarchical,
+    compute_cluster_centroids,
+    get_cluster_stats,
+    get_cluster_hierarchy,
+    get_nested_cluster_structure,
+)
 # Simple in-memory cache for topics per (days, max_captured_at)
 _topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
 
@@ -98,15 +108,38 @@ def _cluster_kmeans(X: np.ndarray) -> np.ndarray:
     return kmeans.fit_predict(X)
 
 
-def cluster_embeddings(X: np.ndarray) -> np.ndarray:
+def cluster_embeddings(X: np.ndarray, doc_ids: List[UUID] = None) -> np.ndarray:
     """
     Main clustering entry point. Uses preferences to decide:
     - whether to run UMAP first for clustering
-    - which clustering algorithm to use (currently KMeans).
+    - which clustering algorithm to use (KMeans or agglomerative).
+    
+    Args:
+        X: Embedding matrix of shape (n_samples, dim)
+        doc_ids: Optional list of document UUIDs for agglomerative clustering
+    
+    Returns:
+        Cluster labels array of shape (n_samples,)
     """
     cfg = PREFERENCES.clustering
+    agglom_cfg = PREFERENCES.agglomerative
 
-    # Decide which space to cluster in
+    # Check if agglomerative clustering is enabled and configured
+    if cfg.cluster_algo == "agglomerative" or agglom_cfg.enabled:
+        # Use agglomerative clustering with cosine distance
+        # Default to level 2 (topics level) for main topic assignments
+        labels_by_level, structure, Z = cluster_embeddings_hierarchical(
+            X, 
+            doc_ids=doc_ids,
+            thresholds=agglom_cfg.level_thresholds,
+            linkage_method=agglom_cfg.linkage_method
+        )
+        # Use level 2 (topics) as the primary clustering level
+        # Labels from fcluster are 1-indexed, convert to 0-indexed
+        labels = labels_by_level.get(2, labels_by_level.get(1, labels_by_level[0]))
+        return labels - 1  # Convert to 0-indexed
+
+    # Decide which space to cluster in for KMeans
     if cfg.use_reducer_for_clustering:
         X_cluster = reduce_embeddings(X)
     else:
@@ -117,6 +150,33 @@ def cluster_embeddings(X: np.ndarray) -> np.ndarray:
 
     # Fallback / future expansion
     raise ValueError(f"Unsupported cluster_algo: {cfg.cluster_algo}")
+
+
+def cluster_embeddings_multilevel(
+    X: np.ndarray,
+    doc_ids: List[UUID] = None
+) -> Tuple[Dict[int, np.ndarray], Dict[int, Dict[int, List]], np.ndarray]:
+    """
+    Perform hierarchical clustering and return all 4 levels.
+    
+    Args:
+        X: Embedding matrix of shape (n_samples, dim)
+        doc_ids: Optional list of document UUIDs
+    
+    Returns:
+        Tuple of:
+        - labels_by_level: {level_idx: cluster_labels_array}
+        - structure: {level_idx: {cluster_label: [doc_ids_or_indices]}}
+        - linkage_matrix: The scipy linkage matrix Z
+    """
+    agglom_cfg = PREFERENCES.agglomerative
+    
+    return cluster_embeddings_hierarchical(
+        X,
+        doc_ids=doc_ids,
+        thresholds=agglom_cfg.level_thresholds,
+        linkage_method=agglom_cfg.linkage_method
+    )
 
 def _get_sentence_embeddings_for_docs(
     db: Session,
@@ -476,25 +536,139 @@ def _generate_title_and_summary_fallback(docs: List[Document]) -> Tuple[str, str
     return title, summary
 
 
-def _generate_title_and_summary(
+def _generate_title_and_summary_from_doc_summaries(
+    db: Session,
     docs: List[Document],
-    db: Session = None,
-    doc_embeddings: Dict[UUID, np.ndarray] = None,
+    doc_summaries: Dict[UUID, str] = None,
 ) -> Tuple[str, str]:
     """
-    Generate title and summary for a cluster of documents.
+    Generate title and summary for a cluster using document summaries.
     
-    Uses MMR-based sentence selection if db and doc_embeddings are provided,
-    otherwise falls back to document snippet approach.
+    This approach uses pre-generated document summaries (from DOCUMENT_TABLE)
+    to provide richer context for topic naming, addressing the issue of
+    limited context cutting off included documents.
     
     Args:
+        db: Database session
         docs: Documents in the cluster
-        db: Database session (optional, required for MMR)
-        doc_embeddings: Pre-computed document embeddings (optional, required for MMR)
+        doc_summaries: Pre-fetched document summaries dict. If None, fetches from DB.
     
     Returns:
         (title, summary) tuple
     """
+    if not docs:
+        return "Miscellaneous", "Mixed documents."
+    
+    # Fetch document summaries if not provided
+    if doc_summaries is None:
+        doc_ids = [d.id for d in docs]
+        doc_summaries = get_document_summaries(db, doc_ids)
+    
+    # Collect summaries for docs in this cluster
+    cluster_summaries = []
+    cluster_titles = []
+    for d in docs[:15]:  # Limit to 15 docs for context
+        if d.id in doc_summaries and doc_summaries[d.id]:
+            cluster_summaries.append(doc_summaries[d.id])
+        if d.title:
+            cluster_titles.append(d.title)
+    
+    # If we have enough document summaries, use them for better context
+    if len(cluster_summaries) >= 2:
+        # Generate cluster summary first (for detailed context)
+        cluster_summary = generate_cluster_summary(cluster_summaries, cluster_titles)
+        
+        # Build context from document summaries
+        context_parts = []
+        for i, summary in enumerate(cluster_summaries[:10]):
+            doc_title = cluster_titles[i] if i < len(cluster_titles) else f"Doc {i+1}"
+            context_parts.append(f"- {doc_title[:50]}: {summary[:200]}")
+        
+        context = "\n".join(context_parts)
+        
+        # Truncate if needed
+        if len(context) > 2000:
+            context = context[:2000] + "..."
+        
+        prompt = (
+            "You are categorizing a cluster of documents.\n"
+            "Below are summaries of documents in this cluster.\n"
+            "Create a SHORT topic title (3-6 words max) that captures the BROAD, HIGH-LEVEL theme.\n"
+            "Focus on the overarching concept, NOT specific details.\n\n"
+            f"DOCUMENT SUMMARIES:\n{context}\n\n"
+            "Respond ONLY with:\n"
+            "TITLE: <your title>"
+        )
+        
+        topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+        
+        try:
+            if topic_provider == "ollama":
+                topic_model = PREFERENCES.models.ollama.topic_model
+                text = _ollama_chat(prompt, model=topic_model)
+            else:
+                text = _openai_chat(prompt)
+            
+            # Parse response
+            title = None
+            for line in text.splitlines():
+                line_upper = line.upper().strip()
+                if line_upper.startswith("TITLE:"):
+                    parsed_title = line.split(":", 1)[1].strip()
+                    if parsed_title and parsed_title.lower() not in ["untitled topic", "untitled", "no title", ""]:
+                        title = parsed_title
+                        break
+            
+            if not title:
+                first_line = text.splitlines()[0].strip() if text.splitlines() else ""
+                if first_line and len(first_line) < 200:
+                    title = first_line
+            
+            # Fallback to document titles
+            if not title or title.lower().strip() in ["untitled topic", "untitled", "no title", ""]:
+                title = _generate_title_from_document_titles(docs)
+            
+            return title, cluster_summary or "Summary not available."
+            
+        except Exception as e:
+            print(f"[WARN] Document summary title generation failed: {e}")
+    
+    # Fallback: not enough document summaries
+    return None, None
+
+
+def _generate_title_and_summary(
+    docs: List[Document],
+    db: Session = None,
+    doc_embeddings: Dict[UUID, np.ndarray] = None,
+    doc_summaries: Dict[UUID, str] = None,
+) -> Tuple[str, str]:
+    """
+    Generate title and summary for a cluster of documents.
+    
+    Priority order:
+    1. Use document summaries (from DOCUMENT_TABLE) for richer context
+    2. Use MMR-based sentence selection if db and doc_embeddings provided
+    3. Fall back to document snippet approach
+    
+    Args:
+        docs: Documents in the cluster
+        db: Database session (optional, required for advanced approaches)
+        doc_embeddings: Pre-computed document embeddings (optional, for MMR)
+        doc_summaries: Pre-fetched document summaries (optional)
+    
+    Returns:
+        (title, summary) tuple
+    """
+    # Try document summaries approach first (provides richest context)
+    if db is not None and PREFERENCES.agglomerative.use_document_summaries:
+        try:
+            title, summary = _generate_title_and_summary_from_doc_summaries(db, docs, doc_summaries)
+            if title:  # Successfully generated using doc summaries
+                return title, summary
+        except Exception as e:
+            print(f"[WARN] Document summary title generation failed: {e}")
+    
     # Try MMR approach if we have the required inputs
     if db is not None and doc_embeddings is not None:
         try:
@@ -685,6 +859,61 @@ def compute_document_embeddings(
     return doc_embeds
 
 
+def get_document_summaries(
+    db: Session,
+    doc_ids: List[UUID]
+) -> Dict[UUID, str]:
+    """
+    Fetch document summaries from DOCUMENT_TABLE.
+    
+    Args:
+        db: Database session
+        doc_ids: List of document UUIDs
+    
+    Returns:
+        Dict mapping document_id to summary_text (excludes docs without summaries)
+    """
+    if not doc_ids:
+        return {}
+    
+    records = (
+        db.query(DOCUMENT_TABLE.document_id, DOCUMENT_TABLE.summary_text)
+        .filter(DOCUMENT_TABLE.document_id.in_(doc_ids))
+        .filter(DOCUMENT_TABLE.summary_text != None)
+        .all()
+    )
+    
+    return {r.document_id: r.summary_text for r in records}
+
+
+def get_document_embeddings_from_table(
+    db: Session,
+    doc_ids: List[UUID]
+) -> Dict[UUID, np.ndarray]:
+    """
+    Fetch pre-computed document embeddings from DOCUMENT_TABLE.
+    Falls back to computing from chunks if not available.
+    
+    Args:
+        db: Database session
+        doc_ids: List of document UUIDs
+    
+    Returns:
+        Dict mapping document_id to embedding vector
+    """
+    if not doc_ids:
+        return {}
+    
+    records = (
+        db.query(DOCUMENT_TABLE.document_id, DOCUMENT_TABLE.embedding)
+        .filter(DOCUMENT_TABLE.document_id.in_(doc_ids))
+        .filter(DOCUMENT_TABLE.embedding != None)
+        .all()
+    )
+    
+    return {r.document_id: normalize_embedding(r.embedding) for r in records}
+
+
 # ---------- Semantic dedupe (keep latest) ----------
 
 def dedupe_documents_semantic(
@@ -737,6 +966,217 @@ def dedupe_documents_semantic(
 
 # ---------- High-level topics computation ----------
 
+def compute_hierarchical_topics(
+    db: Session,
+    days: int = 30,
+) -> dict:
+    """
+    Compute and save topics at all hierarchy levels using agglomerative clustering.
+    
+    This creates topics at 3 levels:
+    - Level 0: Fine-grained topics (cosine sim >= 0.85, distance <= 0.15)
+    - Level 1: Topics (cosine sim >= 0.75, distance <= 0.25)
+    - Level 2: Super-topics (cosine sim >= 0.60, distance <= 0.40)
+    
+    Topics at each level are linked to their parent at the next level up.
+    
+    Returns:
+        Dict with statistics and created topic info
+    """
+    from .mmr import compute_centroid
+    
+    cfg = PREFERENCES.clustering
+    agglom_cfg = PREFERENCES.agglomerative
+    
+    # 1) Select recent documents
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    docs = (
+        db.query(Document)
+        .filter(Document.captured_at >= cutoff)
+        .order_by(Document.captured_at.desc())
+        .all()
+    )
+    
+    if not docs:
+        return {"status": "no_documents", "message": "No documents found in time range"}
+    
+    print(f"\n{'='*60}")
+    print(f"Computing hierarchical topics for {len(docs)} documents")
+    print(f"Thresholds: {agglom_cfg.level_thresholds}")
+    print(f"{'='*60}")
+    
+    # 2) Deduplicate by canonical URL
+    canonical_groups: Dict[str, List[Document]] = {}
+    for d in docs:
+        cu = canonicalize_url(d.url or "")
+        canonical_groups.setdefault(cu, []).append(d)
+    
+    canonical_docs: List[Document] = []
+    for cu, group in canonical_groups.items():
+        group_sorted = sorted(group, key=lambda d: d.captured_at or datetime.min, reverse=True)
+        canonical_docs.append(group_sorted[0])
+    
+    # 3) Compute document embeddings
+    doc_embeddings = compute_document_embeddings(db, canonical_docs)
+    
+    # Filter to docs with embeddings
+    docs_with_embeddings = [d for d in canonical_docs if d.id in doc_embeddings]
+    
+    if len(docs_with_embeddings) < 2:
+        return {"status": "insufficient_documents", "message": f"Need at least 2 documents, got {len(docs_with_embeddings)}"}
+    
+    print(f"Processing {len(docs_with_embeddings)} documents with embeddings")
+    
+    # 4) Fetch document summaries
+    doc_ids_ordered = [d.id for d in docs_with_embeddings]
+    doc_summaries = get_document_summaries(db, doc_ids_ordered)
+    print(f"Fetched {len(doc_summaries)} document summaries")
+    
+    # 5) Build embedding matrix
+    X_full = np.stack([doc_embeddings[d.id] for d in docs_with_embeddings], axis=0)
+    
+    # 5b) Apply dimensionality reduction for clustering (per config settings)
+    X = reduce_embeddings(X_full)
+    print(f"Reduced embeddings from {X_full.shape[1]} to {X.shape[1]} dimensions for clustering")
+    
+    # 6) Perform hierarchical clustering on reduced embeddings
+    labels_by_level, structure, Z = cluster_embeddings_hierarchical(
+        X,
+        doc_ids=doc_ids_ordered,
+        thresholds=agglom_cfg.level_thresholds,
+        linkage_method=agglom_cfg.linkage_method
+    )
+    
+    # 7) Get cluster hierarchy (parent-child relationships)
+    hierarchy = get_cluster_hierarchy(labels_by_level)
+    
+    # Print cluster stats
+    stats = get_cluster_stats(labels_by_level)
+    for level, level_stats in stats.items():
+        print(f"  Level {level}: {level_stats['n_clusters']} clusters, avg size: {level_stats['avg_size']:.1f}")
+    
+    # 8) Clear existing topics for clean reclustering
+    try:
+        deleted = db.query(TOPIC_TABLE).delete()
+        db.commit()
+        print(f"Cleared {deleted} existing topics")
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] Could not clear existing topics: {e}")
+    
+    # 9) Create topics at each level, starting from coarsest (level 2) down to finest (level 0)
+    # This ensures parent topics exist before children reference them
+    
+    # Map: (level, cluster_label) -> topic_db_id
+    topic_id_map: Dict[Tuple[int, int], UUID] = {}
+    
+    # Map: doc_id -> Document object
+    doc_by_id = {d.id: d for d in docs_with_embeddings}
+    
+    created_topics = {level: 0 for level in range(len(agglom_cfg.level_thresholds))}
+    
+    # Process levels from coarsest to finest
+    for level in reversed(range(len(agglom_cfg.level_thresholds))):
+        level_labels = labels_by_level[level]
+        level_structure = structure[level]
+        
+        print(f"\nCreating Level {level} topics ({len(level_structure)} clusters)...")
+        
+        for cluster_label, doc_ids_in_cluster in level_structure.items():
+            # Get documents in this cluster
+            docs_in_cluster = [doc_by_id[did] for did in doc_ids_in_cluster if did in doc_by_id]
+            
+            if not docs_in_cluster:
+                continue
+            
+            # Compute centroid
+            cluster_embeddings = [doc_embeddings[d.id] for d in docs_in_cluster]
+            centroid = compute_centroid(cluster_embeddings, normalize=True)
+            
+            # Find parent topic (for levels 0 and 1)
+            parent_id = None
+            if level < len(agglom_cfg.level_thresholds) - 1:
+                # Get parent cluster label from hierarchy
+                parent_cluster_label = hierarchy.get(level, {}).get(cluster_label)
+                if parent_cluster_label:
+                    parent_id = topic_id_map.get((level + 1, parent_cluster_label))
+            
+            # Generate title and summary
+            title, summary = _generate_title_and_summary(
+                docs_in_cluster, 
+                db=db, 
+                doc_embeddings=doc_embeddings, 
+                doc_summaries=doc_summaries
+            )
+            
+            # Add level indicator to title for clarity
+            level_names = {0: "Fine", 1: "Topic", 2: "Category"}
+            level_prefix = level_names.get(level, f"L{level}")
+            
+            # Save topic to database
+            topic_db_id = _save_topic_to_db(
+                db=db,
+                title=title,
+                centroid=centroid,
+                document_count=len(docs_in_cluster),
+                summary=summary,
+                parent_id=parent_id,
+                level_index=level
+            )
+            
+            # Store mapping
+            topic_id_map[(level, cluster_label)] = topic_db_id
+            created_topics[level] += 1
+            
+            print(f"  [{level_prefix}] {title[:50]}... ({len(docs_in_cluster)} docs)")
+        
+        db.commit()
+    
+    # 10) Assign documents to their Level 0 (finest) topic
+    print("\nAssigning documents to Level 0 topics...")
+    level_0_structure = structure[0]
+    assignments = 0
+    
+    for cluster_label, doc_ids_in_cluster in level_0_structure.items():
+        topic_db_id = topic_id_map.get((0, cluster_label))
+        if not topic_db_id:
+            continue
+        
+        # Get topic title
+        topic = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id == topic_db_id).first()
+        topic_title = topic.title_text if topic else "Unknown"
+        
+        for doc_id in doc_ids_in_cluster:
+            doc = doc_by_id.get(doc_id)
+            if doc:
+                doc.assigned_topic_id = topic_db_id
+                doc.assigned_topic_title = topic_title
+                assignments += 1
+    
+    db.commit()
+    print(f"Assigned {assignments} documents to topics")
+    
+    # Clear cache
+    clear_topics_cache()
+    
+    # Return summary
+    result = {
+        "status": "ok",
+        "documents_processed": len(docs_with_embeddings),
+        "topics_created": created_topics,
+        "total_topics": sum(created_topics.values()),
+        "documents_assigned": assignments,
+        "level_stats": stats
+    }
+    
+    print(f"\n{'='*60}")
+    print(f"Hierarchical topic computation complete")
+    print(f"Created: {created_topics}")
+    print(f"{'='*60}\n")
+    
+    return result
+
+
 def compute_topics(
     db: Session,
     days: int = 30,
@@ -775,6 +1215,11 @@ def compute_topics(
 
     # 3) Compute document embeddings for canonical docs
     doc_embeddings = compute_document_embeddings(db, canonical_docs)
+    
+    # 3b) Fetch document summaries for improved topic naming
+    doc_ids_for_summaries = [d.id for d in canonical_docs]
+    doc_summaries = get_document_summaries(db, doc_ids_for_summaries)
+    print(f"[Topics] Fetched {len(doc_summaries)} document summaries")
 
     # 4) Semantic dedupe (keeps latest among high-similarity docs)
     deduped_docs = dedupe_documents_semantic(canonical_docs, doc_embeddings)
@@ -844,7 +1289,7 @@ def compute_topics(
         # Not enough unassigned docs to cluster - put them all in one topic
         if unassigned_docs:
             topic_docs = [TopicDoc.model_validate(d) for d in unassigned_docs]
-            title, summary = _generate_title_and_summary(unassigned_docs, db=db, doc_embeddings=doc_embeddings)
+            title, summary = _generate_title_and_summary(unassigned_docs, db=db, doc_embeddings=doc_embeddings, doc_summaries=doc_summaries)
             single_topic = Topic(
                 topic_id=f"T{topic_idx_counter}",
                 title=title,
@@ -871,13 +1316,16 @@ def compute_topics(
     # Build matrix of embeddings for unassigned docs only
     X = np.stack([doc_embeddings[d.id] for d in unassigned_docs], axis=0)
     n_docs = X.shape[0]
+    
+    # Get doc_ids in same order as X for agglomerative clustering
+    doc_ids_ordered = [d.id for d in unassigned_docs]
 
- # 2) For visualization, always reduce to 2D/low-D (UMAP or none)
+    # 2) For visualization, always reduce to 2D/low-D (UMAP or none)
     X_vis = reduce_embeddings(X)   # uses cfg.dim_reducer; can be X unchanged
     # You'll use X_vis later to place document points if you want per-doc coordinates.
 
-    # 3) For clustering, maybe use the same reduced space, maybe not
-    labels = cluster_embeddings(X)
+    # 3) For clustering, pass doc_ids for agglomerative clustering support
+    labels = cluster_embeddings(X, doc_ids=doc_ids_ordered)
 
     cluster_labels = sorted(set(labels))  # e.g. [0,1,2,...]
     # Map from original index to doc (for unassigned docs only)
@@ -939,7 +1387,7 @@ def compute_topics(
                 if existing_sub:
                     sub_db_id, title, summary = existing_sub
                 else:
-                    title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+                    title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings, doc_summaries=doc_summaries)
                     
                     # Save subtopic with parent_id
                     sub_db_id = _save_topic_to_db(
@@ -953,7 +1401,7 @@ def compute_topics(
                     )
             else:
                 # Persistence disabled or no parent - just generate title
-                title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+                title, summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings, doc_summaries=doc_summaries)
 
             subtopic = Subtopic(
                 subtopic_id=f"{parent_topic_id}-S{s_label}",
@@ -1005,8 +1453,8 @@ def compute_topics(
                 topic_db_id, topic_title, topic_summary = existing_match
                 print(f"♻ Reusing existing topic: {topic_title}")
             else:
-                # Generate new title & summary
-                topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+                # Generate new title & summary using document summaries for richer context
+                topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings, doc_summaries=doc_summaries)
                 
                 # Save to database
                 topic_db_id = _save_topic_to_db(
@@ -1020,7 +1468,7 @@ def compute_topics(
                 print(f"✓ Created new topic: {topic_title}")
         else:
             # Persistence disabled or no centroid - just generate title
-            topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
+            topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings, doc_summaries=doc_summaries)
 
         # Build and persist subtopics
         subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title, topic_db_id)

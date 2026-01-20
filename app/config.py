@@ -1,6 +1,6 @@
 # app/config.py
 from dataclasses import dataclass, field, asdict
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 import os
 import json
 from pathlib import Path
@@ -33,7 +33,8 @@ ChatModel = Literal[
 # may need to add something to make sure that EMBED_DIM is consistent
 
 DimReducer = Literal["pca","umap", "none"]
-ClusterAlgo = Literal["kmeans"]  # easy to add "hdbscan" later if you want
+ClusterAlgo = Literal["kmeans", "agglomerative"]  # kmeans or agglomerative hierarchical
+LinkageMethod = Literal["average", "single", "complete"]  # for agglomerative clustering
 
 
 @dataclass
@@ -43,7 +44,7 @@ class ClusteringConfig:
     cluster_algo: ClusterAlgo = "kmeans"
     min_docs_for_clustering: int = 6
     max_neighbors: int = 15          # still used if you pick UMAP
-    max_components: int = 24
+    max_components: int = 18
     random_state: int = 42
     k_topics_min: int = 2
     k_topics_max: int = 10
@@ -86,6 +87,49 @@ class QueryConfig:
     max_prompt_chars: int = 2000                 # Maximum chars in prompt sent to LLM (prevents timeouts with small models)
     max_context_chars: int = 1500                 # Maximum chars for context portion (leaves room for prompt template)
 
+
+@dataclass
+class AgglomerativeConfig:
+    """Configuration for agglomerative hierarchical clustering with 3 cosine similarity levels.
+    
+    The hierarchy goes from finest (level 0, highest similarity) to coarsest (level 2, lowest similarity).
+    Documents are clustered bottom-up using cosine distance and average linkage.
+    """
+    enabled: bool = True                          # Toggle between KMeans and agglomerative
+    linkage_method: LinkageMethod = "average"     # Linkage method: average, single, or complete
+    
+    # Cosine distance thresholds for each level (distance = 1 - similarity)
+    # Level 0 (finest): very similar content, tightly related
+    level_0_threshold: float = 0.5               # cosine sim >= 0.75
+    # Level 1: topics - related content
+    level_1_threshold: float = 0.75               # cosine sim >= 0.60
+    # Level 2 (coarsest): super-topics - broad categories
+    level_2_threshold: float = 0.9               # cosine sim >= 0.45
+    
+    min_cluster_size: int = 1                     # Minimum docs per cluster
+    use_document_summaries: bool = True           # Use document summaries for clustering input
+    
+    @property
+    def level_thresholds(self) -> list:
+        """Return thresholds as a list ordered from finest to coarsest."""
+        return [
+            self.level_0_threshold,
+            self.level_1_threshold,
+            self.level_2_threshold,
+        ]
+
+
+@dataclass
+class SummaryConfig:
+    """Configuration for LLM-based summary generation during ingestion."""
+    generate_chunk_summaries: bool = True         # Generate summaries for each chunk
+    generate_document_summaries: bool = True      # Aggregate chunk summaries into doc summary
+    max_chunk_summary_chars: int = 300            # Max chars per chunk summary
+    max_doc_summary_chars: int = 600              # Max chars for document summary
+    max_chunks_for_doc_summary: int = 10          # Max chunk summaries to include in doc summary prompt
+    summary_batch_size: int = 5                   # Chunks to summarize per LLM batch call
+
+
 @dataclass
 class OllamaConfig:
     base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -110,6 +154,8 @@ class ModelConfig:
 class Preferences:
     models: ModelConfig = field(default_factory=ModelConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    agglomerative: AgglomerativeConfig = field(default_factory=AgglomerativeConfig)
+    summary: SummaryConfig = field(default_factory=SummaryConfig)
     mmr: MMRConfig = field(default_factory=MMRConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     topic_persistence: TopicPersistenceConfig = field(default_factory=TopicPersistenceConfig)

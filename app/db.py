@@ -17,6 +17,54 @@ def ensure_schemas():
         conn.commit()
 
 
+def _migrate_add_summary_columns():
+    """
+    Migration: Add summary_text column to existing chunk tables that don't have it.
+    
+    This handles the case where tables were created before the summary feature was added.
+    SQLAlchemy's create_all() won't add new columns to existing tables.
+    """
+    with engine.connect() as conn:
+        # Get list of tables in the embedding schema
+        result = conn.execute(text("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'embedding'
+        """))
+        tables = [row[0] for row in result]
+        
+        for table_name in tables:
+            # Skip tables that start with 'sent_', 'topic_', or 'doc_' - they have different schemas
+            # We only need to add summary_text to chunk tables (base model name tables)
+            if table_name.startswith('sent_') or table_name.startswith('topic_') or table_name.startswith('doc_'):
+                continue
+            
+            # Skip the embedding_model metadata table
+            if table_name == 'embedding_model':
+                continue
+            
+            # Check if summary_text column exists
+            col_check = conn.execute(text(f"""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_schema = 'embedding' 
+                AND table_name = :table_name 
+                AND column_name = 'summary_text'
+            """), {"table_name": table_name})
+            
+            if col_check.fetchone() is None:
+                # Column doesn't exist, add it
+                try:
+                    conn.execute(text(f"""
+                        ALTER TABLE embedding.{table_name} 
+                        ADD COLUMN summary_text TEXT
+                    """))
+                    conn.commit()
+                    print(f"✓ Added summary_text column to embedding.{table_name}")
+                except Exception as e:
+                    print(f"⚠ Could not add summary_text to {table_name}: {e}")
+
+
 def init_db():
     """
     Initialize database: create schemas, tables, and generate schema documentation.
@@ -28,6 +76,9 @@ def init_db():
     Each embedding model gets its own table under the embedding schema and a row in embedding.embedding_model.
     """
     ensure_schemas()
+    
+    # Run migrations for existing tables (add new columns)
+    _migrate_add_summary_columns()
     
     Base.metadata.create_all(bind=engine)
     
@@ -87,7 +138,7 @@ def initialize_embedding_tables():
     Uses lazy initialization to avoid circular dependencies.
     
     Returns:
-        Tuple of (embed_dim, embed_model, embed_table, sentence_table, topic_table)
+        Tuple of (embed_dim, embed_model, embed_table, sentence_table, topic_table, document_table)
     """
     global _embedding_tables_cache
     
@@ -128,6 +179,14 @@ def initialize_embedding_tables():
             db=db_session,
             chunk_type="topic"
         )
+        
+        document_table = get_or_create_embedding_class(
+            model_name=embed_model,
+            version="v1",
+            dim=embed_dim,
+            db=db_session,
+            chunk_type="doc"
+        )
     finally:
         # Clean up the session
         try:
@@ -135,7 +194,7 @@ def initialize_embedding_tables():
         except StopIteration:
             pass
     
-    _embedding_tables_cache = (embed_dim, embed_model, embed_table, sentence_table, topic_table)
+    _embedding_tables_cache = (embed_dim, embed_model, embed_table, sentence_table, topic_table, document_table)
     return _embedding_tables_cache
 
 
@@ -152,4 +211,6 @@ def __getattr__(name):
         return initialize_embedding_tables()[3]
     elif name == "TOPIC_TABLE":
         return initialize_embedding_tables()[4]
+    elif name == "DOCUMENT_TABLE":
+        return initialize_embedding_tables()[5]
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

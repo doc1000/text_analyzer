@@ -26,23 +26,87 @@ class TopicDoc(BaseModel):
 
 
 class Subtopic(BaseModel):
+    """A subtopic within a topic (level 1 in the hierarchy)."""
     subtopic_id: str
     title: str
     summary: str | None = None
+    level_index: int = 1  # Hierarchy level (1 = subtopic)
     documents: List[TopicDoc]
 
 
 class Topic(BaseModel):
+    """A topic cluster (level 2 in the hierarchy by default)."""
     topic_id: str
     title: str
     summary: str | None = None
+    level_index: int = 2  # Hierarchy level (2 = topic, can vary for multi-level)
     documents_count: int
     subtopics: List[Subtopic]
 
 
 class TopicsResponse(BaseModel):
+    """Response containing topics for a time range."""
     time_range_days: int = Field(..., description="Number of days used for the time window")
     topics: List[Topic]
+
+
+# ---------- Hierarchical 4-Level Topic Models ----------
+
+class ClusterLevel0(BaseModel):
+    """Level 0: Finest clusters (cosine sim >= 0.90) - near-duplicates."""
+    cluster_id: str
+    title: str
+    summary: str | None = None
+    level_index: int = 0
+    documents: List[TopicDoc]
+
+
+class ClusterLevel1(BaseModel):
+    """Level 1: Tightly related subtopics (cosine sim >= 0.80)."""
+    cluster_id: str
+    title: str
+    summary: str | None = None
+    level_index: int = 1
+    documents_count: int
+    children: List[ClusterLevel0]
+
+
+class ClusterLevel2(BaseModel):
+    """Level 2: Topics (cosine sim >= 0.65)."""
+    cluster_id: str
+    title: str
+    summary: str | None = None
+    level_index: int = 2
+    documents_count: int
+    children: List[ClusterLevel1]
+
+
+class ClusterLevel3(BaseModel):
+    """Level 3: Broad categories (cosine sim >= 0.50) - coarsest level."""
+    cluster_id: str
+    title: str
+    summary: str | None = None
+    level_index: int = 3
+    documents_count: int
+    children: List[ClusterLevel2]
+
+
+class HierarchicalTopicsResponse(BaseModel):
+    """
+    Response containing hierarchical topics with 4 levels.
+    
+    Level hierarchy (from coarsest to finest):
+    - Level 3: Broad categories (cosine sim >= 0.50)
+    - Level 2: Topics (cosine sim >= 0.65)
+    - Level 1: Subtopics (cosine sim >= 0.80)
+    - Level 0: Finest clusters (cosine sim >= 0.90)
+    """
+    time_range_days: int = Field(..., description="Number of days used for the time window")
+    categories: List[ClusterLevel3] = Field(description="Top-level broad categories")
+    
+    # Statistics about the clustering
+    total_documents: int = 0
+    level_stats: dict = Field(default_factory=dict, description="Stats per level: {level: {n_clusters, min_size, max_size}}")
 
 class DocumentDetailResponse(BaseModel):
     id: str

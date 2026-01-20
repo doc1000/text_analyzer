@@ -133,9 +133,16 @@ def register_embedding_model(
 
 
 def get_or_create_embedding_class(model_name: str, version: str,
-     dim: int, db: "get_db()",chunk_type: Literal["chunk","sent","topic"] = "chunk"):
-    """get or create the chunk or sentence embeddings table.  will be model name for chunks
-    will append sent_/topic_ to model name for sentences/topics"""
+     dim: int, db: "get_db()",chunk_type: Literal["chunk","sent","topic","doc"] = "chunk"):
+    """get or create the chunk, sentence, topic, or document embeddings table.
+    
+    Table types:
+    - chunk: Document chunks with text and embeddings
+    - sent: Sentence-level embeddings within chunks
+    - topic: Topic cluster centroids with titles and summaries
+    - doc: Document-level summaries and average embeddings
+    
+    Will append type prefix to model name for non-chunk tables."""
 
     
     if chunk_type == "chunk":
@@ -144,6 +151,8 @@ def get_or_create_embedding_class(model_name: str, version: str,
         model_prefixed = chunk_type + "_" + model_name
         chunk_table = make_safe_table_name(model_name, version, dim)
     elif chunk_type == "topic":
+        model_prefixed = chunk_type + "_" + model_name
+    elif chunk_type == "doc":
         model_prefixed = chunk_type + "_" + model_name
     else:
         raise ValueError(f"Invalid chunk type: {chunk_type}")
@@ -175,6 +184,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
     # for chunk type table, we have document_id, chunk_index, chunk_text, embedding, created_at
     # for sent type table, we have chunk_id, sent_index, sent_text, embedding, created_at
     # for topic type table, we have parent_id, level_index, title_text, embedding, created_at
+    # Chunk table: document_id, chunk_index, chunk_text, summary_text, embedding, created_at
     attrs = {
         "__tablename__": table_name,
         "__table_args__": (
@@ -186,6 +196,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
                          nullable=False),
         "chunk_index": Column(Integer, nullable=False),
         "chunk_text": Column(Text, nullable=False),
+        "summary_text": Column(Text, nullable=True),  # LLM-generated chunk summary
         "embedding": Column(Vector(dim), nullable=False),
         "created_at": Column(
             DateTime(timezone=True),
@@ -214,6 +225,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
         }
 
     if chunk_type == "topic":
+        # Topic table: parent_id, level_index, title_text, summary_text, document_count, embedding
         attrs = {
             "__tablename__": table_name,
             "__table_args__": (
@@ -228,6 +240,27 @@ def get_or_create_embedding_class(model_name: str, version: str,
             "embedding": Column(Vector(dim), nullable=False),
             "last_matched_at": Column(DateTime(timezone=True), nullable=True),
             "match_count": Column(Integer, default=0),
+            "created_at": Column(
+                DateTime(timezone=True),
+                server_default=text("now()"),
+                nullable=False,
+            ),
+        }
+    
+    if chunk_type == "doc":
+        # Document embedding table: document_id, summary_text, embedding
+        # Stores document-level summaries (aggregated from chunk summaries) and average embeddings
+        attrs = {
+            "__tablename__": table_name,
+            "__table_args__": (
+                {"schema": "embedding"},
+            ),
+            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            "document_id": Column(UUID(as_uuid=True),
+                            ForeignKey("documents.id", ondelete="CASCADE"),
+                            nullable=False, unique=True),  # One doc embedding per document
+            "summary_text": Column(Text, nullable=True),  # LLM-generated document summary
+            "embedding": Column(Vector(dim), nullable=False),  # Average of chunk embeddings
             "created_at": Column(
                 DateTime(timezone=True),
                 server_default=text("now()"),
