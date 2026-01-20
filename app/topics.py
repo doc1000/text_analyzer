@@ -1528,6 +1528,8 @@ def build_topics_hierarchy(resp: TopicsResponse) -> dict:
     """
     Convert TopicsResponse into a D3-friendly hierarchy:
     root -> topics -> subtopics -> documents
+    
+    DEPRECATED: Use build_hierarchical_topics_for_d3 for the new 3-level hierarchy.
     """
     root = {
         "name": "root",
@@ -1566,4 +1568,155 @@ def build_topics_hierarchy(resp: TopicsResponse) -> dict:
 
         root["children"].append(topic_node)
 
+    return root
+
+
+def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
+    """
+    Build a D3-friendly hierarchy from TOPIC_TABLE with 3 levels:
+    
+    root -> Level 2 (Categories) -> Level 1 (Topics) -> Level 0 (Fine) -> Documents
+    
+    Uses parent_id relationships in TOPIC_TABLE to build the tree.
+    """
+    from datetime import timedelta
+    
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    
+    # Get all topics ordered by level (coarsest first)
+    all_topics = (
+        db.query(TOPIC_TABLE)
+        .order_by(TOPIC_TABLE.level_index.desc())
+        .all()
+    )
+    
+    # Get documents in the time range with topic assignments
+    docs_with_topics = (
+        db.query(Document)
+        .filter(Document.captured_at >= cutoff)
+        .filter(Document.assigned_topic_id != None)
+        .all()
+    )
+    
+    # Group documents by their assigned topic (Level 0)
+    docs_by_topic: Dict[UUID, List[Document]] = {}
+    for doc in docs_with_topics:
+        docs_by_topic.setdefault(doc.assigned_topic_id, []).append(doc)
+    
+    # Build topic lookup by ID
+    topic_by_id = {t.id: t for t in all_topics}
+    
+    # Build children lookup (parent_id -> list of child topics)
+    children_by_parent: Dict[UUID, List] = {}
+    level_2_topics = []  # Root level topics (categories)
+    
+    for topic in all_topics:
+        if topic.parent_id:
+            children_by_parent.setdefault(topic.parent_id, []).append(topic)
+        elif topic.level_index == 2:
+            level_2_topics.append(topic)
+    
+    def build_topic_node(topic, level_name: str) -> dict:
+        """Recursively build a topic node with its children."""
+        # Get direct document children (only for Level 0 topics)
+        doc_children = []
+        if topic.level_index == 0:
+            docs = docs_by_topic.get(topic.id, [])
+            for doc in docs:
+                doc_children.append({
+                    "name": doc.title or "(no title)",
+                    "doc_id": str(doc.id),
+                    "url": doc.url,
+                    "captured_at": doc.captured_at.isoformat() if doc.captured_at else None,
+                    "size": 1,
+                    "type": "document"
+                })
+        
+        # Get child topics
+        child_topics = children_by_parent.get(topic.id, [])
+        topic_children = []
+        
+        child_level_names = {2: "Topic", 1: "Fine", 0: ""}
+        for child in child_topics:
+            child_node = build_topic_node(child, child_level_names.get(child.level_index, ""))
+            topic_children.append(child_node)
+        
+        # Combine children: topic children first, then documents
+        all_children = topic_children + doc_children
+        
+        # Count total documents under this topic
+        total_docs = len(doc_children)
+        for child in topic_children:
+            total_docs += child.get("doc_count", 0)
+        
+        return {
+            "name": f"{topic.title_text}" if topic.title_text else f"Cluster {topic.id}",
+            "topic_id": str(topic.id),
+            "level": topic.level_index,
+            "level_name": level_name,
+            "summary": topic.summary_text,
+            "doc_count": total_docs,
+            "children": all_children if all_children else None,
+            "size": total_docs if not all_children else None,  # For leaf sizing
+            "type": "topic"
+        }
+    
+    # Build the root node
+    root = {
+        "name": "Topics",
+        "time_range_days": days,
+        "children": [],
+        "type": "root"
+    }
+    
+    # Add Level 2 topics as root children
+    for topic in level_2_topics:
+        topic_node = build_topic_node(topic, "Category")
+        if topic_node["children"] or topic_node.get("doc_count", 0) > 0:
+            root["children"].append(topic_node)
+    
+    # Handle orphan topics (Level 1 or 0 without parents)
+    # This can happen if clustering created topics without full hierarchy
+    orphan_topics = [t for t in all_topics 
+                     if t.parent_id is None 
+                     and t.level_index < 2
+                     and t.id not in [lt.id for lt in level_2_topics]]
+    
+    for topic in orphan_topics:
+        level_names = {0: "Fine", 1: "Topic"}
+        topic_node = build_topic_node(topic, level_names.get(topic.level_index, ""))
+        if topic_node["children"] or topic_node.get("doc_count", 0) > 0:
+            root["children"].append(topic_node)
+    
+    # Also include documents with no topic assignment as "Uncategorized"
+    unassigned_docs = (
+        db.query(Document)
+        .filter(Document.captured_at >= cutoff)
+        .filter(Document.assigned_topic_id == None)
+        .all()
+    )
+    
+    if unassigned_docs:
+        uncategorized = {
+            "name": f"Uncategorized ({len(unassigned_docs)})",
+            "topic_id": "uncategorized",
+            "level": -1,
+            "level_name": "Uncategorized",
+            "summary": "Documents without topic assignment",
+            "doc_count": len(unassigned_docs),
+            "children": [
+                {
+                    "name": doc.title or "(no title)",
+                    "doc_id": str(doc.id),
+                    "url": doc.url,
+                    "captured_at": doc.captured_at.isoformat() if doc.captured_at else None,
+                    "size": 1,
+                    "type": "document"
+                }
+                for doc in unassigned_docs
+            ],
+            "type": "topic"
+        }
+        root["children"].append(uncategorized)
+    
     return root

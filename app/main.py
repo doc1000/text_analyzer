@@ -225,13 +225,19 @@ def get_topics(days: int = 10, db: Session = Depends(get_db)):
     return get_topics_with_cache(db, days=days)
 
 @app.get("/topics/hierarchy")
-def get_topics_hierarchy(days: int = 10, db: Session = Depends(get_db)):
+def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
     """
-    Return a D3-friendly hierarchy representation of topics and subtopics
-    for the last `days` days of documents.
+    Return a D3-friendly hierarchy representation of topics with 3 levels:
+    
+    - Level 2 (Categories): Largest circles
+    - Level 1 (Topics): Medium circles within categories
+    - Level 0 (Fine): Smallest topic circles within topics
+    - Documents: Leaf nodes within Level 0 topics
+    
+    Uses the hierarchical topic structure from TOPIC_TABLE with parent_id relationships.
     """
-    topics_resp = get_topics_with_cache(db, days=days)
-    return build_topics_hierarchy(topics_resp)
+    from .topics import build_hierarchical_topics_for_d3
+    return build_hierarchical_topics_for_d3(db, days=days)
 
 @app.get("/topics/clear_cache")
 def clear_cache():
