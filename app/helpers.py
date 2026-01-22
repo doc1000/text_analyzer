@@ -820,7 +820,11 @@ def _huggingface_embed_batch(texts: List[str]) -> List[List[float]]:
     cleaned_texts = [_clean_embed_input(t) for t in texts]
     
     # HuggingFace Inference API endpoint for the model
-    url = f"{base_url}/{model}"
+    # Allow either "{model}" placeholder or simple base that we append to.
+    if "{model}" in base_url:
+        url = base_url.format(model=model)
+    else:
+        url = f"{base_url}/{model}"
     
     headers = {
         "Authorization": f"Bearer {api_token}",
