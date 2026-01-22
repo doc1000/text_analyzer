@@ -91,10 +91,10 @@ research, knowledge base, note-taking, RAG, AI search, topic organization, resea
 - `contextMenus` - To add right-click menu options for capturing text
 - `storage` - To store extension settings (server URL preference)
 - `scripting` - To inject content scripts for capturing page content
-- `host_permissions: https://*.vaultbubble.com/*` - To communicate with VaultBubble cloud service
+- `host_permissions: https://*.vaultbubbles.com/*` - To communicate with VaultBubble cloud service
 - `host_permissions: http://localhost:8000/*` - To communicate with local vault server (optional)
 
-**Privacy note for users:** Captured content is sent to your configured vault—either our cloud service (vaultbubble.com) or your local server. You control where your data is stored.
+**Privacy note for users:** Captured content is sent to your configured vault—either our cloud service (vaultbubbles.com) or your local server. You control where your data is stored.
 
 ---
 

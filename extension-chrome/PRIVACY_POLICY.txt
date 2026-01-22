@@ -12,7 +12,7 @@ VaultBubble collects the following when you use the extension:
 - User Activity: Button clicks and context menu selections used to trigger captures
 
 How We Use Your Data
-Captured data is sent to your configured vault server—either our cloud service (vaultbubble.com) or your local server. Data is processed to organize content into topics, enable search functionality, and generate visualizations of your knowledge base.
+Captured data is sent to your configured vault server—either our cloud service (vaultbubbles.com) or your local server. Data is processed to organize content into topics, enable search functionality, and generate visualizations of your knowledge base.
 
 Data Storage
 Cloud Service: Data is stored on our secure servers with encryption at rest and in transit.
@@ -31,4 +31,4 @@ You have full control over your data: capture only the content you choose, delet
 Changes to This Policy
 We may update this privacy policy. Changes will be posted here with an updated date.
 
-For questions about this privacy policy, please contact support@vaultbubble.com.
+For questions about this privacy policy, please contact support@vaultbubbles.com.

@@ -19,7 +19,7 @@ VaultBubble collects the following data when you use the extension:
 
 Captured data is sent to your configured vault server:
 
-**Cloud Service (vaultbubble.com):**
+**Cloud Service (vaultbubbles.com):**
 - Data is stored on our secure cloud servers
 - Used to organize content into topics and enable search functionality
 - Used to generate visualizations of your knowledge base
@@ -69,4 +69,4 @@ We may update this privacy policy. Changes will be posted here with an updated d
 
 ### Contact
 
-For questions about this privacy policy, please contact support@vaultbubble.com.
+For questions about this privacy policy, please contact support@vaultbubbles.com.

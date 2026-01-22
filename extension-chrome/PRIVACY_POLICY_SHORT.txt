@@ -1,7 +1,7 @@
 Privacy Policy for VaultBubble
 
-VaultBubble collects website content (text, URLs, page titles) and user-entered data (notes, tags) when you explicitly capture content. This data is sent to your configured vault—either our cloud service (vaultbubble.com) or your local server—and used to organize content into topics and enable search functionality.
+VaultBubble collects website content (text, URLs, page titles) and user-entered data (notes, tags) when you explicitly capture content. This data is sent to your configured vault—either our cloud service (vaultbubbles.com) or your local server—and used to organize content into topics and enable search functionality.
 
 VaultBubble does not sell, share, or use your data for advertising. You control what you capture, where it's stored, and can delete content at any time. Cloud data is encrypted; local data stays entirely on your device.
 
-For questions, contact support@vaultbubble.com.
+For questions, contact support@vaultbubbles.com.
