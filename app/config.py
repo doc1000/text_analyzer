@@ -154,8 +154,8 @@ class HuggingFaceConfig:
     """Configuration for HuggingFace Inference API (cloud embeddings)."""
     api_token: str = os.getenv("HUGGINGFACE_API_TOKEN", "")
     embed_model: str = os.getenv("HUGGINGFACE_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    # Note: HuggingFace deprecated api-inference.huggingface.co, now uses router.huggingface.co
-    embed_url: str = os.getenv("HUGGINGFACE_EMBED_URL", "https://router.huggingface.co/hf-inference/pipeline/feature-extraction")
+    # Note: HuggingFace Inference API - URL format: {embed_url}/{model}
+    embed_url: str = os.getenv("HUGGINGFACE_EMBED_URL", "https://router.huggingface.co/hf-inference/models")
 
 @dataclass
 class ModelConfig:
