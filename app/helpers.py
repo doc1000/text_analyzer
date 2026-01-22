@@ -689,10 +689,17 @@ def get_embedding(text: str) -> List[float]:
     """
     Get a single embedding vector for a text using the configured provider.
     Returns L2-normalized embeddings for consistent cosine similarity calculations.
+    
+    Supports Ollama (local), OpenAI, and HuggingFace (cloud) providers.
     """
     embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
+    
     if embedding_provider == "ollama":
         vec = _ollama_embed(text)
+    elif embedding_provider == "huggingface":
+        # Use batch function for single text (HuggingFace API is batch-oriented)
+        results = _huggingface_embed_batch([text])
+        return results[0] if results else []
     else:
         # OpenAI embeddings
         model_name = PREFERENCES.models.embedding_model
@@ -782,12 +789,106 @@ def _ollama_embed_batch(texts: List[str]) -> List[List[float]]:
     return normalized
 
 
+def _huggingface_embed_batch(texts: List[str]) -> List[List[float]]:
+    """
+    Get embeddings for multiple texts from HuggingFace Inference API.
+    
+    Uses the feature-extraction pipeline which returns embeddings.
+    HuggingFace API accepts batch requests.
+    
+    Args:
+        texts: List of text strings to embed
+    
+    Returns:
+        List of embedding vectors (same order as input)
+    """
+    if not texts:
+        return []
+    
+    hf_config = PREFERENCES.models.huggingface
+    api_token = hf_config.api_token
+    model = hf_config.embed_model
+    base_url = hf_config.embed_url.rstrip("/")
+    
+    if not api_token:
+        raise RuntimeError(
+            "HuggingFace API token not configured. "
+            "Set HUGGINGFACE_API_TOKEN environment variable."
+        )
+    
+    # Clean all inputs
+    cleaned_texts = [_clean_embed_input(t) for t in texts]
+    
+    # HuggingFace Inference API endpoint for the model
+    url = f"{base_url}/{model}"
+    
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json"
+    }
+    
+    # HuggingFace accepts {"inputs": [...]} for batch
+    payload = {"inputs": cleaned_texts}
+    
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise RuntimeError(f"HuggingFace embed HTTP {e.code}: {e.reason}. Body: {body[:500]}") from e
+    
+    # HuggingFace returns list of embeddings directly for sentence-transformers
+    # Each embedding may be a list of floats, or for some models, list of token embeddings
+    embeddings_list = []
+    
+    for item in data:
+        if isinstance(item, list):
+            if item and isinstance(item[0], list):
+                # Token-level embeddings - mean pool to get sentence embedding
+                import numpy as np
+                arr = np.array(item)
+                pooled = arr.mean(axis=0).tolist()
+                embeddings_list.append(pooled)
+            else:
+                # Direct sentence embedding
+                embeddings_list.append(item)
+        else:
+            raise RuntimeError(f"Unexpected HuggingFace response format: {type(item)}")
+    
+    # Verify we got the right number of embeddings
+    if len(embeddings_list) != len(texts):
+        raise RuntimeError(
+            f"HuggingFace returned {len(embeddings_list)} embeddings for {len(texts)} texts"
+        )
+    
+    # Normalize all embeddings
+    from .mmr import l2_normalize_vector
+    normalized = []
+    for vec in embeddings_list:
+        vec = normalize_embedding(vec)
+        vec = l2_normalize_vector(vec)
+        normalized.append(vec.tolist())
+    
+    return normalized
+
+
 def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     """
     Get embeddings for multiple texts in a single API call.
     
     This is much faster than calling get_embedding() multiple times.
-    Supports both OpenAI and Ollama providers.
+    Supports Ollama (local), OpenAI, and HuggingFace (cloud) providers.
     
     Args:
         texts: List of text strings to embed
@@ -804,8 +905,12 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
         return []
     
     embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
+    
     if embedding_provider == "ollama":
         return _ollama_embed_batch(texts)
+    
+    if embedding_provider == "huggingface":
+        return _huggingface_embed_batch(texts)
     
     # OpenAI batch embedding
     model_name = PREFERENCES.models.embedding_model

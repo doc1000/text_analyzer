@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 # You can extend these later or load them from JSON if you want.
 # For now: one central place to tweak your internal tools.
-Provider = Literal["openai", "ollama"]
+Provider = Literal["openai", "ollama", "huggingface"]
 
 EmbeddingModel = Literal[
     "text-embedding-3-large",
@@ -144,21 +144,30 @@ class SummaryConfig:
 @dataclass
 class OllamaConfig:
     base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    chat_model: str = "llama3.2:3b" #os.getenv("OLLAMA_CHAT_MODEL","phi3.5-mini-q2k") - for queries
-    topic_model: str = "gemma3:1b-it-q4_K_M" #os.getenv("OLLAMA_TOPIC_MODEL","phi3.5-mini-q2k") - for topic titles
-    embed_model: str = "all-minilm" #os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
+    chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b")
+    topic_model: str = os.getenv("OLLAMA_TOPIC_MODEL", "gemma3:1b-it-q4_K_M")
+    embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "all-minilm")
+
+
+@dataclass
+class HuggingFaceConfig:
+    """Configuration for HuggingFace Inference API (cloud embeddings)."""
+    api_token: str = os.getenv("HUGGINGFACE_API_TOKEN", "")
+    embed_model: str = os.getenv("HUGGINGFACE_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    embed_url: str = os.getenv("HUGGINGFACE_EMBED_URL", "https://api-inference.huggingface.co/pipeline/feature-extraction")
 
 @dataclass
 class ModelConfig:
-    # Separate providers for different model types
-    chat_provider: Provider = "ollama"  # Provider for chat/query model
-    embedding_provider: Provider = "ollama"  # Provider for embedding model
-    topic_provider: Provider = "ollama"  # Provider for topic generation model
+    # Separate providers for different model types (read from env vars for cloud deployment)
+    chat_provider: Provider = field(default_factory=lambda: os.getenv("CHAT_PROVIDER", "ollama"))
+    embedding_provider: Provider = field(default_factory=lambda: os.getenv("EMBEDDING_PROVIDER", "ollama"))
+    topic_provider: Provider = field(default_factory=lambda: os.getenv("TOPIC_PROVIDER", "ollama"))
     
-    embedding_model: EmbeddingModel = OllamaConfig.embed_model #"text-embedding-3-small" #os.getenv("OLLAMA_EMBED_MODEL","text-embedding-3-small")
-    #embedding_dim: int = 384 #os.getenv("EMBED_DIM_V2", 1536)
-    llm_model: ChatModel = "gpt-4o-mini"  # Default OpenAI model (used when chat_provider is "openai")
+    embedding_model: EmbeddingModel = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "all-minilm"))
+    llm_model: ChatModel = field(default_factory=lambda: os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
+    
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    huggingface: HuggingFaceConfig = field(default_factory=HuggingFaceConfig)
 
 
 @dataclass
