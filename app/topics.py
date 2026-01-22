@@ -782,6 +782,62 @@ def _find_matching_topic(
     return None
 
 
+def _assign_single_document_to_topic(
+    db: Session,
+    doc: Document,
+    doc_embeddings: Dict[UUID, np.ndarray]
+) -> dict:
+    """
+    Assign a single uncategorized document to the best matching existing topic.
+    
+    Used in incremental mode when there's only one document to process.
+    """
+    from .mmr import compute_centroid
+    
+    cfg = PREFERENCES.topic_persistence
+    
+    if doc.id not in doc_embeddings:
+        return {"status": "no_embedding", "message": "Document has no embedding"}
+    
+    doc_embedding = doc_embeddings[doc.id]
+    centroid = compute_centroid([doc_embedding], normalize=True)
+    
+    # Try to find a matching Level 0 topic
+    match = _find_matching_topic(
+        db, 
+        centroid, 
+        similarity_threshold=cfg.similarity_threshold_topic,
+        level_index=0
+    )
+    
+    if match:
+        topic_id, topic_title, _ = match
+        doc.assigned_topic_id = topic_id
+        doc.assigned_topic_title = topic_title
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "mode": "incremental_single",
+            "message": f"Assigned document to existing topic: {topic_title}",
+            "documents_assigned": 1,
+            "topics_created": {0: 0, 1: 0, 2: 0},
+            "total_topics": 0
+        }
+    else:
+        # No matching topic found - leave unassigned for now
+        # (could create a new topic, but that requires more context)
+        return {
+            "status": "no_match",
+            "mode": "incremental_single", 
+            "message": "No matching topic found for single document. Run full recluster to create new topics.",
+            "documents_assigned": 0,
+            "topics_created": {0: 0, 1: 0, 2: 0},
+            "total_topics": 0
+        }
+
+
 # ---------- URL canonicalization ----------
 
 def canonicalize_url(url: str) -> str:
@@ -969,6 +1025,7 @@ def dedupe_documents_semantic(
 def compute_hierarchical_topics(
     db: Session,
     days: int = 30,
+    full_recluster: bool = False,
 ) -> dict:
     """
     Compute and save topics at all hierarchy levels using agglomerative clustering.
@@ -980,6 +1037,12 @@ def compute_hierarchical_topics(
     
     Topics at each level are linked to their parent at the next level up.
     
+    Args:
+        db: Database session
+        days: Number of days of documents to include
+        full_recluster: If True, clear all topics and recluster everything.
+                       If False, only process uncategorized documents.
+    
     Returns:
         Dict with statistics and created topic info
     """
@@ -990,18 +1053,33 @@ def compute_hierarchical_topics(
     
     # 1) Select recent documents
     cutoff = datetime.utcnow() - timedelta(days=days)
-    docs = (
-        db.query(Document)
-        .filter(Document.captured_at >= cutoff)
-        .order_by(Document.captured_at.desc())
-        .all()
-    )
+    
+    if full_recluster:
+        # Full recluster: get ALL documents in time range
+        docs = (
+            db.query(Document)
+            .filter(Document.captured_at >= cutoff)
+            .order_by(Document.captured_at.desc())
+            .all()
+        )
+        mode_desc = "FULL RECLUSTER"
+    else:
+        # Incremental: only get UNCATEGORIZED documents in time range
+        docs = (
+            db.query(Document)
+            .filter(Document.captured_at >= cutoff)
+            .filter(Document.assigned_topic_id == None)
+            .order_by(Document.captured_at.desc())
+            .all()
+        )
+        mode_desc = "INCREMENTAL (uncategorized only)"
     
     if not docs:
-        return {"status": "no_documents", "message": "No documents found in time range"}
+        return {"status": "no_documents", "message": f"No {'uncategorized ' if not full_recluster else ''}documents found in time range"}
     
     print(f"\n{'='*60}")
-    print(f"Computing hierarchical topics for {len(docs)} documents")
+    print(f"Computing hierarchical topics - {mode_desc}")
+    print(f"Processing {len(docs)} documents")
     print(f"Thresholds: {agglom_cfg.level_thresholds}")
     print(f"{'='*60}")
     
@@ -1021,6 +1099,13 @@ def compute_hierarchical_topics(
     
     # Filter to docs with embeddings
     docs_with_embeddings = [d for d in canonical_docs if d.id in doc_embeddings]
+    
+    if len(docs_with_embeddings) == 0:
+        return {"status": "no_embeddings", "message": "No documents have embeddings"}
+    
+    # For incremental mode with only 1 doc, try to assign to existing topic
+    if not full_recluster and len(docs_with_embeddings) == 1:
+        return _assign_single_document_to_topic(db, docs_with_embeddings[0], doc_embeddings)
     
     if len(docs_with_embeddings) < 2:
         return {"status": "insufficient_documents", "message": f"Need at least 2 documents, got {len(docs_with_embeddings)}"}
@@ -1055,17 +1140,21 @@ def compute_hierarchical_topics(
     for level, level_stats in stats.items():
         print(f"  Level {level}: {level_stats['n_clusters']} clusters, avg size: {level_stats['avg_size']:.1f}")
     
-    # 8) Clear existing topics for clean reclustering
-    try:
-        deleted = db.query(TOPIC_TABLE).delete()
-        db.commit()
-        print(f"Cleared {deleted} existing topics")
-    except Exception as e:
-        db.rollback()
-        print(f"[WARN] Could not clear existing topics: {e}")
+    # 8) Handle existing topics based on mode
+    if full_recluster:
+        # Full recluster: clear existing topics
+        try:
+            deleted = db.query(TOPIC_TABLE).delete()
+            db.commit()
+            print(f"Cleared {deleted} existing topics")
+        except Exception as e:
+            db.rollback()
+            print(f"[WARN] Could not clear existing topics: {e}")
+    else:
+        # Incremental mode: keep existing topics, we'll try to match or create new ones
+        print("Keeping existing topics (incremental mode)")
     
-    # 9) Create topics at each level, starting from coarsest (level 2) down to finest (level 0)
-    # This ensures parent topics exist before children reference them
+    # 9) Handle topic creation differently based on mode
     
     # Map: (level, cluster_label) -> topic_db_id
     topic_id_map: Dict[Tuple[int, int], UUID] = {}
@@ -1074,61 +1163,117 @@ def compute_hierarchical_topics(
     doc_by_id = {d.id: d for d in docs_with_embeddings}
     
     created_topics = {level: 0 for level in range(len(agglom_cfg.level_thresholds))}
+    matched_topics = {level: 0 for level in range(len(agglom_cfg.level_thresholds))}
     
-    # Process levels from coarsest to finest
-    for level in reversed(range(len(agglom_cfg.level_thresholds))):
-        level_labels = labels_by_level[level]
-        level_structure = structure[level]
+    cfg_persist = PREFERENCES.topic_persistence
+    
+    if full_recluster:
+        # Full recluster: create new topics at all levels
+        for level in reversed(range(len(agglom_cfg.level_thresholds))):
+            level_labels = labels_by_level[level]
+            level_structure = structure[level]
+            
+            print(f"\nCreating Level {level} topics ({len(level_structure)} clusters)...")
+            
+            for cluster_label, doc_ids_in_cluster in level_structure.items():
+                # Get documents in this cluster
+                docs_in_cluster = [doc_by_id[did] for did in doc_ids_in_cluster if did in doc_by_id]
+                
+                if not docs_in_cluster:
+                    continue
+                
+                # Compute centroid
+                cluster_embeddings = [doc_embeddings[d.id] for d in docs_in_cluster]
+                centroid = compute_centroid(cluster_embeddings, normalize=True)
+                
+                # Find parent topic (for levels 0 and 1)
+                parent_id = None
+                if level < len(agglom_cfg.level_thresholds) - 1:
+                    parent_cluster_label = hierarchy.get(level, {}).get(cluster_label)
+                    if parent_cluster_label:
+                        parent_id = topic_id_map.get((level + 1, parent_cluster_label))
+                
+                # Generate title and summary
+                title, summary = _generate_title_and_summary(
+                    docs_in_cluster, 
+                    db=db, 
+                    doc_embeddings=doc_embeddings, 
+                    doc_summaries=doc_summaries
+                )
+                
+                level_names = {0: "Fine", 1: "Topic", 2: "Category"}
+                level_prefix = level_names.get(level, f"L{level}")
+                
+                # Save topic to database
+                topic_db_id = _save_topic_to_db(
+                    db=db,
+                    title=title,
+                    centroid=centroid,
+                    document_count=len(docs_in_cluster),
+                    summary=summary,
+                    parent_id=parent_id,
+                    level_index=level
+                )
+                
+                topic_id_map[(level, cluster_label)] = topic_db_id
+                created_topics[level] += 1
+                
+                print(f"  [{level_prefix}] {title[:50]}... ({len(docs_in_cluster)} docs)")
+            
+            db.commit()
+    else:
+        # Incremental mode: try to match existing topics first, only create if no match
+        # Only process Level 0 for document assignment (we match against existing hierarchy)
+        level_0_structure = structure[0]
         
-        print(f"\nCreating Level {level} topics ({len(level_structure)} clusters)...")
+        print(f"\nIncremental mode: matching {len(level_0_structure)} clusters against existing topics...")
         
-        for cluster_label, doc_ids_in_cluster in level_structure.items():
-            # Get documents in this cluster
+        for cluster_label, doc_ids_in_cluster in level_0_structure.items():
             docs_in_cluster = [doc_by_id[did] for did in doc_ids_in_cluster if did in doc_by_id]
             
             if not docs_in_cluster:
                 continue
             
-            # Compute centroid
+            # Compute centroid for this cluster
             cluster_embeddings = [doc_embeddings[d.id] for d in docs_in_cluster]
             centroid = compute_centroid(cluster_embeddings, normalize=True)
             
-            # Find parent topic (for levels 0 and 1)
-            parent_id = None
-            if level < len(agglom_cfg.level_thresholds) - 1:
-                # Get parent cluster label from hierarchy
-                parent_cluster_label = hierarchy.get(level, {}).get(cluster_label)
-                if parent_cluster_label:
-                    parent_id = topic_id_map.get((level + 1, parent_cluster_label))
-            
-            # Generate title and summary
-            title, summary = _generate_title_and_summary(
-                docs_in_cluster, 
-                db=db, 
-                doc_embeddings=doc_embeddings, 
-                doc_summaries=doc_summaries
+            # Try to find a matching existing Level 0 topic
+            match = _find_matching_topic(
+                db,
+                centroid,
+                similarity_threshold=cfg_persist.similarity_threshold_topic,
+                level_index=0
             )
             
-            # Add level indicator to title for clarity
-            level_names = {0: "Fine", 1: "Topic", 2: "Category"}
-            level_prefix = level_names.get(level, f"L{level}")
-            
-            # Save topic to database
-            topic_db_id = _save_topic_to_db(
-                db=db,
-                title=title,
-                centroid=centroid,
-                document_count=len(docs_in_cluster),
-                summary=summary,
-                parent_id=parent_id,
-                level_index=level
-            )
-            
-            # Store mapping
-            topic_id_map[(level, cluster_label)] = topic_db_id
-            created_topics[level] += 1
-            
-            print(f"  [{level_prefix}] {title[:50]}... ({len(docs_in_cluster)} docs)")
+            if match:
+                # Found a matching topic - use it
+                topic_id, topic_title, _ = match
+                topic_id_map[(0, cluster_label)] = topic_id
+                matched_topics[0] += 1
+                print(f"  [MATCHED] {topic_title[:50]}... ({len(docs_in_cluster)} docs)")
+            else:
+                # No match found - create a new topic
+                title, summary = _generate_title_and_summary(
+                    docs_in_cluster,
+                    db=db,
+                    doc_embeddings=doc_embeddings,
+                    doc_summaries=doc_summaries
+                )
+                
+                topic_db_id = _save_topic_to_db(
+                    db=db,
+                    title=title,
+                    centroid=centroid,
+                    document_count=len(docs_in_cluster),
+                    summary=summary,
+                    parent_id=None,  # No parent in incremental mode (orphan topic)
+                    level_index=0
+                )
+                
+                topic_id_map[(0, cluster_label)] = topic_db_id
+                created_topics[0] += 1
+                print(f"  [NEW] {title[:50]}... ({len(docs_in_cluster)} docs)")
         
         db.commit()
     
@@ -1162,16 +1307,19 @@ def compute_hierarchical_topics(
     # Return summary
     result = {
         "status": "ok",
+        "mode": "full_recluster" if full_recluster else "incremental",
         "documents_processed": len(docs_with_embeddings),
         "topics_created": created_topics,
-        "total_topics": sum(created_topics.values()),
+        "topics_matched": matched_topics,
+        "total_topics_created": sum(created_topics.values()),
+        "total_topics_matched": sum(matched_topics.values()),
         "documents_assigned": assignments,
         "level_stats": stats
     }
     
     print(f"\n{'='*60}")
-    print(f"Hierarchical topic computation complete")
-    print(f"Created: {created_topics}")
+    print(f"Hierarchical topic computation complete ({result['mode']})")
+    print(f"Created: {created_topics}, Matched: {matched_topics}")
     print(f"{'='*60}\n")
     
     return result
@@ -1578,17 +1726,13 @@ def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
     root -> Level 2 (Categories) -> Level 1 (Topics) -> Level 0 (Fine) -> Documents
     
     Uses parent_id relationships in TOPIC_TABLE to build the tree.
+    
+    IMPORTANT: Only includes topics that have documents within the requested time window.
+    Starts from documents, finds their topics, then builds up the ancestor chain.
     """
     from datetime import timedelta
     
     cutoff = datetime.utcnow() - timedelta(days=days)
-    
-    # Get all topics ordered by level (coarsest first)
-    all_topics = (
-        db.query(TOPIC_TABLE)
-        .order_by(TOPIC_TABLE.level_index.desc())
-        .all()
-    )
     
     # Get documents in the time range with topic assignments
     docs_with_topics = (
@@ -1603,21 +1747,54 @@ def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
     for doc in docs_with_topics:
         docs_by_topic.setdefault(doc.assigned_topic_id, []).append(doc)
     
-    # Build topic lookup by ID
-    topic_by_id = {t.id: t for t in all_topics}
+    # Get only the Level 0 topics that have documents in the time window
+    relevant_topic_ids = set(docs_by_topic.keys())
     
-    # Build children lookup (parent_id -> list of child topics)
-    children_by_parent: Dict[UUID, List] = {}
-    level_2_topics = []  # Root level topics (categories)
+    if not relevant_topic_ids:
+        # No documents with topic assignments in this time range
+        # Skip to unassigned docs below
+        all_topics = []
+        topic_by_id = {}
+        children_by_parent = {}
+        level_2_topics = []
+    else:
+        # Get all topics to build lookup tables
+        all_topics = (
+            db.query(TOPIC_TABLE)
+            .order_by(TOPIC_TABLE.level_index.desc())
+            .all()
+        )
+        
+        # Build topic lookup by ID
+        topic_by_id = {t.id: t for t in all_topics}
+        
+        # Walk up the hierarchy to find all ancestor topics that should be included
+        # Start with Level 0 topics that have documents
+        topics_to_include = set(relevant_topic_ids)
+        
+        for topic_id in list(relevant_topic_ids):
+            # Walk up the parent chain
+            current = topic_by_id.get(topic_id)
+            while current and current.parent_id:
+                topics_to_include.add(current.parent_id)
+                current = topic_by_id.get(current.parent_id)
+        
+        # Build children lookup (parent_id -> list of child topics) - only for relevant topics
+        children_by_parent: Dict[UUID, List] = {}
+        level_2_topics = []  # Root level topics (categories)
+        
+        for topic in all_topics:
+            if topic.id not in topics_to_include:
+                continue  # Skip topics not in the relevant set
+            
+            if topic.parent_id and topic.parent_id in topics_to_include:
+                children_by_parent.setdefault(topic.parent_id, []).append(topic)
+            elif topic.level_index == 2:
+                level_2_topics.append(topic)
     
-    for topic in all_topics:
-        if topic.parent_id:
-            children_by_parent.setdefault(topic.parent_id, []).append(topic)
-        elif topic.level_index == 2:
-            level_2_topics.append(topic)
-    
-    def build_topic_node(topic, level_name: str) -> dict:
-        """Recursively build a topic node with its children."""
+    def build_topic_node(topic, level_name: str) -> dict | None:
+        """Recursively build a topic node with its children.
+        Returns None if the topic has no documents in the time window."""
         # Get direct document children (only for Level 0 topics)
         doc_children = []
         if topic.level_index == 0:
@@ -1632,14 +1809,16 @@ def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
                     "type": "document"
                 })
         
-        # Get child topics
+        # Get child topics (only ones in our relevant set)
         child_topics = children_by_parent.get(topic.id, [])
         topic_children = []
         
         child_level_names = {2: "Topic", 1: "Fine", 0: ""}
         for child in child_topics:
             child_node = build_topic_node(child, child_level_names.get(child.level_index, ""))
-            topic_children.append(child_node)
+            # Only include children that have documents
+            if child_node and child_node.get("doc_count", 0) > 0:
+                topic_children.append(child_node)
         
         # Combine children: topic children first, then documents
         all_children = topic_children + doc_children
@@ -1648,6 +1827,10 @@ def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
         total_docs = len(doc_children)
         for child in topic_children:
             total_docs += child.get("doc_count", 0)
+        
+        # Don't include topics with no documents
+        if total_docs == 0:
+            return None
         
         return {
             "name": f"{topic.title_text}" if topic.title_text else f"Cluster {topic.id}",
@@ -1672,21 +1855,23 @@ def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
     # Add Level 2 topics as root children
     for topic in level_2_topics:
         topic_node = build_topic_node(topic, "Category")
-        if topic_node["children"] or topic_node.get("doc_count", 0) > 0:
+        if topic_node and topic_node.get("doc_count", 0) > 0:
             root["children"].append(topic_node)
     
-    # Handle orphan topics (Level 1 or 0 without parents)
+    # Handle orphan topics (Level 1 or 0 without parents that have documents)
     # This can happen if clustering created topics without full hierarchy
-    orphan_topics = [t for t in all_topics 
-                     if t.parent_id is None 
-                     and t.level_index < 2
-                     and t.id not in [lt.id for lt in level_2_topics]]
-    
-    for topic in orphan_topics:
-        level_names = {0: "Fine", 1: "Topic"}
-        topic_node = build_topic_node(topic, level_names.get(topic.level_index, ""))
-        if topic_node["children"] or topic_node.get("doc_count", 0) > 0:
-            root["children"].append(topic_node)
+    if all_topics:
+        orphan_topics = [t for t in all_topics 
+                         if t.parent_id is None 
+                         and t.level_index < 2
+                         and t.id not in [lt.id for lt in level_2_topics]
+                         and t.id in topics_to_include]
+        
+        for topic in orphan_topics:
+            level_names = {0: "Fine", 1: "Topic"}
+            topic_node = build_topic_node(topic, level_names.get(topic.level_index, ""))
+            if topic_node and topic_node.get("doc_count", 0) > 0:
+                root["children"].append(topic_node)
     
     # Also include documents with no topic assignment as "Uncategorized"
     unassigned_docs = (

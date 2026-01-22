@@ -310,11 +310,11 @@ def backfill_chunk_summaries_endpoint(
 @app.post("/topics/recluster")
 def recluster_topics(
     days: int = 30,
-    clear_assignments: bool = True,
+    clear_assignments: bool = False,
     db: Session = Depends(get_db)
 ):
     """
-    Force reclustering of all documents using hierarchical agglomerative clustering.
+    Recluster documents using hierarchical agglomerative clustering.
     
     Creates topics at 3 levels:
     - Level 0: Fine-grained (cosine sim >= 0.85)
@@ -325,14 +325,15 @@ def recluster_topics(
     
     Args:
         days: Number of days of documents to include
-        clear_assignments: If True, clear existing topic assignments first
+        clear_assignments: If True, clear ALL existing topic assignments and do full recluster.
+                          If False (default), only process uncategorized documents.
     
     Returns:
         Statistics about created topics at each level
     """
     from .topics import compute_hierarchical_topics, clear_topics_cache
     
-    # Optionally clear existing topic assignments
+    # Optionally clear existing topic assignments (for full recluster)
     if clear_assignments:
         updated = (
             db.query(Document)
@@ -348,8 +349,8 @@ def recluster_topics(
     # Clear cache first
     clear_topics_cache()
     
-    # Compute hierarchical topics
-    result = compute_hierarchical_topics(db, days=days)
+    # Compute hierarchical topics (pass clear_assignments to control behavior)
+    result = compute_hierarchical_topics(db, days=days, full_recluster=clear_assignments)
     
     return result
 
