@@ -7,12 +7,26 @@ from sqlalchemy.orm import sessionmaker #, Session
 from .models import Base, get_or_create_embedding_class
 from .config import PREFERENCES
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb")
+_raw_db_url = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb")
+
+# Fly.io uses postgres:// but SQLAlchemy needs postgresql://
+# Also ensure we use psycopg2 driver
+DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+if "postgresql://" in DATABASE_URL and "+psycopg2" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def ensure_schemas():
     with engine.connect() as conn:
+        # Enable pgvector extension (required for vector columns)
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+            print("✓ pgvector extension enabled")
+        except Exception as e:
+            print(f"⚠ Could not enable pgvector extension: {e}")
+        
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS embedding"))
         conn.commit()
 
