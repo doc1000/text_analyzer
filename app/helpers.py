@@ -831,8 +831,9 @@ def _huggingface_embed_batch(texts: List[str]) -> List[List[float]]:
         "Content-Type": "application/json"
     }
     
-    # HuggingFace accepts {"inputs": [...]} for batch
-    payload = {"inputs": cleaned_texts}
+    # HuggingFace accepts {"inputs": "..."} or {"inputs": ["...", "..."]} for batch.
+    # wait_for_model helps avoid 503s during cold starts.
+    payload = {"inputs": cleaned_texts, "options": {"wait_for_model": True}}
     
     req = urllib.request.Request(
         url,
