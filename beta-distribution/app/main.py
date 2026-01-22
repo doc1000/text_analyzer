@@ -1,13 +1,12 @@
 # save as app/main.py
 ## IMPORTS
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import asyncio
 from pydantic import BaseModel
-import spacy
-import gzip
 import uvicorn
 import os
 from datetime import datetime
@@ -16,25 +15,30 @@ import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
 #Internal imports
-from .db import init_db, get_db, EMBED_TABLE
-from .schemas import IngestPayload, DocumentDetailResponse
+from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE
+from .schemas import (
+    IngestPayload, DocumentDetailResponse, DocumentUpdateRequest, 
+    SettingsResponse, SettingsUpdateRequest, TopicOption, TopicsListResponse,
+    TopicAssignmentRequest
+)
 from . import models
 from .models import Document
 from .helpers import (get_embedding,embed_doc_chunks,
     _answer_from_hits,DocumentOut, QueryRequest, ChunkHit,
-    QueryResponse, fill_empty_embed_docs
+    QueryResponse, fill_empty_embed_docs, parse_pdfs_from_urls
 )
 from .topics import (
     TopicsResponse,
     build_topics_hierarchy,
     get_topics_with_cache,
     clear_topics_cache,
+    assign_document_to_best_topic,
+    clear_all_topic_assignments,
 )
 from .config import PREFERENCES
+from .helpers import update_openai_client
 
 
-
-nlp = spacy.load("en_core_web_sm")
 
 async def _fill_embeddings_async():
     loop = asyncio.get_running_loop()
@@ -70,73 +74,137 @@ def test_db(db: Session = Depends(get_db)):
     result = db.execute(text('SELECT 1;'))
     return {"db_ok": bool(list(result))}
 
-class Input(BaseModel):
-    text: str
-
-@app.post("/analyzer")
-def analyzer(data: Input):
-    text = data.text
-    doc = nlp(text)
-    
-    # Lexical density
-    content_words = [t for t in doc if t.pos_ in ["NOUN","VERB","ADJ","ADV"]]
-    lexical_density = len(content_words) / len([t for t in doc if t.is_alpha]) if text else 0
-
-    # Specificity (rough)
-    numbers = sum(1 for t in doc if t.like_num)
-    entities = len(doc.ents)
-    sents = list(doc.sents)
-    specificity = min(1.0, (numbers + entities) / (len(sents) + 1))
-
-    # Compression ratio
-    compressed = len(gzip.compress(text.encode("utf-8")))
-    #compressed = len(zlib.compress(text.encode("utf-8")))
-    ratio = len(text.encode("utf-8")) / compressed if compressed else 1
-    
-    # Combine scores (weights adjustable)
-    score = (
-        lexical_density * 40 +
-        specificity * 40 +
-        ratio * 20
-    )
-    score = min(100, score)
-
-    return {
-        "score": score,
-        "lexical_density": lexical_density,
-        "specificity": specificity,
-        "compression_ratio": ratio,
-        "infoScore": score,
-        "aiScore": ratio
-    }
-
 from . import models
 
+def _process_document_embeddings_background(document_id: str):
+    """
+    Background task to process document embeddings and chunking.
+    This runs in the background and won't block the ingest response.
+    """
+    try:
+        # Convert string UUID to UUID object if needed
+        from uuid import UUID as PyUUID
+        try:
+            doc_uuid = PyUUID(document_id) if isinstance(document_id, str) else document_id
+        except (ValueError, TypeError):
+            print(f"[ERROR] Invalid document_id format: {document_id}")
+            return
+        
+        # Get a new database session for this background task
+        db_gen = get_db()
+        db: Session = next(db_gen)
+        try:
+            # Fetch the document
+            doc = db.query(Document).filter(Document.id == doc_uuid).first()
+            if not doc:
+                print(f"[WARN] Document {document_id} not found for embedding processing")
+                return
+            
+            # Process embeddings and chunking
+            print(f"[INFO] Starting background embedding for document {document_id}")
+            chunk_len = embed_doc_chunks(doc)
+            print(f"[INFO] Completed embedding for document {document_id}: {chunk_len} chunks")
+            
+            # Refresh document to get latest state
+            db.refresh(doc)
+            
+            # Try to assign document to best matching topic (if topics exist)
+            if chunk_len > 0:
+                print(f"[INFO] Attempting topic assignment for document {document_id}")
+                assigned = assign_document_to_best_topic(db, doc, similarity_threshold=0.75)
+                if assigned:
+                    print(f"[INFO] Document {document_id} assigned to topic")
+                else:
+                    print(f"[INFO] Document {document_id} left unassigned (will be assigned during topic computation)")
+        except Exception as e:
+            print(f"[ERROR] Failed to process embeddings for document {document_id}: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
+    except Exception as e:
+        print(f"[ERROR] Failed to get database session for document {document_id}: {e}")
+        import traceback
+        traceback.print_exc()
+
 @app.post("/ingest")
-def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
+def ingest(payload: IngestPayload, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """
+    Ingest a new document. The document is saved immediately without a topic assignment.
+    Embedding and chunking happen asynchronously in the background.
+    Topics will be assigned automatically during topic computation.
+    
+    If PDF URLs are provided, they will be parsed and their text appended to the document.
+    """
     # Use captured_at from payload if provided, else now
     captured_at = payload.captured_at or datetime.utcnow()
 
+    # Start with the page text
+    full_text = payload.text or ""
+    
+    # Parse PDFs if provided (this happens synchronously before saving)
+    pdf_text = ""
+    if payload.pdf_urls and len(payload.pdf_urls) > 0:
+        print(f"[INFO] Parsing {len(payload.pdf_urls)} PDF(s) for document")
+        try:
+            pdf_text = parse_pdfs_from_urls(payload.pdf_urls, max_pages_per_pdf=50)  # Limit to 50 pages per PDF
+            if pdf_text:
+                # Combine page text and PDF text
+                if full_text:
+                    full_text = f"{full_text}\n\n--- PDF Content ---\n\n{pdf_text}"
+                else:
+                    full_text = pdf_text
+                print(f"[INFO] Successfully parsed PDFs, total text length: {len(full_text)}")
+            else:
+                print(f"[WARN] No text extracted from PDFs")
+        except Exception as e:
+            print(f"[ERROR] Failed to parse PDFs: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue with just the page text if PDF parsing fails
+    
+    # Ensure we have some text
+    if not full_text or not full_text.strip():
+        raise HTTPException(
+            status_code=400, 
+            detail="No text content found. Please ensure the page has text or PDFs are accessible."
+        )
+
+    # Create document without topic assignment - topics will be assigned during topic computation
     doc = models.Document(
         url=payload.url,
         title=payload.title,
-        full_text=payload.text,
-        score_info=payload.score_info,
-        score_ai_slop=payload.score_ai_slop,
+        full_text=full_text,
         captured_at=captured_at,
+        # No topic assignment - documents will be assigned to topics during topic computation
     )
 
     db.add(doc)
-    #db.flush() # get doc.id without committing yet
+    db.flush()  # Get doc.id without committing yet
+    document_id = doc.id
+    
+    # Commit the document immediately - this ensures it's saved before any async processing
     db.commit()
+    
+    # Refresh to ensure we have the latest state
+    db.refresh(doc)
+    
+    print(f"[INFO] Document {document_id} saved successfully, queuing background embedding")
 
-    chunk_len = embed_doc_chunks(doc)
-    #db.commit()
+    # Process embeddings in the background - this won't block the response
+    # The existing fill_empty_embed_docs process will also catch any documents
+    # that don't get embedded successfully
+    background_tasks.add_task(_process_document_embeddings_background, str(document_id))
 
     return {
         "status": "ok",
-        "document_id": str(doc.id),
-        "num_chunks": int(chunk_len),
+        "document_id": str(document_id),
+        "num_chunks": 0,  # Will be updated asynchronously
+        "message": "Document saved. Embedding in progress.",
+        "pdfs_parsed": len(payload.pdf_urls) if payload.pdf_urls else 0
     }
 
 @app.get("/documents", response_model=List[DocumentOut])
@@ -162,17 +230,34 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     # Convert to numpy array for pgvector compatibility
     q_emb = np.array(q_emb, dtype=np.float32)
 
-    # 2) cosine distance → similarity
-    # Use pgvector's cosine distance operator (<=>) directly
-    # cosine_distance returns distance (0=same, 1=opposite), so similarity = 1 - distance
-    similarity_expr = 1 - EMBED_TABLE.embedding.cosine_distance(q_emb)
-
-    # base query: chunks with non-null embeddings joined to documents
-    base_query = (
-        db.query(EMBED_TABLE, Document, similarity_expr.label("similarity"))
-        .join(Document, EMBED_TABLE.document_id == Document.id)
-        .filter(EMBED_TABLE.embedding != None)  # ← ignore NULL embeddings
-    )
+    # 2) Choose embedding table based on chat provider
+    # OpenAI: use chunk embeddings (longer context, better for OpenAI models)
+    # Ollama: use sentence embeddings (shorter context, better for smaller models)
+    chat_provider = getattr(PREFERENCES.models, "chat_provider", "ollama")
+    use_chunk_embeddings = (chat_provider == "openai")
+    
+    if use_chunk_embeddings:
+        # Query chunk embeddings directly
+        similarity_expr = 1 - EMBED_TABLE.embedding.cosine_distance(q_emb)
+        
+        # base query: chunks with non-null embeddings joined to documents
+        base_query = (
+            db.query(EMBED_TABLE, Document, similarity_expr.label("similarity"))
+            .join(Document, EMBED_TABLE.document_id == Document.id)
+            .filter(EMBED_TABLE.embedding != None)  # ← ignore NULL embeddings
+        )
+    else:
+        # Query sentence embeddings (default for Ollama)
+        similarity_expr = 1 - SENTENCE_TABLE.embedding.cosine_distance(q_emb)
+        
+        # base query: sentences with non-null embeddings joined to chunks and documents
+        # Join path: SENTENCE_TABLE → EMBED_TABLE → Document
+        base_query = (
+            db.query(SENTENCE_TABLE, EMBED_TABLE, Document, similarity_expr.label("similarity"))
+            .join(EMBED_TABLE, SENTENCE_TABLE.chunk_id == EMBED_TABLE.id)
+            .join(Document, EMBED_TABLE.document_id == Document.id)
+            .filter(SENTENCE_TABLE.embedding != None)  # ← ignore NULL embeddings
+        )
 
     # 2b) Optional scoping by document IDs
     if payload.doc_ids:
@@ -204,23 +289,65 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
     )
 
     hits: List[ChunkHit] = []
-    for chunk, doc, similarity in rows:
-        if similarity is None:
-            # extra safety, shouldn't hit if filter above works
-            continue
-
-        hits.append(
-            ChunkHit(
-                document_id=str(doc.id),
-                document_title=doc.title,
-                url=doc.url,
-                score_info=doc.score_info,
-                score_ai_slop=doc.score_ai_slop,
-                chunk_index=chunk.chunk_index,
-                chunk_text=chunk.chunk_text,
-                similarity=float(similarity),
-            )
-        )
+    seen_chunks = set()
+    
+    if use_chunk_embeddings:
+        # Process chunk embeddings (OpenAI)
+        for chunk, doc, similarity in rows:
+            # Deduplicate by chunk position
+            chunk_key = (str(doc.id), chunk.chunk_index)
+            if chunk_key not in seen_chunks:
+                seen_chunks.add(chunk_key)
+                hits.append(
+                    ChunkHit(
+                        document_id=str(doc.id),
+                        document_title=doc.title,
+                        url=doc.url,
+                        chunk_index=chunk.chunk_index,
+                        chunk_text=chunk.chunk_text,
+                        sent_text=None,  # No sentence text when using chunks
+                        sent_index=None,
+                        similarity=float(similarity),
+                    )
+                )
+    else:
+        # Process sentence embeddings (Ollama)
+        seen_sentence_texts = set()
+        for sentence, chunk, doc, similarity in rows:
+            # Deduplicate by sentence text content to avoid showing same text multiple times
+            sent_text_normalized = (sentence.sent_text or "").strip()
+            
+            if sent_text_normalized and sent_text_normalized not in seen_sentence_texts:
+                seen_sentence_texts.add(sent_text_normalized)
+                hits.append(
+                    ChunkHit(
+                        document_id=str(doc.id),
+                        document_title=doc.title,
+                        url=doc.url,
+                        chunk_index=chunk.chunk_index,
+                        chunk_text=chunk.chunk_text,
+                        sent_text=sentence.sent_text,
+                        sent_index=sentence.sent_index,
+                        similarity=float(similarity),
+                    )
+                )
+            elif not sent_text_normalized:
+                # If no sentence text, still add but deduplicate by position
+                pos_key = (str(doc.id), chunk.chunk_index, sentence.sent_index)
+                if pos_key not in seen_sentence_texts:
+                    seen_sentence_texts.add(pos_key)
+                    hits.append(
+                        ChunkHit(
+                            document_id=str(doc.id),
+                            document_title=doc.title,
+                            url=doc.url,
+                            chunk_index=chunk.chunk_index,
+                            chunk_text=chunk.chunk_text,
+                            sent_text=sentence.sent_text,
+                            sent_index=sentence.sent_index,
+                            similarity=float(similarity),
+                        )
+                    )
 
     answer = None
     if payload.with_answer and hits:
@@ -234,6 +361,19 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 #print("STATIC DIR:", STATIC_DIR)  # optional debug
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/")
+def read_root():
+    """Serve the main index.html page."""
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="index.html not found")
+
+@app.get("/index.html")
+def read_index():
+    """Serve the main index.html page."""
+    return read_root()
 
 @app.get("/topics", response_model=TopicsResponse)
 def get_topics(days: int = 10, db: Session = Depends(get_db)):
@@ -254,6 +394,20 @@ def get_topics_hierarchy(days: int = 10, db: Session = Depends(get_db)):
 @app.get("/topics/clear_cache")
 def clear_cache():
     clear_topics_cache()
+    return {"status": "ok", "message": "Topics cache cleared"}
+
+@app.post("/topics/recluster")
+def force_recluster(db: Session = Depends(get_db)):
+    """
+    Force a fresh reclustering of all documents by clearing their topic assignments.
+    Call /topics/hierarchy after this to get newly computed topics.
+    """
+    count = clear_all_topic_assignments(db)
+    return {
+        "status": "ok", 
+        "message": f"Cleared topic assignments for {count} documents. Call /topics/hierarchy to recompute.",
+        "documents_cleared": count
+    }
 
 @app.get("/documents/{document_id}", response_model=DocumentDetailResponse)
 def get_document_detail(document_id: str, db: Session = Depends(get_db)):
@@ -275,20 +429,466 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
         url=doc.url,
         title=doc.title,
         captured_at=doc.captured_at,
-        score_info=doc.score_info,
-        score_ai_slop=doc.score_ai_slop,
+        text=full_text,
+        assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
+        assigned_topic_title=doc.assigned_topic_title,
+    )
+
+@app.put("/documents/{document_id}", response_model=DocumentDetailResponse)
+def update_document(document_id: str, payload: DocumentUpdateRequest, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Update title if provided
+    if payload.title is not None:
+        doc.title = payload.title
+
+    # Update text if provided - need to re-chunk and re-embed
+    if payload.text is not None:
+        doc.full_text = payload.text
+        
+        # Delete old chunks (CASCADE will delete sentences automatically)
+        db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).delete()
+        db.commit()
+        
+        # Re-chunk and re-embed
+        from .helpers import embed_doc_chunks
+        embed_doc_chunks(doc, chunk_type="chunk")
+        
+        # Re-embed sentences for each chunk
+        chunks = db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).all()
+        for chunk in chunks:
+            embed_doc_chunks(chunk, chunk_type="sent")
+
+    db.commit()
+    
+    # Return updated document
+    chunks = (
+        db.query(EMBED_TABLE)
+        .filter(EMBED_TABLE.document_id == doc.id)
+        .order_by(asc(EMBED_TABLE.chunk_index))
+        .all()
+    )
+    full_text = "\n\n".join([c.chunk_text for c in chunks]) if chunks else ""
+
+    return DocumentDetailResponse(
+        id=str(doc.id),
+        url=doc.url,
+        title=doc.title,
+        captured_at=doc.captured_at,
         text=full_text,
     )
+
+@app.delete("/documents/{document_id}")
+def delete_document(document_id: str, db: Session = Depends(get_db)):
+    """Delete a document from the database. Chunks and sentences will be deleted via CASCADE."""
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Store document info for response
+    doc_title = doc.title or "Untitled"
+    
+    # Delete the document (CASCADE will delete chunks and sentences automatically)
+    db.delete(doc)
+    db.commit()
+    
+    # Clear topics cache after successful deletion since document deletion affects topic composition
+    clear_topics_cache()
+    
+    return {"status": "ok", "message": f"Document '{doc_title}' deleted successfully"}
 
 @app.get("/model_configs")
 def get_embedding_length(prompt: str = "this is a test"):
     """
-    return embedding length
+    return embedding length and current model configurations
     """
     emb = len(get_embedding(prompt))
-    return {"len": emb,
-             "embed model":PREFERENCES.models.embedding_model,
-            "chat model": PREFERENCES.models.llm_model}
+    
+    # Determine actual models being used based on providers
+    chat_model = PREFERENCES.models.ollama.chat_model if PREFERENCES.models.chat_provider == "ollama" else PREFERENCES.models.llm_model
+    embedding_model = PREFERENCES.models.ollama.embed_model if PREFERENCES.models.embedding_provider == "ollama" else PREFERENCES.models.embedding_model
+    topic_model = PREFERENCES.models.ollama.topic_model if PREFERENCES.models.topic_provider == "ollama" else PREFERENCES.models.llm_model
+    
+    return {
+        "len": emb,
+        "chat_model": chat_model,
+        "topic_model": topic_model,
+        "embedding_model": embedding_model,
+        "chat_provider": PREFERENCES.models.chat_provider,
+        "embedding_provider": PREFERENCES.models.embedding_provider,
+        "topic_provider": PREFERENCES.models.topic_provider
+    }
+
+@app.get("/settings", response_model=SettingsResponse)
+def get_settings():
+    """Get current settings including models and providers."""
+    # Determine actual models being used based on providers
+    chat_model = PREFERENCES.models.ollama.chat_model if PREFERENCES.models.chat_provider == "ollama" else PREFERENCES.models.llm_model
+    embedding_model = PREFERENCES.models.ollama.embed_model if PREFERENCES.models.embedding_provider == "ollama" else PREFERENCES.models.embedding_model
+    topic_model = PREFERENCES.models.ollama.topic_model if PREFERENCES.models.topic_provider == "ollama" else PREFERENCES.models.llm_model
+    
+    has_openai_key = bool(os.getenv("OPENAI_API_KEY"))
+    
+    return SettingsResponse(
+        chat_model=chat_model,
+        topic_model=topic_model,
+        embedding_model=embedding_model,
+        chat_provider=PREFERENCES.models.chat_provider,
+        embedding_provider=PREFERENCES.models.embedding_provider,
+        topic_provider=PREFERENCES.models.topic_provider,
+        has_openai_key=has_openai_key
+    )
+
+@app.put("/settings", response_model=SettingsResponse)
+def update_settings(payload: SettingsUpdateRequest):
+    """Update settings including providers, model names, and OpenAI API key."""
+    # Update chat provider if provided
+    if payload.chat_provider is not None:
+        if payload.chat_provider not in ["openai", "ollama"]:
+            raise HTTPException(status_code=400, detail="Invalid chat_provider. Must be 'openai' or 'ollama'")
+        PREFERENCES.models.chat_provider = payload.chat_provider
+    
+    # Update embedding provider if provided
+    if payload.embedding_provider is not None:
+        if payload.embedding_provider not in ["openai", "ollama"]:
+            raise HTTPException(status_code=400, detail="Invalid embedding_provider. Must be 'openai' or 'ollama'")
+        PREFERENCES.models.embedding_provider = payload.embedding_provider
+    
+    # Update topic provider if provided
+    if payload.topic_provider is not None:
+        if payload.topic_provider not in ["openai", "ollama"]:
+            raise HTTPException(status_code=400, detail="Invalid topic_provider. Must be 'openai' or 'ollama'")
+        PREFERENCES.models.topic_provider = payload.topic_provider
+    
+    # Update Ollama model names if provided
+    if payload.chat_model is not None:
+        PREFERENCES.models.ollama.chat_model = payload.chat_model
+    
+    if payload.topic_model is not None:
+        PREFERENCES.models.ollama.topic_model = payload.topic_model
+    
+    if payload.embed_model is not None:
+        PREFERENCES.models.ollama.embed_model = payload.embed_model
+    
+    # Update OpenAI model names if provided
+    if payload.llm_model is not None:
+        PREFERENCES.models.llm_model = payload.llm_model
+    
+    if payload.embedding_model is not None:
+        PREFERENCES.models.embedding_model = payload.embedding_model
+    
+    # Update OpenAI API key if provided
+    if payload.openai_api_key is not None:
+        if payload.openai_api_key.strip():
+            update_openai_client(payload.openai_api_key.strip())
+            # Optionally save to .env file for persistence
+            # For now, just update the environment variable
+        else:
+            # Empty string means remove the key
+            os.environ.pop("OPENAI_API_KEY", None)
+            import app.helpers as helpers_module
+            helpers_module._client_instance = None
+    
+    # Persist settings to file
+    from .config import save_settings_to_file
+    save_settings_to_file(PREFERENCES)
+    
+    # Return updated settings
+    return get_settings()
+
+
+# ---------- Topic Assignment Endpoints ----------
+
+@app.get("/documents/{document_id}/topics", response_model=TopicsListResponse)
+def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
+    """
+    Get all existing topics sorted by semantic similarity to the document's embedding.
+    Most similar topics appear first.
+    
+    If the document has an assigned topic, it will be included in the results.
+    Uses efficient SQL with pgvector's cosine distance operator.
+    """
+    # Verify document exists
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Get table names for raw SQL
+    embed_table_name = EMBED_TABLE.__tablename__
+    topic_table_name = TOPIC_TABLE.__tablename__
+    
+    # Check if document has embeddings
+    check_sql = text(f"""
+        SELECT COUNT(*) FROM embedding.{embed_table_name}
+        WHERE document_id = :doc_id AND embedding IS NOT NULL
+    """)
+    count_result = db.execute(check_sql, {"doc_id": document_id}).scalar()
+    if count_result == 0:
+        raise HTTPException(status_code=400, detail="Document has no embeddings. Please wait for embedding processing.")
+    
+    # Check if any topics exist at all
+    topic_check_sql = text(f"""
+        SELECT COUNT(*) FROM embedding.{topic_table_name}
+        WHERE level_index = 0 AND embedding IS NOT NULL
+    """)
+    topic_count = db.execute(topic_check_sql).scalar()
+    if topic_count == 0:
+        # No topics exist yet - user needs to generate topics first
+        return TopicsListResponse(topics=[])
+    
+    # Use raw SQL for efficient pgvector operations:
+    # 1. Compute average embedding for document's chunks
+    # 2. Order topics by cosine distance (similarity = 1 - distance)
+    # 3. Include assigned topic even if not most similar (using UNION)
+    sql = text(f"""
+        WITH doc_embedding AS (
+            SELECT AVG(embedding) as avg_emb
+            FROM embedding.{embed_table_name}
+            WHERE document_id = :doc_id
+            AND embedding IS NOT NULL
+        )
+        SELECT 
+            t.id,
+            t.title_text,
+            t.document_count,
+            1 - (t.embedding <=> de.avg_emb) as similarity
+        FROM embedding.{topic_table_name} t
+        CROSS JOIN doc_embedding de
+        WHERE t.level_index = 0
+        AND t.embedding IS NOT NULL
+        AND de.avg_emb IS NOT NULL
+        ORDER BY t.embedding <=> de.avg_emb ASC
+        LIMIT 100
+    """)
+    
+    result = db.execute(sql, {"doc_id": document_id})
+    rows = result.fetchall()
+    
+    # If document has an assigned topic, ensure it's in the results
+    assigned_topic_id = doc.assigned_topic_id
+    if assigned_topic_id:
+        # Check if assigned topic is already in results
+        assigned_in_results = any(str(row.id) == str(assigned_topic_id) for row in rows)
+        
+        if not assigned_in_results:
+            # Fetch the assigned topic separately
+            assigned_sql = text(f"""
+                SELECT id, title_text, document_count
+                FROM embedding.{topic_table_name}
+                WHERE id = :topic_id AND level_index = 0
+            """)
+            assigned_result = db.execute(assigned_sql, {"topic_id": assigned_topic_id}).fetchone()
+            
+            if assigned_result:
+                # Calculate similarity for assigned topic
+                similarity_sql = text(f"""
+                    WITH doc_embedding AS (
+                        SELECT AVG(embedding) as avg_emb
+                        FROM embedding.{embed_table_name}
+                        WHERE document_id = :doc_id
+                        AND embedding IS NOT NULL
+                    )
+                    SELECT 1 - (t.embedding <=> de.avg_emb) as similarity
+                    FROM embedding.{topic_table_name} t
+                    CROSS JOIN doc_embedding de
+                    WHERE t.id = :topic_id AND t.embedding IS NOT NULL AND de.avg_emb IS NOT NULL
+                """)
+                similarity_result = db.execute(similarity_sql, {"doc_id": document_id, "topic_id": assigned_topic_id}).scalar()
+                
+                if similarity_result is not None:
+                    # Create a row-like object for the assigned topic
+                    from collections import namedtuple
+                    TopicRow = namedtuple('TopicRow', ['id', 'title_text', 'document_count', 'similarity'])
+                    assigned_row = TopicRow(
+                        id=assigned_result.id,
+                        title_text=assigned_result.title_text,
+                        document_count=assigned_result.document_count,
+                        similarity=float(similarity_result)
+                    )
+                    # Add to beginning of results (most relevant)
+                    rows = [assigned_row] + list(rows)
+    
+    if not rows:
+        return TopicsListResponse(topics=[])
+    
+    topic_options = [
+        TopicOption(
+            id=str(row.id),
+            title=row.title_text,
+            similarity=round(float(row.similarity), 4) if row.similarity else 0.0,
+            document_count=row.document_count or 0
+        )
+        for row in rows
+    ]
+    
+    return TopicsListResponse(topics=topic_options)
+
+
+@app.post("/documents/{document_id}/topic/generate")
+def generate_topic_for_document(document_id: str, db: Session = Depends(get_db)):
+    """
+    Generate a topic title for a document using AI, but don't assign it yet.
+    Returns the generated title for user preview/approval.
+    """
+    from .topics import compute_document_embeddings, _generate_title_and_summary
+    
+    # Get the document
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Compute document embedding
+    doc_embeddings = compute_document_embeddings(db, [doc])
+    if doc.id not in doc_embeddings:
+        raise HTTPException(status_code=400, detail="Document has no embeddings")
+    
+    # Generate title using the topic model
+    title, summary = _generate_title_and_summary([doc], db=db, doc_embeddings=doc_embeddings)
+    
+    return {
+        "status": "ok",
+        "generated_title": title,
+        "generated_summary": summary
+    }
+
+
+@app.put("/documents/{document_id}/topic")
+def update_document_topic(
+    document_id: str, 
+    payload: TopicAssignmentRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Update a document's topic assignment.
+    
+    Options:
+    1. topic_id provided: Assign to existing topic
+    2. custom_title provided: Create new topic with custom title
+    3. generate_new=True: Use AI to generate a new topic for this document
+    """
+    from .topics import (
+        compute_document_embeddings, _save_topic_to_db, 
+        _generate_title_and_summary, clear_topics_cache
+    )
+    from .mmr import compute_centroid
+    from uuid import UUID as PyUUID
+    
+    # Get the document
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Compute document embedding (needed for new topic creation)
+    doc_embeddings = compute_document_embeddings(db, [doc])
+    
+    if payload.topic_id:
+        # Option 1: Assign to existing topic
+        try:
+            # Handle both string UUIDs and UUID objects
+            if isinstance(payload.topic_id, str):
+                topic_uuid = PyUUID(payload.topic_id)
+            else:
+                topic_uuid = payload.topic_id
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid topic_id format: {e}")
+        
+        topic = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id == topic_uuid).first()
+        if not topic:
+            raise HTTPException(status_code=404, detail="Topic not found")
+        
+        doc.assigned_topic_id = topic.id
+        doc.assigned_topic_title = topic.title_text
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": f"Document assigned to topic: {topic.title_text}",
+            "assigned_topic_id": str(topic.id),
+            "assigned_topic_title": topic.title_text
+        }
+    
+    elif payload.custom_title:
+        # Option 2: Create new topic with custom title
+        if doc.id not in doc_embeddings:
+            raise HTTPException(status_code=400, detail="Document has no embeddings")
+        
+        # Use document embedding as centroid for the new topic
+        centroid = doc_embeddings[doc.id]
+        
+        topic_id = _save_topic_to_db(
+            db=db,
+            title=payload.custom_title,
+            centroid=centroid,
+            document_count=1,
+            summary=None,
+            level_index=0
+        )
+        
+        doc.assigned_topic_id = topic_id
+        doc.assigned_topic_title = payload.custom_title
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": f"Created new topic: {payload.custom_title}",
+            "assigned_topic_id": str(topic_id),
+            "assigned_topic_title": payload.custom_title
+        }
+    
+    elif payload.generate_new:
+        # Option 3: Generate new topic using AI
+        if doc.id not in doc_embeddings:
+            raise HTTPException(status_code=400, detail="Document has no embeddings")
+        
+        # Generate title using the topic model
+        title, summary = _generate_title_and_summary([doc], db=db, doc_embeddings=doc_embeddings)
+        
+        # Use document embedding as centroid
+        centroid = doc_embeddings[doc.id]
+        
+        topic_id = _save_topic_to_db(
+            db=db,
+            title=title,
+            centroid=centroid,
+            document_count=1,
+            summary=summary,
+            level_index=0
+        )
+        
+        doc.assigned_topic_id = topic_id
+        doc.assigned_topic_title = title
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": f"Generated new topic: {title}",
+            "assigned_topic_id": str(topic_id),
+            "assigned_topic_title": title
+        }
+    
+    else:
+        # Clear topic assignment
+        doc.assigned_topic_id = None
+        doc.assigned_topic_title = None
+        
+        db.commit()
+        clear_topics_cache()
+        
+        return {
+            "status": "ok",
+            "message": "Topic assignment cleared",
+            "assigned_topic_id": None,
+            "assigned_topic_title": None
+        }
+
 
 if __name__ == "__main__":
 	#pip install -r requirements.txt

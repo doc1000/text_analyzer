@@ -24,9 +24,12 @@ class Document(Base):
     url = Column(Text, nullable=False)
     title = Column(Text, nullable=True)
     full_text = Column(Text, nullable=False)
-    score_info = Column(Float, nullable=True)
-    score_ai_slop = Column(Float, nullable=True)
     captured_at = Column(DateTime, default=datetime.utcnow)
+    # Assigned topic - stores the UUID of the topic this document belongs to
+    # References the dynamically-created TOPIC_TABLE (no FK constraint due to dynamic table)
+    assigned_topic_id = Column(UUID(as_uuid=True), nullable=True)
+    # Denormalized topic title for quick access without joins
+    assigned_topic_title = Column(Text, nullable=True)
 
 
 class EmbeddingModel(Base):
@@ -101,6 +104,12 @@ def register_embedding_model(
     version: str,
     dim: int,
 ) -> EmbeddingModel:
+    """
+    Register an embedding model in the embedding.embedding_model table.
+    
+    Note: This function assumes init_db() has been called first to create
+    the embedding.embedding_model table. If called before init_db(), it will fail.
+    """
     table_name = make_safe_table_name(model_name, version, dim)
     table_location = f"embedding.{table_name}"
 

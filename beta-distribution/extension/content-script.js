@@ -4,7 +4,107 @@ const browserAPI = typeof browser !== "undefined" ? browser : chrome;
 console.log("[VB] content script loaded", location.href);
 
 function extractPageText() {
-  return document.body ? (document.body.innerText || "") : "";
+  let text = document.body ? (document.body.innerText || "") : "";
+  
+  // Detect PDF iframes/embeds and extract their URLs
+  const pdfUrls = [];
+  const currentUrl = window.location.href;
+  
+  // Check if current page is a direct PDF URL (common on arxiv.org, etc.)
+  // Pattern: /pdf/ or ends with .pdf or content-type is application/pdf
+  const isDirectPdf = currentUrl.match(/\/pdf\//) || 
+                      currentUrl.endsWith('.pdf') || 
+                      currentUrl.includes('/pdf?') ||
+                      document.contentType === 'application/pdf';
+  
+  if (isDirectPdf) {
+    // Current page IS a PDF - add it to PDF URLs
+    pdfUrls.push(currentUrl);
+    console.log("[VB CS] Detected direct PDF URL:", currentUrl);
+  }
+  
+  // Special handling for arxiv.org abstract pages - extract PDF URL
+  if (currentUrl.includes('arxiv.org/abs/')) {
+    // Convert abstract URL to PDF URL
+    // e.g., https://arxiv.org/abs/2512.13564 -> https://arxiv.org/pdf/2512.13564.pdf
+    const paperId = currentUrl.match(/arxiv\.org\/abs\/([^\/?#]+)/);
+    if (paperId && paperId[1]) {
+      const pdfUrl = `https://arxiv.org/pdf/${paperId[1]}.pdf`;
+      pdfUrls.push(pdfUrl);
+      console.log("[VB CS] Extracted arxiv PDF URL:", pdfUrl);
+    }
+  }
+  
+  // Check for PDF iframes
+  const pdfIframes = document.querySelectorAll('iframe[src*=".pdf"], iframe[src*="/pdf"], iframe[src*="application/pdf"]');
+  pdfIframes.forEach(iframe => {
+    const src = iframe.src || iframe.getAttribute('data-src') || iframe.getAttribute('data-url');
+    if (src) {
+      // Resolve relative URLs
+      try {
+        const absoluteUrl = new URL(src, window.location.href).href;
+        if (absoluteUrl.includes('.pdf') || absoluteUrl.includes('/pdf') || absoluteUrl.includes('application/pdf')) {
+          pdfUrls.push(absoluteUrl);
+        }
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+  });
+  
+  // Check for embed tags
+  const pdfEmbeds = document.querySelectorAll('embed[type="application/pdf"], object[type="application/pdf"]');
+  pdfEmbeds.forEach(embed => {
+    const src = embed.src || embed.getAttribute('data') || embed.getAttribute('data-src');
+    if (src) {
+      try {
+        const absoluteUrl = new URL(src, window.location.href).href;
+        pdfUrls.push(absoluteUrl);
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+  });
+  
+  // Check for links to PDFs (common on academic sites)
+  const pdfLinks = document.querySelectorAll('a[href$=".pdf"], a[href*=".pdf?"], a[href*="/pdf"]');
+  pdfLinks.forEach(link => {
+    const href = link.href;
+    if (href && !pdfUrls.includes(href)) {
+      try {
+        const absoluteUrl = new URL(href, window.location.href).href;
+        if (absoluteUrl.includes('.pdf')) {
+          pdfUrls.push(absoluteUrl);
+        }
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+  });
+  
+  // For arxiv abstract pages, also look for "Download PDF" links
+  if (currentUrl.includes('arxiv.org/abs/')) {
+    const downloadLinks = document.querySelectorAll('a[href*="/pdf/"], a[href*=".pdf"]');
+    downloadLinks.forEach(link => {
+      const href = link.href || link.getAttribute('href');
+      if (href && href.includes('/pdf/') && !pdfUrls.includes(href)) {
+        try {
+          const absoluteUrl = new URL(href, window.location.href).href;
+          pdfUrls.push(absoluteUrl);
+        } catch (e) {
+          // Invalid URL, skip
+        }
+      }
+    });
+  }
+  
+  // Remove duplicates
+  const uniquePdfUrls = [...new Set(pdfUrls)];
+  
+  return {
+    text: text,
+    pdfUrls: uniquePdfUrls
+  };
 }
 
 // Handle analyzer-related messages + overlay
@@ -12,8 +112,33 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[VB CS] message received:", message);
   
   if (message && message.type === "VB_GET_SELECTION_CONTEXT") {
+      let selectionText = "";
+      
+      // Try to get selection from window.getSelection() (works for HTML pages)
       const selection = window.getSelection();
-      const selectionText = selection ? selection.toString() : "";
+      if (selection && selection.toString().trim()) {
+        selectionText = selection.toString();
+      } else {
+        // For PDF pages or when selection doesn't work, try alternative methods
+        // Check if we're on a PDF page
+        const isPdf = window.location.href.match(/\/pdf\//) || 
+                     window.location.href.endsWith('.pdf') ||
+                     document.contentType === 'application/pdf';
+        
+        if (isPdf) {
+          // On PDF pages, selection might not work via getSelection()
+          // Try to get selected text from clipboard or document
+          // Note: This is limited by browser security, but we can try
+          try {
+            // For PDFs, we'll need to rely on the PDF URL being captured
+            // Selection from PDF viewer is very limited due to browser security
+            selectionText = "";
+            console.log("[VB CS] PDF page detected - selection capture limited");
+          } catch (e) {
+            console.log("[VB CS] Could not get selection from PDF:", e);
+          }
+        }
+      }
 
       sendResponse({
         selectionText,
@@ -25,11 +150,14 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
   }
   if (message.type === "collect-text") {
-    const text = extractPageText();
-    console.log("[VB CS] collect-text returning", text.length, "chars");
+    const result = extractPageText();
+    const text = result.text || "";
+    const pdfUrls = result.pdfUrls || [];
+    console.log("[VB CS] collect-text returning", text.length, "chars", pdfUrls.length, "PDFs");
 
     sendResponse({
       text,
+      pdfUrls: pdfUrls,
       url: window.location.href,
       title: document.title
     });
@@ -79,29 +207,17 @@ function showResultOverlay(result) {
   overlay.style.maxWidth = "260px";
   overlay.style.boxShadow = "0 4px 10px rgba(0,0,0,0.4)";
 
-  const score = (result.score ?? 0).toFixed(1);
-  const lexical = (result.lexical_density ?? 0).toFixed(3);
-  const spec = (result.specificity ?? 0).toFixed(3);
-  const ratio = (result.compression_ratio ?? 0).toFixed(2);
-
-  
-  overlay.textContent = `
+  overlay.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-      <strong style="font-size:14px;">Info Density</strong>
+      <strong style="font-size:14px;">VaultBubble</strong>
       <button id="info-density-close"
               style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;">✕</button>
     </div>
     <div style="margin-bottom:6px;">
-      <span style="font-size:24px;font-weight:bold;">${score}</span>
-      <span style="font-size:11px;opacity:0.7;">/100</span>
+      <span style="font-size:18px;font-weight:bold;">✓ Captured</span>
     </div>
-    <div style="font-size:12px;line-height:1.4;">
-      <div><strong>Lexical density:</strong> ${lexical}</div>
-      <div><strong>Specificity:</strong> ${spec}</div>
-      <div><strong>Compression ratio:</strong> ${ratio}</div>
-    </div>
-    <div style="margin-top:6px;font-size:11px;opacity:0.8;">
-      Higher scores ≈ more specific, information-dense text.
+    <div style="font-size:12px;opacity:0.8;">
+      Page content saved to VaultBubble.
     </div>
   `;
 
@@ -111,6 +227,11 @@ function showResultOverlay(result) {
   if (btn) {
     btn.addEventListener("click", () => overlay.remove());
   }
+  
+  // Auto-hide after 3 seconds
+  setTimeout(() => {
+    if (overlay.parentNode) overlay.remove();
+  }, 3000);
 }
 
 function makeOverlayHeader(titleText) {
@@ -149,52 +270,6 @@ function showErrorOverlay(overlay, errorText) {
   overlay.append(header, body);
 }
 
-function showScoreOverlay(overlay, { score, lexical, spec, ratio }) {
-  overlay.replaceChildren(); // clear
-  const header = makeOverlayHeader("Info Density");
-  header.querySelector("strong").style.fontSize = "14px";
-
-  const scoreRow = document.createElement("div");
-  scoreRow.style.marginBottom = "6px";
-
-  const scoreBig = document.createElement("span");
-  scoreBig.style.fontSize = "24px";
-  scoreBig.style.fontWeight = "bold";
-  scoreBig.textContent = String(score);
-
-  const scoreDenom = document.createElement("span");
-  scoreDenom.style.fontSize = "11px";
-  scoreDenom.style.opacity = "0.7";
-  scoreDenom.textContent = "/100";
-
-  scoreRow.append(scoreBig, document.createTextNode(" "), scoreDenom);
-
-  const stats = document.createElement("div");
-  stats.style.fontSize = "12px";
-  stats.style.lineHeight = "1.4";
-
-  const mkLine = (label, value) => {
-    const line = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = label + ":";
-    line.append(strong, document.createTextNode(" " + String(value)));
-    return line;
-  };
-
-  stats.append(
-    mkLine("Lexical density", lexical),
-    mkLine("Specificity", spec),
-    mkLine("Compression ratio", ratio)
-  );
-
-  const footer = document.createElement("div");
-  footer.style.marginTop = "6px";
-  footer.style.fontSize = "11px";
-  footer.style.opacity = "0.8";
-  footer.textContent = "Higher scores ≈ more specific, information-dense text.";
-
-  overlay.append(header, scoreRow, stats, footer);
-}
 
 
 

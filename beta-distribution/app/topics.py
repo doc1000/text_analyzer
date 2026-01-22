@@ -22,11 +22,8 @@ from .schemas import (         # whatever pydantic models you use
     TopicDoc,
     TopicsResponse,
 )
-from .helpers import _openai_chat, _ollama_chat, get_embedding
+from .helpers import _openai_chat, _ollama_chat, get_embedding, get_openai_client, update_openai_client
 from .db import EMBED_TABLE, TOPIC_TABLE
-
-# ---------- OpenAI client ----------
-_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Simple in-memory cache for topics per (days, max_captured_at)
 _topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
 
@@ -236,21 +233,26 @@ def _generate_title_and_summary_mmr(
     prompt = (
         "You are categorizing a cluster of documents.\n"
         "Below are the most representative sentences from this cluster.\n"
-        "Create a concise topic title (max 15 words) capturing the main theme.\n\n"
+        "Create a SHORT topic title (3-6 words max) that captures the BROAD, HIGH-LEVEL theme connecting these documents.\n"
+        "Focus on the overarching concept or pattern, NOT specific details or particulars.\n"
+        "Think about what connects these documents at a conceptual level - what is the common thread?\n"
+        "Examples: 'Machine Learning Research', 'Financial Planning', 'Health & Wellness', 'Product Development'\n\n"
         "REPRESENTATIVE SENTENCES:\n"
         f"{context}\n\n"
         "Respond ONLY with:\n"
         "TITLE: <your title>"
     )
     
-    # Send to LLM
-    model_provider = getattr(PREFERENCES.models, "provider", "openai")
-    if model_provider == "ollama":
+    # Send to LLM - use topic_model for faster topic generation
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
+    if topic_provider == "ollama":
         ollama_options = {
             "temperature": 0.6,
             "top_p": 0.8,
         }
-        text = _ollama_chat(prompt, ollama_options)
+        # Use topic_model for topic generation (faster latency)
+        topic_model = PREFERENCES.models.ollama.topic_model
+        text = _ollama_chat(prompt, ollama_options, model=topic_model)
     else:
         text = _openai_chat(prompt)
     
@@ -298,7 +300,7 @@ def _generate_title_and_summary_mmr(
     return title, summary
 
 
-def _generate_title_from_document_titles(docs: List[Document], max_words: int = 15) -> str:
+def _generate_title_from_document_titles(docs: List[Document], max_words: int = 6) -> str:
     """
     Generate a title from document titles as a final fallback.
     Creates a concise title from the first few document titles.
@@ -408,21 +410,25 @@ def _generate_title_and_summary_fallback(docs: List[Document]) -> Tuple[str, str
     prompt = (
         "You are helping categorize a cluster of documents. "
         "Based on the titles and snippets below, create:\n"
-        "A SHORT topic title (max 15 words) that captures the main theme of the documents.\n"
-        "Include information from each document in the title, if relevant. "
-        "Do not return an exact copy of the document titles, but use the information to create a concise title.\n"
+        "A SHORT topic title (3-6 words max) that captures the BROAD, HIGH-LEVEL theme connecting these documents.\n"
+        "Focus on the overarching concept or pattern that connects them, NOT specific details or particulars.\n"
+        "Think about what connects these documents at a conceptual level - what is the common thread?\n"
+        "Examples: 'Machine Learning Research', 'Financial Planning', 'Health & Wellness', 'Product Development'\n"
+        "Do not return an exact copy of the document titles, but identify the broad theme.\n"
         "Respond in the format:\n"
         "TITLE: <short title>\n"
         f"DOCUMENTS:\n{context}"
     )
     
-    model_provider = getattr(PREFERENCES.models, "provider", "openai")
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "ollama")
     ollama_title_options = {
         "temperature": 0.6,
         "top_p": 0.8,
     }
-    if model_provider == "ollama":
-        text = _ollama_chat(prompt, ollama_title_options)
+    if topic_provider == "ollama":
+        # Use topic_model for topic generation (faster latency)
+        topic_model = PREFERENCES.models.ollama.topic_model
+        text = _ollama_chat(prompt, ollama_title_options, model=topic_model)
     else:
         text = _openai_chat(prompt)
     
@@ -527,21 +533,30 @@ def _save_topic_to_db(
     Returns:
         UUID of created topic
     """
-    topic_record = TOPIC_TABLE(
-        parent_id=parent_id,
-        level_index=level_index,
-        title_text=title,
-        embedding=centroid.tolist(),
-        document_count=document_count,
-        summary_text=summary,
-        match_count=0
-    )
-    
-    db.add(topic_record)
-    db.commit()
-    db.refresh(topic_record)
-    
-    return topic_record.id
+    try:
+        topic_record = TOPIC_TABLE(
+            parent_id=parent_id,
+            level_index=level_index,
+            title_text=title,
+            embedding=centroid.tolist(),
+            document_count=document_count,
+            summary_text=summary,
+            match_count=0
+        )
+        
+        db.add(topic_record)
+        db.flush()  # Flush before commit to catch any errors early
+        db.commit()
+        db.refresh(topic_record)
+        
+        print(f"[DEBUG] Successfully saved topic '{title}' to database (ID: {topic_record.id})")
+        return topic_record.id
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] Failed to save topic '{title}' to database: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 def _find_matching_topic(
@@ -574,11 +589,15 @@ def _find_matching_topic(
     )
     
     if not existing_topics:
+        print(f"[DEBUG] _find_matching_topic: No existing topics at level {level_index}")
         return None
+    
+    print(f"[DEBUG] _find_matching_topic: Checking {len(existing_topics)} existing topics (threshold: {similarity_threshold})")
     
     # Find best match using cosine similarity
     best_match = None
     best_similarity = similarity_threshold
+    actual_best_similarity = 0.0  # Track the actual best even if below threshold
     
     for topic in existing_topics:
         topic_emb = normalize_embedding(topic.embedding)
@@ -586,6 +605,9 @@ def _find_matching_topic(
             centroid.reshape(1, -1),
             topic_emb.reshape(1, -1)
         )[0, 0])
+        
+        if similarity > actual_best_similarity:
+            actual_best_similarity = similarity
         
         if similarity > best_similarity:
             best_similarity = similarity
@@ -597,9 +619,68 @@ def _find_matching_topic(
         best_match.match_count = (best_match.match_count or 0) + 1
         db.commit()
         
+        print(f"[DEBUG] _find_matching_topic: Found match '{best_match.title_text}' (similarity: {best_similarity:.4f})")
         return (best_match.id, best_match.title_text, best_match.summary_text or "")
     
+    print(f"[DEBUG] _find_matching_topic: No match above threshold (best similarity: {actual_best_similarity:.4f})")
     return None
+
+
+def assign_document_to_best_topic(
+    db: Session,
+    doc: Document,
+    similarity_threshold: float = 0.75
+) -> bool:
+    """
+    Assign a document to the best matching existing topic based on semantic similarity.
+    
+    Args:
+        db: Database session
+        doc: Document to assign
+        similarity_threshold: Minimum similarity to assign (default 0.75)
+    
+    Returns:
+        True if document was assigned to a topic, False otherwise
+    """
+    try:
+        # Skip if document already has a topic assignment
+        if doc.assigned_topic_id:
+            return True
+        
+        # Compute document embedding
+        doc_embeddings = compute_document_embeddings(db, [doc])
+        if doc.id not in doc_embeddings:
+            print(f"[Topic Assignment] Document {doc.id} has no embeddings, skipping topic assignment")
+            return False
+        
+        doc_embedding = doc_embeddings[doc.id]
+        
+        # Find best matching topic
+        match_result = _find_matching_topic(
+            db=db,
+            centroid=doc_embedding,
+            similarity_threshold=similarity_threshold,
+            level_index=0  # Top-level topics only
+        )
+        
+        if match_result:
+            topic_id, topic_title, topic_summary = match_result
+            # Assign document to topic
+            doc.assigned_topic_id = topic_id
+            doc.assigned_topic_title = topic_title
+            db.commit()
+            print(f"[Topic Assignment] Assigned document {doc.id} to topic: {topic_title}")
+            return True
+        else:
+            print(f"[Topic Assignment] No matching topic found for document {doc.id} (threshold: {similarity_threshold})")
+            return False
+            
+    except Exception as e:
+        print(f"[Topic Assignment] Error assigning document {doc.id} to topic: {e}")
+        import traceback
+        traceback.print_exc()
+        db.rollback()
+        return False
 
 
 # ---------- URL canonicalization ----------
@@ -773,93 +854,164 @@ def compute_topics(
     # 4) Semantic dedupe (keeps latest among high-similarity docs)
     deduped_docs = dedupe_documents_semantic(canonical_docs, doc_embeddings)
 
-    if len(deduped_docs) < min_docs_for_clustering:
-        # Not enough docs to cluster — return a single topic
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
-                )
-            ],
-        )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
+    # 4b) Separate documents with existing topic assignments from unassigned
+    # Pre-assigned documents will be grouped by their existing topic
+    pre_assigned_groups: Dict[UUID, List[Document]] = {}
+    unassigned_docs: List[Document] = []
+    
+    for d in deduped_docs:
+        if d.assigned_topic_id:
+            pre_assigned_groups.setdefault(d.assigned_topic_id, []).append(d)
+        else:
+            unassigned_docs.append(d)
+    
+    print(f"[Topics] {len(pre_assigned_groups)} existing topic groups, {len(unassigned_docs)} unassigned docs")
 
-    # Build matrix of embeddings for deduped docs
-    deduped_docs = [d for d in deduped_docs if d.id in doc_embeddings]
-    if len(deduped_docs) < min_docs_for_clustering:
-        # if embeddings filtered out too much
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
-                )
-            ],
-        )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
-    # Build matrix of embeddings for deduped docs
-    deduped_docs = [d for d in deduped_docs if d.id in doc_embeddings]
-    if len(deduped_docs) < min_docs_for_clustering:
-        # embeddings filtered out too much
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
-                )
-            ],
-        )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
+    # ---------- Check if we should force reclustering ----------
+    # Force reclustering if number of pre-assigned groups exceeds k_topics_recluster
+    # Use /topics/recluster endpoint to manually force fresh clustering
+    total_pre_assigned_docs = sum(len(docs) for docs in pre_assigned_groups.values())
+    should_recluster = len(pre_assigned_groups) > cfg.k_topics_recluster
+    
+    topics: List[Topic] = []
+    topic_idx_counter = 0
+    
+    if should_recluster:
+        print(f"[Topics] Forcing recluster: {len(pre_assigned_groups)} pre-assigned groups, {total_pre_assigned_docs} total docs (threshold: {cfg.k_topics_recluster})")
+        # Collect all documents from pre-assigned groups and add them to unassigned_docs
+        # Also clear their topic assignments so they get fresh assignments
+        docs_to_recluster = []
+        for topic_db_id, docs_in_group in pre_assigned_groups.items():
+            for doc in docs_in_group:
+                doc.assigned_topic_id = None
+                doc.assigned_topic_title = None
+            docs_to_recluster.extend(docs_in_group)
+        unassigned_docs.extend(docs_to_recluster)
+        # Commit the cleared assignments
+        try:
+            db.commit()
+            print(f"[Topics] Cleared topic assignments for {len(docs_to_recluster)} documents")
+        except Exception as e:
+            db.rollback()
+            print(f"[WARN] Failed to clear topic assignments: {e}")
+    else:
+        # Keep pre-assigned groups - create topics from them
+        # Note: these will be simple single-subtopic topics, subtopics will be built later if needed
+        print(f"[Topics] Keeping {len(pre_assigned_groups)} pre-assigned topic groups")
+        for topic_db_id, docs_in_group in pre_assigned_groups.items():
+            topic_title = docs_in_group[0].assigned_topic_title or "Assigned Topic"
+            topic_id = f"T{topic_idx_counter}"
+            topic_idx_counter += 1
+            
+            docs_out = [TopicDoc.model_validate(d) for d in docs_in_group]
+            
+            # Create a simple single-subtopic structure for pre-assigned groups
+            topic = Topic(
+                topic_id=topic_id,
+                title=topic_title,
+                summary=None,
+                documents_count=len(docs_out),
+                subtopics=[
+                    Subtopic(
+                        subtopic_id=f"{topic_id}-S0",
+                        title=topic_title,
+                        summary=None,
+                        documents=docs_out,
+                    )
+                ],
+            )
+            topics.append(topic)
+            print(f"♻ Reusing pre-assigned topic: {topic_title} ({len(docs_out)} docs)")
+    
+    # ---------- Cluster unassigned documents ----------
+    # Filter unassigned docs to those with embeddings
+    unassigned_docs = [d for d in unassigned_docs if d.id in doc_embeddings]
+    
+    if len(unassigned_docs) < min_docs_for_clustering:
+        # Not enough unassigned docs to cluster - put them all in one topic
+        if unassigned_docs:
+            topic_docs = [TopicDoc.model_validate(d) for d in unassigned_docs]
+            title, summary = _generate_title_and_summary(unassigned_docs, db=db, doc_embeddings=doc_embeddings)
+            
+            # Try to persist topic if persistence is enabled
+            topic_db_id = None
+            if PREFERENCES.topic_persistence.persist_topics:
+                # Compute centroid for this small group
+                from .mmr import compute_centroid
+                doc_emb_list = [doc_embeddings[d.id] for d in unassigned_docs if d.id in doc_embeddings]
+                centroid = compute_centroid(doc_emb_list, normalize=True) if doc_emb_list else None
+                
+                if centroid is not None:
+                    # Check for existing match
+                    existing_match = _find_matching_topic(
+                        db, centroid,
+                        similarity_threshold=PREFERENCES.topic_persistence.similarity_threshold_topic,
+                        level_index=0
+                    )
+                    
+                    if existing_match:
+                        topic_db_id, title, summary = existing_match
+                        print(f"♻ Reusing existing topic for small group: {title}")
+                    else:
+                        # Save new topic
+                        try:
+                            topic_db_id = _save_topic_to_db(
+                                db=db,
+                                title=title,
+                                centroid=centroid,
+                                document_count=len(unassigned_docs),
+                                summary=summary,
+                                level_index=0
+                            )
+                            print(f"✓ Created new topic for small group: {title} (ID: {topic_db_id})")
+                        except Exception as e:
+                            print(f"[ERROR] Failed to save topic for small group: {e}")
+                            topic_db_id = None
+            
+            # Assign documents to topic
+            for doc in unassigned_docs:
+                doc.assigned_topic_title = title
+                if topic_db_id:
+                    doc.assigned_topic_id = topic_db_id
+            
+            try:
+                db.flush()
+                db.commit()
+                for doc in unassigned_docs:
+                    db.refresh(doc)
+                print(f"[Topics] Assigned {len(unassigned_docs)} documents to topic: {title}")
+            except Exception as e:
+                db.rollback()
+                print(f"[WARN] Failed to save topic assignments for small group: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            single_topic = Topic(
+                topic_id=f"T{topic_idx_counter}",
+                title=title,
+                summary=summary,
+                documents_count=len(topic_docs),
+                subtopics=[
+                    Subtopic(
+                        subtopic_id=f"T{topic_idx_counter}-S0",
+                        title=title,
+                        summary=summary,
+                        documents=topic_docs,
+                    )
+                ],
+            )
+            topics.append(single_topic)
+        
+        # Return early if we have topics from pre-assigned groups
+        if topics:
+            return TopicsResponse(time_range_days=days, topics=topics)
+        else:
+            # No topics at all - return empty
+            return TopicsResponse(time_range_days=days, topics=[])
 
-    X = np.stack([doc_embeddings[d.id] for d in deduped_docs], axis=0)
+    # Build matrix of embeddings for unassigned docs only
+    X = np.stack([doc_embeddings[d.id] for d in unassigned_docs], axis=0)
     n_docs = X.shape[0]
-
-    # ---------- small-N guard ----------
-    # For very small N, skip UMAP/clustering and treat as a single topic.
-    if n_docs < min_docs_for_clustering:
-        topic_docs = [TopicDoc.model_validate(d) for d in deduped_docs]
-        title, summary = _generate_title_and_summary(deduped_docs, db=db, doc_embeddings=doc_embeddings)
-        single_topic = Topic(
-            topic_id="T0",
-            title=title,
-            summary=summary,
-            documents_count=len(topic_docs),
-            subtopics=[
-                Subtopic(
-                    subtopic_id="T0-S0",
-                    title=title,
-                    summary=summary,
-                    documents=topic_docs,
-                )
-            ],
-        )
-        return TopicsResponse(time_range_days=days, topics=[single_topic])
-
 
  # 2) For visualization, always reduce to 2D/low-D (UMAP or none)
     X_vis = reduce_embeddings(X)   # uses cfg.dim_reducer; can be X unchanged
@@ -868,10 +1020,9 @@ def compute_topics(
     # 3) For clustering, maybe use the same reduced space, maybe not
     labels = cluster_embeddings(X)
 
-    topic_labels = sorted(set(labels))  # e.g. [0,1,2,...]
-    topics: List[Topic] = []
-    # Map from original index to doc
-    idx_to_doc = {i: d for i, d in enumerate(deduped_docs)}
+    cluster_labels = sorted(set(labels))  # e.g. [0,1,2,...]
+    # Map from original index to doc (for unassigned docs only)
+    idx_to_doc = {i: d for i, d in enumerate(unassigned_docs)}
 
     # Helper to build subtopics via a second-level KMeans
     def build_subtopics(topic_docs_indices: List[int], parent_topic_id: str, parent_title: str, parent_db_id: UUID = None) -> List[Subtopic]:
@@ -968,9 +1119,9 @@ def compute_topics(
 
         return subtopics
 
-    # 7) Build topic objects and persist them
-    for topic_idx, cluster_label in enumerate(topic_labels):
-        topic_id = f"T{topic_idx}"
+    # 7) Build topic objects and persist them (for newly clustered unassigned docs)
+    for idx, cluster_label in enumerate(cluster_labels):
+        topic_id = f"T{topic_idx_counter + idx}"
 
         topic_doc_indices = [i for i, lbl in enumerate(labels) if lbl == cluster_label]
         docs_list = [idx_to_doc[i] for i in topic_doc_indices]
@@ -981,6 +1132,12 @@ def compute_topics(
         centroid = compute_centroid(doc_emb_list, normalize=True) if doc_emb_list else None
         
         topic_db_id = None
+        
+        # Debug logging
+        if not PREFERENCES.topic_persistence.persist_topics:
+            print(f"[DEBUG] Topic persistence is DISABLED - topics will not be saved to database")
+        if centroid is None:
+            print(f"[DEBUG] No centroid computed for topic cluster (doc_emb_list length: {len(doc_emb_list) if doc_emb_list else 0})")
         
         # Check if we have an existing topic that matches (if persistence enabled and centroid available)
         if PREFERENCES.topic_persistence.persist_topics and centroid is not None:
@@ -999,21 +1156,50 @@ def compute_topics(
                 topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
                 
                 # Save to database
-                topic_db_id = _save_topic_to_db(
-                    db=db,
-                    title=topic_title,
-                    centroid=centroid,
-                    document_count=len(docs_list),
-                    summary=topic_summary,
-                    level_index=0
-                )
-                print(f"✓ Created new topic: {topic_title}")
+                try:
+                    topic_db_id = _save_topic_to_db(
+                        db=db,
+                        title=topic_title,
+                        centroid=centroid,
+                        document_count=len(docs_list),
+                        summary=topic_summary,
+                        level_index=0
+                    )
+                    print(f"✓ Created new topic: {topic_title} (ID: {topic_db_id})")
+                except Exception as e:
+                    print(f"[ERROR] Failed to save topic '{topic_title}' to database: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue without topic_db_id - topic won't be persisted
+                    topic_db_id = None
         else:
             # Persistence disabled or no centroid - just generate title
             topic_title, topic_summary = _generate_title_and_summary(docs_list, db=db, doc_embeddings=doc_embeddings)
 
         # Build and persist subtopics
         subtopics = build_subtopics(topic_doc_indices, topic_id, topic_title, topic_db_id)
+
+        # Save topic assignment to each document in this cluster
+        # Always assign documents to topics, even if topic_db_id is None (persistence disabled)
+        # This ensures documents show up with their topic assignments in the UI
+        for doc in docs_list:
+            doc.assigned_topic_title = topic_title
+            if topic_db_id:
+                doc.assigned_topic_id = topic_db_id
+            # If topic_db_id is None, leave assigned_topic_id as None but still set the title
+        
+        try:
+            db.flush()  # Flush changes before commit
+            db.commit()
+            # Refresh documents to ensure changes are persisted
+            for doc in docs_list:
+                db.refresh(doc)
+            print(f"[Topics] Assigned {len(docs_list)} documents to topic: {topic_title}")
+        except Exception as e:
+            db.rollback()
+            print(f"[WARN] Failed to save topic assignments: {e}")
+            import traceback
+            traceback.print_exc()
 
         topic = Topic(
             topic_id=topic_id,
@@ -1087,8 +1273,6 @@ def build_topics_hierarchy(resp: TopicsResponse) -> dict:
                     "name": doc.title or "(no title)",
                     "doc_id": str(doc.id),
                     "url": doc.url,
-                    "score_info": doc.score_info,
-                    "score_ai_slop": doc.score_ai_slop,
                     "captured_at": doc.captured_at.isoformat(),
                     # D3 circle packing will use this as bubble size
                     "size": 1
@@ -1100,3 +1284,44 @@ def build_topics_hierarchy(resp: TopicsResponse) -> dict:
         root["children"].append(topic_node)
 
     return root
+
+
+def clear_all_topic_assignments(db: Session) -> int:
+    """
+    Clear all topic assignments from documents to force fresh reclustering.
+    
+    Args:
+        db: Database session
+    
+    Returns:
+        Number of documents cleared
+    """
+    try:
+        # Get count of documents with topic assignments
+        docs_with_topics = (
+            db.query(Document)
+            .filter(Document.assigned_topic_id != None)
+            .all()
+        )
+        
+        count = len(docs_with_topics)
+        
+        if count > 0:
+            # Clear all topic assignments
+            for doc in docs_with_topics:
+                doc.assigned_topic_id = None
+                doc.assigned_topic_title = None
+            
+            db.commit()
+            print(f"[Topics] Cleared topic assignments for {count} documents")
+        
+        # Also clear the topics cache
+        clear_topics_cache()
+        
+        return count
+    except Exception as e:
+        db.rollback()
+        print(f"[ERROR] Failed to clear topic assignments: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0

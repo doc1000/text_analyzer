@@ -16,11 +16,15 @@ from pydantic import BaseModel
 from datetime import datetime
 import numpy as np
 import ast
+import tempfile
+import requests
+import pdfplumber
 nlp = spacy.load("en_core_web_sm")
 from .models import Document, get_or_create_embedding_class
 
 MAX_CHARS_PER_CHUNK = 1024  # tune this as you like
 MAX_CHARS_PER_SENTENCE = 170  # typical sentence is 75-100, academic 150
+OLLAMA_EMBED_CHAR_LIMIT = int(os.getenv("OLLAMA_EMBED_CHAR_LIMIT", "500"))
 
 ## BaseModel Classes - could be moved
 ## DocumentOut, QueryRequest, ChunkHit, QueryResponse
@@ -28,8 +32,6 @@ class DocumentOut(BaseModel):
     id: UUID
     url: str
     title: str | None
-    score_info: float | None
-    score_ai_slop: float | None
     captured_at: datetime
 
     class Config:
@@ -40,7 +42,7 @@ class DocumentOut(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    top_k: int = 5
+    top_k: int = 15
     with_answer: bool = True
     doc_ids: Optional[List[str]] = None
 
@@ -49,11 +51,11 @@ class ChunkHit(BaseModel):
     document_id: str
     document_title: str | None
     url: str
-    score_info: float | None
-    score_ai_slop: float | None
     chunk_index: int
     chunk_text: str
     similarity: float
+    sent_text: str | None = None  # Sentence text when using sentence embeddings
+    sent_index: int | None = None  # Sentence index within chunk when using sentence embeddings
 
 
 class QueryResponse(BaseModel):
@@ -114,10 +116,52 @@ def chunk_text(text: str, max_char: int = MAX_CHARS_PER_CHUNK) -> List[str]:
 
     return chunks
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Global OpenAI client - can be updated dynamically
+_client_instance = None
+
+def get_openai_client():
+    """Get or create OpenAI client with current API key.
+    
+    Only creates client if API key is available. Returns None if no key is set.
+    """
+    global _client_instance
+    api_key = os.getenv("OPENAI_API_KEY")
+    
+    # Don't create client if no API key is set
+    if not api_key or api_key.strip() == "":
+        _client_instance = None
+        return None
+    
+    # Create or update client if key changed
+    if _client_instance is None or (hasattr(_client_instance, 'api_key') and _client_instance.api_key != api_key):
+        _client_instance = OpenAI(api_key=api_key)
+    return _client_instance
+
+def update_openai_client(api_key: str):
+    """Update the OpenAI client with a new API key."""
+    global _client_instance
+    if api_key and api_key.strip():
+        os.environ["OPENAI_API_KEY"] = api_key
+        _client_instance = OpenAI(api_key=api_key)
+    else:
+        # Clear the client if empty key provided
+        os.environ.pop("OPENAI_API_KEY", None)
+        _client_instance = None
 
 def _openai_chat(prompt: str) -> str:
+    client = get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI API key not set. Please configure it in settings or set OPENAI_API_KEY environment variable.")
+    
     model_name = PREFERENCES.models.llm_model
+    
+    # Ensure we're using a valid OpenAI model (not an Ollama model name)
+    # Valid OpenAI models start with "gpt-" or "o1-"
+    openai_models = ["gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o"]
+    if model_name not in openai_models:
+        # Fallback to a default OpenAI model if llm_model is set to an Ollama model
+        model_name = "gpt-4o-mini"
+    
     resp = client.chat.completions.create(
         model=model_name,
         messages=[{"role": "user", "content": prompt}],
@@ -132,9 +176,11 @@ ollama_chat_defaults = {
     #"num_predict": 256
   }
 
-def _ollama_chat(prompt: str, options: dict=ollama_chat_defaults) -> str:
+def _ollama_chat(prompt: str, options: dict=ollama_chat_defaults, model: str = None) -> str:
     base = PREFERENCES.models.ollama.base_url.rstrip("/")
-    model = PREFERENCES.models.ollama.chat_model
+    # Use provided model or default to chat_model
+    if model is None:
+        model = PREFERENCES.models.ollama.chat_model
     url = f"{base}/api/chat"
 
     payload = {
@@ -167,7 +213,6 @@ def _post_json(url: str, payload: dict, timeout: int = 60) -> dict:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-OLLAMA_EMBED_CHAR_LIMIT = int(os.getenv("OLLAMA_EMBED_CHAR_LIMIT", "1000"))
 
 def _clean_embed_input(text: str) -> str:
     if text is None:
@@ -224,21 +269,113 @@ def _ollama_embed(text: str) -> list[float]:
 
 
 def _answer_from_hits(query: str, hits: List[ChunkHit]) -> str:
-    context = "\n\n".join(
-        f"Source {i+1} ({h.url}):\n{h.chunk_text}"
-        for i, h in enumerate(hits)
-    )
-    prompt = (
+    # Calculate prompt template size (everything except context)
+    prompt_template = (
         "You are a helpful assistant. Using ONLY the context below, "
         "Only respond with the answer to the question, do not include any other text.\n"
         "answer the user's question concisely.\n\n"
         f"Question: {query}\n\n"
-        f"Context:\n{context}"
+        "Context:\n"
     )
+    template_size = len(prompt_template)
+    
+    # Get max context size from config based on chat provider
+    # OpenAI gets longer context limits than Ollama
+    chat_provider = getattr(PREFERENCES.models, "chat_provider", "ollama")
+    max_context_chars = PREFERENCES.query.get_max_context_chars(chat_provider)
+    max_prompt_chars = PREFERENCES.query.get_max_prompt_chars(chat_provider)
+    
+    # Group hits by chunk (document_id + chunk_index) and sort sentences within each chunk by sent_index
+    from collections import defaultdict
+    chunk_groups = defaultdict(list)
+    
+    for h in hits:
+        # Use (document_id, chunk_index) as the grouping key
+        chunk_key = (h.document_id, h.chunk_index)
+        chunk_groups[chunk_key].append(h)
+    
+    # Sort sentences within each chunk by sent_index (sequential order)
+    # Also track the highest similarity for each chunk to preserve ordering
+    grouped_hits = []
+    for chunk_key, chunk_hits in chunk_groups.items():
+        # Sort by sent_index if available, otherwise keep original order
+        sorted_chunk_hits = sorted(
+            chunk_hits,
+            key=lambda x: x.sent_index if x.sent_index is not None else float('inf')
+        )
+        # Get highest similarity in this chunk (for ordering chunks)
+        max_similarity = max(h.similarity for h in sorted_chunk_hits)
+        grouped_hits.append((chunk_key, sorted_chunk_hits, max_similarity))
+    
+    # Sort chunks by highest similarity (preserve relevance ordering)
+    grouped_hits.sort(key=lambda x: x[2], reverse=True)
+    
+    # Build context incrementally, prioritizing higher similarity chunks (they come first)
+    context_parts = []
+    current_context_size = 0
+    source_num = 0
+    
+    for chunk_key, chunk_hits, _ in grouped_hits:
+        # Get document info from first hit in chunk (all hits in chunk have same doc info)
+        first_hit = chunk_hits[0]
+        source_num += 1
+        hit_prefix = f"Source {source_num} ({first_hit.url}):\n"
+        
+        # Combine sentences from same chunk in sequential order, removing duplicates
+        if all(h.sent_text for h in chunk_hits):
+            # All hits have sentence text - combine them in order, removing duplicates by text content
+            seen_sentence_texts = set()
+            unique_sentence_texts = []
+            for h in chunk_hits:
+                # Deduplicate by normalized sentence text content
+                sent_text_normalized = (h.sent_text or "").strip()
+                if sent_text_normalized and sent_text_normalized not in seen_sentence_texts:
+                    seen_sentence_texts.add(sent_text_normalized)
+                    unique_sentence_texts.append(h.sent_text)
+            hit_text = " ".join(unique_sentence_texts)
+        elif chunk_hits[0].sent_text:
+            # Some have sentence text - use first sentence text
+            hit_text = chunk_hits[0].sent_text
+        else:
+            # Fallback to chunk text
+            hit_text = first_hit.chunk_text
+        
+        # Calculate size if we add this grouped hit
+        hit_size = len(hit_prefix) + len(hit_text)
+        separator_size = len("\n\n") if context_parts else 0
+        total_size_if_added = current_context_size + separator_size + hit_size
+        
+        # Check if adding this hit would exceed the limit
+        if total_size_if_added > max_context_chars:
+            # Try truncating this hit to fit
+            available_space = max_context_chars - current_context_size - separator_size - len(hit_prefix)
+            if available_space > 50:  # Only add if we have meaningful space (at least 50 chars)
+                truncated_text = hit_text[:available_space] + "..."
+                context_parts.append(f"{hit_prefix}{truncated_text}")
+            # Stop here - we've filled the context budget
+            break
+        else:
+            context_parts.append(f"{hit_prefix}{hit_text}")
+            current_context_size = total_size_if_added
+    
+    # Join context parts
+    context = "\n\n".join(context_parts)
+    
+    # Build final prompt
+    prompt = prompt_template + context
+    
+    # Final safety check: truncate entire prompt if it somehow exceeds max
+    if len(prompt) > max_prompt_chars:
+        # Truncate context portion to fit
+        available_for_context = max_prompt_chars - template_size
+        if available_for_context > 0:
+            context = context[:available_for_context] + "..."
+            prompt = prompt_template + context
+        else:
+            # Even template is too large (shouldn't happen), use minimal prompt
+            prompt = f"Question: {query}\n\nAnswer based on the provided context."
 
-    model_provider = getattr(PREFERENCES.models, "provider", "openai")
-
-    if model_provider == "ollama":
+    if chat_provider == "ollama":
         text = _ollama_chat(prompt)
     else:
         text = _openai_chat(prompt)
@@ -265,10 +402,14 @@ def get_embedding(text: str) -> List[float]:
     Get a single embedding vector for a text using the configured provider.
     Returns L2-normalized embeddings for consistent cosine similarity calculations.
     """
-    if getattr(PREFERENCES.models, "provider", "openai") == "ollama":
+    embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
+    if embedding_provider == "ollama":
         vec = _ollama_embed(text)
     else:
         # OpenAI embeddings
+        client = get_openai_client()
+        if client is None:
+            raise RuntimeError("OpenAI API key not set. Please configure it in settings or set OPENAI_API_KEY environment variable.")
         model_name = PREFERENCES.models.embedding_model
         resp = client.embeddings.create(model=model_name, input=text)
         vec = resp.data[0].embedding
@@ -377,10 +518,14 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     if not texts:
         return []
     
-    if getattr(PREFERENCES.models, "provider", "openai") == "ollama":
+    embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
+    if embedding_provider == "ollama":
         return _ollama_embed_batch(texts)
     
     # OpenAI batch embedding
+    client = get_openai_client()
+    if client is None:
+        raise RuntimeError("OpenAI API key not set. Please configure it in settings or set OPENAI_API_KEY environment variable.")
     model_name = PREFERENCES.models.embedding_model
     resp = client.embeddings.create(
         model=model_name,
@@ -501,6 +646,108 @@ def fill_empty_embed_docs(embed_type: Literal["chunk", "sent"] = "chunk", batch_
             next(db_gen)
         except StopIteration:
             pass
+
+
+def parse_pdf_from_url(pdf_url: str, max_pages: Optional[int] = None) -> str:
+    """
+    Download and parse text from a PDF URL.
+    
+    Args:
+        pdf_url: URL of the PDF to download and parse
+        max_pages: Maximum number of pages to parse (None = all pages)
+    
+    Returns:
+        Extracted text from the PDF
+    """
+    try:
+        print(f"[INFO] Downloading PDF from {pdf_url}")
+        
+        # Download PDF with timeout and user agent
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(pdf_url, headers=headers, timeout=30, stream=True)
+        response.raise_for_status()
+        
+        # Check content type
+        content_type = response.headers.get('content-type', '').lower()
+        if 'pdf' not in content_type and not pdf_url.lower().endswith('.pdf'):
+            print(f"[WARN] URL may not be a PDF: {content_type}")
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(response.content)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Parse PDF
+            print(f"[INFO] Parsing PDF from {pdf_url}")
+            text_parts = []
+            
+            with pdfplumber.open(tmp_path) as pdf:
+                total_pages = len(pdf.pages)
+                pages_to_parse = min(total_pages, max_pages) if max_pages else total_pages
+                
+                print(f"[INFO] PDF has {total_pages} pages, parsing {pages_to_parse} pages")
+                
+                for i, page in enumerate(pdf.pages[:pages_to_parse]):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(page_text)
+                    except Exception as e:
+                        print(f"[WARN] Failed to extract text from page {i+1}: {e}")
+                        continue
+            
+            extracted_text = "\n\n".join(text_parts)
+            print(f"[INFO] Extracted {len(extracted_text)} characters from PDF")
+            
+            return extracted_text
+            
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(tmp_path)
+            except Exception as e:
+                print(f"[WARN] Failed to delete temp file {tmp_path}: {e}")
+                
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] Failed to download PDF from {pdf_url}: {e}")
+        return ""
+    except Exception as e:
+        print(f"[ERROR] Failed to parse PDF from {pdf_url}: {e}")
+        import traceback
+        traceback.print_exc()
+        return ""
+
+
+def parse_pdfs_from_urls(pdf_urls: List[str], max_pages_per_pdf: Optional[int] = None) -> str:
+    """
+    Parse multiple PDFs from URLs and combine their text.
+    
+    Args:
+        pdf_urls: List of PDF URLs to parse
+        max_pages_per_pdf: Maximum number of pages to parse per PDF
+    
+    Returns:
+        Combined text from all PDFs
+    """
+    if not pdf_urls:
+        return ""
+    
+    all_texts = []
+    for i, pdf_url in enumerate(pdf_urls, 1):
+        print(f"[INFO] Parsing PDF {i}/{len(pdf_urls)}: {pdf_url}")
+        pdf_text = parse_pdf_from_url(pdf_url, max_pages=max_pages_per_pdf)
+        if pdf_text:
+            # Add separator between PDFs
+            if all_texts:
+                all_texts.append(f"\n\n--- PDF {i} ({pdf_url}) ---\n\n")
+            all_texts.append(pdf_text)
+        else:
+            print(f"[WARN] No text extracted from PDF {i}: {pdf_url}")
+    
+    return "\n\n".join(all_texts)
                 
 
 def embed_doc_chunks(

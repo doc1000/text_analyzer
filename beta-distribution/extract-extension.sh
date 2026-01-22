@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # Extract Chrome Extension from Docker Container
 # This script copies the extension from the container to the host filesystem
 

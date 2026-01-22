@@ -76,12 +76,41 @@ Before installing VaultBubble, you need:
 
 1. **Install Docker** (if needed):
    
-   **Ubuntu/Debian**:
+   **Ubuntu 20.04+ / Debian 11+** (newer systems):
    ```bash
    sudo apt-get update
    sudo apt-get install docker.io docker-compose-plugin
    sudo systemctl start docker
    sudo systemctl enable docker
+   ```
+   
+   **Ubuntu 18.04 (Bionic)** - use Docker's official repository:
+   ```bash
+   # Remove old distro docker if installed
+   sudo apt-get remove -y docker.io docker-doc docker-compose
+   
+   # Install prerequisites
+   sudo apt-get update
+   sudo apt-get install -y ca-certificates curl gnupg
+   
+   # Add Docker GPG key
+   sudo install -m 0755 -d /etc/apt/keyrings
+   curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+     | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+   sudo chmod a+r /etc/apt/keyrings/docker.gpg
+   
+   # Add Docker repository for bionic
+   echo \
+     "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu bionic stable" \
+     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+   
+   # Install Docker engine + plugins
+   sudo apt-get update
+   sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+   
+   # Verify installation
+   docker --version
+   docker compose version
    ```
    
    **Fedora/RHEL**:
@@ -204,6 +233,9 @@ Once started, access VaultBubble at:
 - **Solution**: Install Docker Desktop and ensure it's running
 - Check Docker status: `docker info` (should not show errors)
 
+**Problem**: "Unable to locate package docker-compose-plugin" on Ubuntu 18.04
+- **Solution**: The default Ubuntu 18.04 repositories don't include docker-compose-plugin. Use Docker's official repository instead - see the "Ubuntu 18.04 (Bionic)" instructions in the Linux Installation section above.
+
 **Problem**: "Permission denied" on Linux
 - **Solution**: Add your user to the docker group:
   ```bash
@@ -211,8 +243,44 @@ Once started, access VaultBubble at:
   ```
   Then log out and log back in.
 
+**Problem**: "/bin/bash^M: bad interpreter" when running install.sh
+- **Solution**: The script has Windows line endings. Fix with:
+  ```bash
+  sed -i 's/\r$//' install.sh
+  ```
+
 **Problem**: Port 8000 already in use
 - **Solution**: Stop the service using port 8000, or modify `docker-compose.beta.yml` to use a different port
+
+**Problem**: "bind: address already in use" for port 5433 (database port)
+- **Quick fix** (most common - stuck container):
+  ```bash
+  # Stop and remove all containers
+  docker compose -f docker-compose.beta.yml down
+  
+  # If that doesn't work, force remove the stuck container
+  docker rm -f beta-distribution-db-1
+  
+  # Then start fresh
+  docker compose -f docker-compose.beta.yml up -d db
+  ```
+- **If port is used by another service**:
+  1. **Find what's using the port**:
+     ```bash
+     # Linux:
+     sudo lsof -i :5433
+     # Or:
+     sudo netstat -tulpn | grep 5433
+     ```
+  2. **Stop the conflicting service**:
+     - If it's another Docker container: `docker ps` to find it, then `docker stop <container-id>`
+     - If it's a local PostgreSQL: `sudo systemctl stop postgresql` (or check with `sudo systemctl status postgresql`)
+  3. **Or change the port** in `docker-compose.beta.yml`:
+     ```yaml
+     ports:
+       - "5434:5432"  # Change 5433 to 5434 or another free port
+     ```
+     Then update `DATABASE_URL` in `.env` if you changed the port.
 
 ### Container Issues
 
@@ -234,6 +302,69 @@ Once started, access VaultBubble at:
   docker compose -f docker-compose.beta.yml ps
   ```
   All services should show "Up"
+
+**Problem**: Database container hangs during startup
+- **Debug steps** (run these to see what's happening):
+  1. **Check container status and health**:
+     ```bash
+     docker compose -f docker-compose.beta.yml ps
+     # Look for "health: starting" or "health: unhealthy"
+     ```
+  2. **View database logs** (this should show what's happening):
+     ```bash
+     docker compose -f docker-compose.beta.yml logs db
+     # Or follow in real-time:
+     docker compose -f docker-compose.beta.yml logs -f db
+     ```
+  3. **Check if container is actually running**:
+     ```bash
+     docker ps | grep db
+     # Should show container status
+     ```
+  4. **Check database process inside container**:
+     ```bash
+     docker compose -f docker-compose.beta.yml exec db pg_isready -U badger
+     # Should return "badgerdb:5432 - accepting connections"
+     ```
+  5. **Check healthcheck status**:
+     ```bash
+     docker inspect beta-distribution-db-1 | grep -A 15 Health
+     # Shows healthcheck history and current status
+     ```
+  6. **Try connecting to database manually**:
+     ```bash
+     docker compose -f docker-compose.beta.yml exec db psql -U badger -d badgerdb -c "SELECT 1;"
+     ```
+  7. **Check if init.sql ran successfully**:
+     ```bash
+     docker compose -f docker-compose.beta.yml exec db psql -U badger -d badgerdb -c "\dx"
+     # Should show "vector" extension if init.sql ran
+     ```
+- **Common causes and solutions**:
+  - **If logs show nothing**: Container might be stuck. Try:
+    ```bash
+    docker compose -f docker-compose.beta.yml restart db
+    docker compose -f docker-compose.beta.yml logs -f db
+    ```
+  - **If healthcheck keeps failing**: Database might need more time. The healthcheck now has a 30s start period, but you can temporarily remove it:
+    ```bash
+    # Edit docker-compose.beta.yml, comment out healthcheck section
+    # Then restart: docker compose -f docker-compose.beta.yml up -d db
+    ```
+  - **If database volume is corrupted**: Remove and recreate:
+    ```bash
+    docker compose -f docker-compose.beta.yml down -v
+    docker compose -f docker-compose.beta.yml up -d db
+    # Wait 30-60 seconds, then check logs
+    docker compose -f docker-compose.beta.yml logs db
+    ```
+  - **If backend is waiting indefinitely**: Start db separately first:
+    ```bash
+    docker compose -f docker-compose.beta.yml up -d db
+    # Wait until healthy (check with: docker compose -f docker-compose.beta.yml ps)
+    # Then start backend:
+    docker compose -f docker-compose.beta.yml up backend
+    ```
 
 ### Extension Issues
 
@@ -377,5 +508,22 @@ Thank you for being a beta tester!
 
 ## Version Information
 
-- **Beta Version**: 0.5.1
-- **Last Updated**: 2026-01-09
+- **Beta Version**: 0.6.0
+- **Last Updated**: 2026-01-12
+
+## What's New in 0.6.0
+
+### Major Features
+- **Settings UI**: New settings modal to configure providers and API keys from the web interface
+- **Multiple Provider Support**: Separate providers for chat, topic generation, and embeddings
+- **Topic Management**: Documents can now be assigned to topics, with automatic topic persistence
+- **Document Reader**: Click on a document twice to open it in a dedicated reader view
+- **Improved Topic Titles**: Topics now use broader, higher-level titles (3-6 words) for better organization
+- **Re-clustering**: Automatic re-clustering when topic count exceeds threshold
+
+### Improvements
+- Removed analyzer/scoring functionality for simplified experience
+- Enhanced query results using sentence-level embeddings
+- Resizable side panel in the topics view
+- Settings are now persisted to disk between sessions
+- Better deduplication of search results

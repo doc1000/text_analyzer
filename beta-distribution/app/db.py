@@ -94,6 +94,12 @@ def initialize_embedding_tables():
     if _embedding_tables_cache is not None:
         return _embedding_tables_cache
     
+    # Ensure database is initialized first (creates embedding.embedding_model table)
+    # This is safe to call multiple times - init_db() is idempotent
+    # We need to ensure the embedding.embedding_model table exists before
+    # register_embedding_model() tries to query it
+    init_db()
+    
     # Import here to avoid circular dependency
     from .helpers import get_embedding
     

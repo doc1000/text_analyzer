@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # Create Desktop Shortcut for VaultBubble
 # Linux/macOS script
 

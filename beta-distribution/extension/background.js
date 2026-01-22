@@ -20,67 +20,86 @@ async function analyzeAndIngest(tab) {
       console.log("[VB] Content script injection note:", e.message);
     }
 
-    // 2) Ask content script for page text (and optionally title/url)
-    const pageData = await browserAPI.tabs.sendMessage(tab.id, {
-      type: "collect-text"
-    });
+    let pageData = null;
+    let pdfUrls = [];
+    let text = "";
+    
+    // Check if current tab is a direct PDF URL (content script might not work on PDFs)
+    const isDirectPdf = tab.url.match(/\/pdf\//) || 
+                       tab.url.endsWith('.pdf') || 
+                       tab.url.includes('/pdf?');
+    
+    // Special handling for arxiv.org
+    if (tab.url.includes('arxiv.org/abs/')) {
+      // Extract PDF URL from abstract page
+      const paperId = tab.url.match(/arxiv\.org\/abs\/([^\/?#]+)/);
+      if (paperId && paperId[1]) {
+        pdfUrls.push(`https://arxiv.org/pdf/${paperId[1]}.pdf`);
+        console.log("[VB] Extracted arxiv PDF URL from abstract page:", pdfUrls[0]);
+      }
+    } else if (isDirectPdf) {
+      // Direct PDF page - add current URL as PDF to parse
+      pdfUrls.push(tab.url);
+      console.log("[VB] Detected direct PDF URL:", tab.url);
+    }
 
-    const text = pageData && pageData.text ? pageData.text : "";
+    // 2) Try to get data from content script (may fail on PDF pages)
+    try {
+      pageData = await browserAPI.tabs.sendMessage(tab.id, {
+        type: "collect-text"
+      });
+      
+      text = pageData && pageData.text ? pageData.text : "";
+      // Merge PDF URLs from content script with those detected from URL
+      if (pageData && pageData.pdfUrls && pageData.pdfUrls.length > 0) {
+        pdfUrls = [...new Set([...pdfUrls, ...pageData.pdfUrls])];
+      }
+    } catch (e) {
+      // Content script might not be available (e.g., on PDF pages)
+      console.log("[VB] Content script not available (may be PDF page):", e.message);
+      // Use tab URL and title as fallback
+      text = "";
+    }
+
     const url = pageData && pageData.url ? pageData.url : tab.url;
     const title = pageData && pageData.title ? pageData.title : tab.title;
 
     console.log("[VB] collect-text response:", {
       textLength: text.length,
+      pdfUrlsCount: pdfUrls.length,
       url,
-      title
+      title,
+      isDirectPdf: isDirectPdf
     });
 
-    if (!text || text.trim().length === 0) {
-      await browserAPI.tabs.sendMessage(tab.id, {
-        type: "show-error",
-        error: "No text content found on this page."
-      });
+    // Allow ingestion if there's text OR PDFs to parse
+    if ((!text || text.trim().length === 0) && pdfUrls.length === 0) {
+      try {
+        await browserAPI.tabs.sendMessage(tab.id, {
+          type: "show-error",
+          error: "No text content or PDFs found on this page."
+        });
+      } catch (e) {
+        // Ignore if we can't send message (e.g., PDF page)
+      }
       return;
     }
 
-    // 2) Call /analyzer with the text
-    const analyzerRes = await fetch(`${API_BASE}/analyzer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text })
-    });
-
-    console.log("[VB] /analyzer status:", analyzerRes.status);
-
-    if (!analyzerRes.ok) {
-      const errText = await analyzerRes.text();
-      console.error("[VB] Analyzer error:", analyzerRes.status, errText);
-      await browserAPI.tabs.sendMessage(tab.id, {
-        type: "show-error",
-        error: `Analyzer error: ${analyzerRes.status} ${errText}`
-      });
-      return;
-    }
-
-    const analyzerResult = await analyzerRes.json();
-    console.log("[VB] Analyzer result:", analyzerResult);
-
-    // 3) Show the pretty overlay using analyzerResult
+    // Show success overlay
     await browserAPI.tabs.sendMessage(tab.id, {
       type: "show-result",
-      result: analyzerResult
+      result: { captured: true }
     });
 
-    // 4) Build ingest payload that INCLUDES the scores from analyzer
+    // Build ingest payload
     const ingestPayload = {
       url,
       title,
       text,
-      score_info: analyzerResult.infoScore,
-      score_ai_slop: analyzerResult.aiScore,
       captured_at: new Date().toISOString(),
       mode: "page",
-      tags: null
+      tags: null,
+      pdf_urls: pdfUrls.length > 0 ? pdfUrls : null
     };
 
     console.log("[VB] ingest payload:", ingestPayload);
@@ -182,8 +201,6 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
       text: body,
       mode: "selection",
       tags: null,
-      score_info: null,
-      score_ai_slop: null,
       captured_at: new Date().toISOString()
     };
 
@@ -307,8 +324,6 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
       text: combinedText,
       mode: mode || "note",
       tags: tags && tags.length ? tags : null,
-      score_info: null,
-      score_ai_slop: null,
       captured_at: new Date().toISOString()
     };
 

@@ -3,40 +3,121 @@
 const browserAPI = typeof browser !== "undefined" ? browser : chrome;
 const API_BASE = "http://localhost:8000"; // adjust if needed
 
+console.log("[VB] Background script loaded");
+console.log("[VB] Browser API:", typeof browserAPI !== "undefined" ? "available" : "missing");
+
 // ---------------- FULL PAGE ANALYZE + INGEST ---------------- //
 
 async function analyzeAndIngest(tab) {
   console.log("[VB] analyzeAndIngest for tab", tab.id);
+  console.log("[VB] Tab URL:", tab.url);
+  console.log("[VB] Tab title:", tab.title);
 
   try {
-    // 1) Ask content script for page text (and optionally title/url)
-    const pageData = await browserAPI.tabs.sendMessage(tab.id, {
-      type: "collect-text"
-    });
+    let pageData = null;
+    let pdfUrls = [];
+    let text = "";
+    
+    // Ensure we have a valid tab URL
+    if (!tab.url) {
+      console.error("[VB] No tab URL available!");
+      return;
+    }
+    
+    // Check if current tab is a direct PDF URL (content script might not work on PDFs)
+    const isDirectPdf = tab.url.match(/\/pdf\//) || 
+                       tab.url.endsWith('.pdf') || 
+                       tab.url.includes('/pdf?');
+    
+    console.log("[VB] Is direct PDF?", isDirectPdf);
+    
+    // Special handling for arxiv.org
+    if (tab.url.includes('arxiv.org/abs/')) {
+      // Extract PDF URL from abstract page
+      const paperId = tab.url.match(/arxiv\.org\/abs\/([^\/?#]+)/);
+      console.log("[VB] Arxiv paper ID match:", paperId);
+      if (paperId && paperId[1]) {
+        pdfUrls.push(`https://arxiv.org/pdf/${paperId[1]}.pdf`);
+        console.log("[VB] Extracted arxiv PDF URL from abstract page:", pdfUrls[0]);
+      }
+    } else if (isDirectPdf) {
+      // Direct PDF page - add current URL as PDF to parse
+      pdfUrls.push(tab.url);
+      console.log("[VB] Detected direct PDF URL:", tab.url);
+    }
+    
+    console.log("[VB] Initial PDF URLs detected:", pdfUrls);
+    
+    // Try to get data from content script (may fail on PDF pages)
+    try {
+      pageData = await browserAPI.tabs.sendMessage(tab.id, {
+        type: "collect-text"
+      });
+      
+      text = pageData && pageData.text ? pageData.text : "";
+      // Merge PDF URLs from content script with those detected from URL
+      if (pageData && pageData.pdfUrls && pageData.pdfUrls.length > 0) {
+        pdfUrls = [...new Set([...pdfUrls, ...pageData.pdfUrls])];
+      }
+    } catch (e) {
+      // Content script might not be available (e.g., on PDF pages)
+      console.log("[VB] Content script not available (may be PDF page):", e.message);
+      console.log("[VB] Using PDF URLs detected from tab URL:", pdfUrls);
+      // Use tab URL and title as fallback
+      // Note: pdfUrls already populated from tab.url detection above
+      text = "";
+    }
+    
+    // Ensure PDF URLs are preserved even if content script failed
+    // This is critical for Firefox where content scripts may not run on PDF pages
+    if (pdfUrls.length === 0) {
+      // Fallback: re-check if we should have detected a PDF
+      if (isDirectPdf) {
+        pdfUrls.push(tab.url);
+        console.log("[VB] Fallback: Re-added PDF URL:", tab.url);
+      } else if (tab.url.includes('arxiv.org/abs/')) {
+        const paperId = tab.url.match(/arxiv\.org\/abs\/([^\/?#]+)/);
+        if (paperId && paperId[1]) {
+          pdfUrls.push(`https://arxiv.org/pdf/${paperId[1]}.pdf`);
+          console.log("[VB] Fallback: Re-added arxiv PDF URL:", pdfUrls[0]);
+        }
+      }
+    }
 
-    const text = pageData && pageData.text ? pageData.text : "";
     const url = pageData && pageData.url ? pageData.url : tab.url;
     const title = pageData && pageData.title ? pageData.title : tab.title;
 
     console.log("[VB] collect-text response:", {
       textLength: text.length,
+      pdfUrlsCount: pdfUrls.length,
       url,
-      title
+      title,
+      isDirectPdf: isDirectPdf
     });
 
-    if (!text || text.trim().length === 0) {
-      await browserAPI.tabs.sendMessage(tab.id, {
-        type: "show-error",
-        error: "No text content found on this page."
-      });
+    // Allow ingestion if there's text OR PDFs to parse
+    if ((!text || text.trim().length === 0) && pdfUrls.length === 0) {
+      try {
+        await browserAPI.tabs.sendMessage(tab.id, {
+          type: "show-error",
+          error: "No text content or PDFs found on this page."
+        });
+      } catch (e) {
+        // Ignore if we can't send message (e.g., PDF page)
+      }
       return;
     }
 
-    // Show success overlay
-    await browserAPI.tabs.sendMessage(tab.id, {
-      type: "show-result",
-      result: { captured: true }
-    });
+    // Show success overlay (may fail on PDF pages, that's OK)
+    try {
+      await browserAPI.tabs.sendMessage(tab.id, {
+        type: "show-result",
+        result: { captured: true }
+      });
+    } catch (e) {
+      // Ignore if we can't send message (e.g., PDF page) - this is expected
+      console.log("[VB] Could not show result overlay (expected on PDF pages):", e.message);
+    }
 
     // Build ingest payload
     const ingestPayload = {
@@ -45,10 +126,12 @@ async function analyzeAndIngest(tab) {
       text,
       captured_at: new Date().toISOString(),
       mode: "page",
-      tags: null
+      tags: null,
+      pdf_urls: pdfUrls.length > 0 ? pdfUrls : null
     };
 
     console.log("[VB] ingest payload:", ingestPayload);
+    console.log("[VB] PDF URLs being sent:", pdfUrls);
 
     const ingestRes = await fetch(`${API_BASE}/ingest`, {
       method: "POST",
@@ -59,14 +142,16 @@ async function analyzeAndIngest(tab) {
     console.log("[VB] /ingest status:", ingestRes.status);
 
     if (!ingestRes.ok) {
+      const errorText = await ingestRes.text();
       console.error(
         "[VB] ingest error:",
         ingestRes.status,
-        await ingestRes.text()
+        errorText
       );
     } else {
       const ingestResult = await ingestRes.json().catch(() => null);
       console.log("[VB] ingest success:", ingestResult);
+      console.log("[VB] PDFs parsed:", ingestResult?.pdfs_parsed || 0);
     }
   } catch (e) {
     console.error("[VB] analyzeAndIngest exception:", e);
@@ -84,10 +169,16 @@ async function analyzeAndIngest(tab) {
 // Toolbar icon click = full-page capture
 const actionAPI = browserAPI.action || browserAPI.browserAction;
 
-actionAPI.onClicked.addListener(async (tab) => {
-  console.log("[VB] Icon clicked on tab", tab.id);
-  await analyzeAndIngest(tab);
-});
+if (actionAPI && actionAPI.onClicked) {
+  actionAPI.onClicked.addListener(async (tab) => {
+    console.log("[VB] Icon clicked on tab", tab.id);
+    console.log("[VB] Tab URL:", tab.url);
+    await analyzeAndIngest(tab);
+  });
+  console.log("[VB] Icon click listener registered");
+} else {
+  console.log("[VB] Icon click listener not available (popup may be defined)");
+}
 
 
 // ---------------- CONTEXT MENU: QUICK “SAVE SELECTION” ---------------- //
@@ -168,10 +259,16 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
 // ---------------- POPUP-DRIVEN NOTE + FULL PAGE CAPTURE ---------------- //
 
 browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || !message.type) return false;
+  console.log("[VB] Message received:", message?.type);
+  
+  if (!message || !message.type) {
+    console.log("[VB] Invalid message, returning false");
+    return false;
+  }
 
   // Popup-triggered note capture
   if (message.type === "VB_CAPTURE_SNIPPET") {
+    console.log("[VB] Handling VB_CAPTURE_SNIPPET");
     const {
       mode,          // "note"
       url,
@@ -252,16 +349,33 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Popup-triggered full-page capture
   if (message.type === "VB_CAPTURE_FULL_PAGE") {
-    browserAPI.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-      if (tabs && tabs[0]) {
-        console.log("[VB] Popup requested full-page capture for tab", tabs[0].id);
-        await analyzeAndIngest(tabs[0]);
-      }
-      sendResponse({ ok: true });
-    });
+    console.log("[VB] Handling VB_CAPTURE_FULL_PAGE");
+    try {
+      browserAPI.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        try {
+          if (tabs && tabs[0]) {
+            console.log("[VB] Popup requested full-page capture for tab", tabs[0].id);
+            console.log("[VB] Tab URL:", tabs[0].url);
+            await analyzeAndIngest(tabs[0]);
+          } else {
+            console.error("[VB] No active tab found");
+          }
+          sendResponse({ ok: true });
+        } catch (e) {
+          console.error("[VB] Error in full-page capture:", e);
+          sendResponse({ ok: false, error: String(e) });
+        }
+      });
+    } catch (e) {
+      console.error("[VB] Error querying tabs:", e);
+      sendResponse({ ok: false, error: String(e) });
+    }
 
     return true; // async
   }
 
+  console.log("[VB] Unknown message type:", message.type);
   return false;
 });
+
+console.log("[VB] Message listener registered");
