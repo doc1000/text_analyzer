@@ -107,18 +107,35 @@ def register_embedding_model(
     table_name = make_safe_table_name(model_name, version, dim)
     table_location = f"embedding.{table_name}"
 
-    existing = (
+    # NOTE: In multi-machine deployments (Fly), two instances can race on first boot
+    # and insert duplicate metadata rows. We tolerate that by selecting the newest row
+    # and (optionally) cleaning up older duplicates.
+    existing_rows = (
         session.query(EmbeddingModel)
         .filter_by(model_name=model_name, version=version)
-        .one_or_none()
+        .order_by(EmbeddingModel.id.desc())
+        .all()
     )
-    if existing:
-        if existing.dimensions != dim:
-            raise ValueError(
-                f"Model {model_name} v{version} already registered with "
-                f"dim={existing.dimensions}, requested dim={dim}"
-            )
-        return existing
+    if existing_rows:
+        newest = existing_rows[0]
+        # Ensure consistent dimensions across duplicates (and across new requests)
+        for row in existing_rows:
+            if row.dimensions != dim:
+                raise ValueError(
+                    f"Model {model_name} v{version} already registered with "
+                    f"dim={row.dimensions}, requested dim={dim}"
+                )
+        # Cleanup duplicates (best-effort)
+        if len(existing_rows) > 1:
+            try:
+                ids_to_delete = [r.id for r in existing_rows[1:]]
+                session.query(EmbeddingModel).filter(EmbeddingModel.id.in_(ids_to_delete)).delete(
+                    synchronize_session=False
+                )
+                session.commit()
+            except Exception:
+                session.rollback()
+        return newest
 
     meta = EmbeddingModel(
         model_name=model_name,
