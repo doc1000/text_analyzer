@@ -42,9 +42,9 @@ class ClusteringConfig:
     dim_reducer: DimReducer = "pca"   # "pca", "umap", or "none"
     use_reducer_for_clustering: bool = True  # was use_umap_for_clustering
     cluster_algo: ClusterAlgo = "kmeans"
-    min_docs_for_clustering: int = 6
+    min_docs_for_clustering: int = 3
     max_neighbors: int = 15          # still used if you pick UMAP
-    max_components: int = 18
+    max_components: int = 24
     random_state: int = 42
     k_topics_min: int = 2
     k_topics_max: int = 10
@@ -90,33 +90,44 @@ class QueryConfig:
 
 @dataclass
 class AgglomerativeConfig:
-    """Configuration for agglomerative hierarchical clustering with 3 cosine similarity levels.
+    """Configuration for agglomerative hierarchical clustering with 3 cosine DISTANCE levels.
     
-    The hierarchy goes from finest (level 0, highest similarity) to coarsest (level 2, lowest similarity).
+    The hierarchy goes from finest (level 0, lowest distance) to coarsest (level 2, highest distance).
     Documents are clustered bottom-up using cosine distance and average linkage.
+    
+    NOTE: All thresholds are COSINE DISTANCE (distance = 1 - similarity).
+    To convert: similarity = 1 - distance, distance = 1 - similarity
     """
     enabled: bool = True                          # Toggle between KMeans and agglomerative
     linkage_method: LinkageMethod = "average"     # Linkage method: average, single, or complete
     
-    # Cosine distance thresholds for each level (distance = 1 - similarity)
+    # Cosine DISTANCE thresholds for each level (distance = 1 - similarity)
     # Level 0 (finest): very similar content, tightly related
-    level_0_threshold: float = 0.5               # cosine sim >= 0.75
+    level_0_distance: float = 0.5                 # distance <= 0.5 means similarity >= 0.5
     # Level 1: topics - related content
-    level_1_threshold: float = 0.75               # cosine sim >= 0.60
+    level_1_distance: float = 0.75                # distance <= 0.75 means similarity >= 0.25
     # Level 2 (coarsest): super-topics - broad categories
-    level_2_threshold: float = 0.9               # cosine sim >= 0.45
+    level_2_distance: float = 0.95                # distance <= 0.95 means similarity >= 0.05
     
     min_cluster_size: int = 1                     # Minimum docs per cluster
     use_document_summaries: bool = True           # Use document summaries for clustering input
     
     @property
     def level_thresholds(self) -> list:
-        """Return thresholds as a list ordered from finest to coarsest."""
+        """Return distance thresholds as a list ordered from finest to coarsest."""
         return [
-            self.level_0_threshold,
-            self.level_1_threshold,
-            self.level_2_threshold,
+            self.level_0_distance,
+            self.level_1_distance,
+            self.level_2_distance,
         ]
+    
+    def distance_to_similarity(self, distance: float) -> float:
+        """Convert cosine distance to cosine similarity."""
+        return 1.0 - distance
+    
+    def level_0_similarity(self) -> float:
+        """Get Level 0 threshold as similarity (for topic matching)."""
+        return 1.0 - self.level_0_distance
 
 
 @dataclass

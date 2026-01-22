@@ -1150,9 +1150,24 @@
     const daysInput = document.getElementById("daysInput");
     const reloadBtn = document.getElementById("reloadBtn");
     if (reloadBtn) {
-      reloadBtn.addEventListener("click", () => {
+      reloadBtn.addEventListener("click", async () => {
         const days = parseInt(daysInput.value, 10) || 30;
-        renderBubbleMap(days);
+        reloadBtn.disabled = true;
+        reloadBtn.textContent = "Processing...";
+        try {
+          // Trigger incremental recluster (only uncategorized docs)
+          await fetch(`${API_BASE}/topics/recluster?days=${days}&clear_assignments=false`, {
+            method: "POST"
+          });
+          // Reload the bubble map after reclustering
+          await renderBubbleMap(days);
+        } catch (error) {
+          console.error("Error during reload:", error);
+          await renderBubbleMap(days);
+        } finally {
+          reloadBtn.disabled = false;
+          reloadBtn.textContent = "Reload";
+        }
       });
     }
 

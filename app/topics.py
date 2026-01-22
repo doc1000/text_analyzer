@@ -727,8 +727,9 @@ def _save_topic_to_db(
 def _find_matching_topic(
     db: Session,
     centroid: np.ndarray,
-    similarity_threshold: float = 0.85,
-    level_index: int = 0
+    min_similarity: float = 0.5,
+    level_index: int = 0,
+    exclude_stale: bool = True
 ) -> Tuple[UUID, str, str] | None:
     """
     Find an existing topic with similar centroid.
@@ -736,18 +737,31 @@ def _find_matching_topic(
     Args:
         db: Database session
         centroid: Cluster centroid to match against
-        similarity_threshold: Minimum similarity to consider a match
+        min_similarity: Minimum cosine SIMILARITY to consider a match (NOT distance)
         level_index: Topic level to search (0=topics, 1=subtopics)
+        exclude_stale: If True, only match topics that have at least one document assigned
     
     Returns:
         (topic_id, title, summary) if match found, else None
     """
     cfg = PREFERENCES.topic_persistence
     
-    # Query topics at the same level, limit for performance
+    # Build query for topics at the same level
+    query = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.level_index == level_index)
+    
+    if exclude_stale:
+        # Only include topics that have at least one document assigned to them
+        # Subquery to get topic IDs that have documents
+        topics_with_docs = (
+            db.query(Document.assigned_topic_id)
+            .filter(Document.assigned_topic_id != None)
+            .distinct()
+            .subquery()
+        )
+        query = query.filter(TOPIC_TABLE.id.in_(topics_with_docs))
+    
     existing_topics = (
-        db.query(TOPIC_TABLE)
-        .filter(TOPIC_TABLE.level_index == level_index)
+        query
         .order_by(TOPIC_TABLE.created_at.desc())
         .limit(cfg.max_existing_topics_to_check)
         .all()
@@ -758,7 +772,7 @@ def _find_matching_topic(
     
     # Find best match using cosine similarity
     best_match = None
-    best_similarity = similarity_threshold
+    best_similarity = min_similarity
     
     for topic in existing_topics:
         topic_emb = normalize_embedding(topic.embedding)
@@ -794,7 +808,7 @@ def _assign_single_document_to_topic(
     """
     from .mmr import compute_centroid
     
-    cfg = PREFERENCES.topic_persistence
+    agglom_cfg = PREFERENCES.agglomerative
     
     if doc.id not in doc_embeddings:
         return {"status": "no_embedding", "message": "Document has no embedding"}
@@ -802,12 +816,16 @@ def _assign_single_document_to_topic(
     doc_embedding = doc_embeddings[doc.id]
     centroid = compute_centroid([doc_embedding], normalize=True)
     
-    # Try to find a matching Level 0 topic
+    # Use level_0_distance converted to similarity for matching
+    min_similarity = 1.0 - agglom_cfg.level_0_distance
+    
+    # Try to find a matching Level 0 topic (exclude stale topics)
     match = _find_matching_topic(
         db, 
         centroid, 
-        similarity_threshold=cfg.similarity_threshold_topic,
-        level_index=0
+        min_similarity=min_similarity,
+        level_index=0,
+        exclude_stale=True
     )
     
     if match:
@@ -836,6 +854,206 @@ def _assign_single_document_to_topic(
             "topics_created": {0: 0, 1: 0, 2: 0},
             "total_topics": 0
         }
+
+
+def _incremental_topic_assignment(
+    db: Session,
+    agglom_cfg,
+    clustering_cfg
+) -> dict:
+    """
+    Incremental topic assignment using a two-phase approach:
+    
+    Phase 1: For each uncategorized document, try to assign it to the best 
+             matching existing topic (by centroid similarity).
+    
+    Phase 2: Any remaining unassigned documents, if count >= min_docs_for_clustering,
+             cluster them together and create new topics.
+    
+    Args:
+        db: Database session
+        agglom_cfg: AgglomerativeConfig with distance thresholds
+        clustering_cfg: ClusteringConfig with min_docs_for_clustering
+    
+    Returns:
+        Dict with assignment statistics
+    """
+    from .mmr import compute_centroid
+    
+    min_similarity = 1.0 - agglom_cfg.level_0_distance
+    min_docs_for_clustering = clustering_cfg.min_docs_for_clustering
+    
+    print(f"\n{'='*60}")
+    print(f"INCREMENTAL TOPIC ASSIGNMENT")
+    print(f"min_similarity={min_similarity:.3f} (from level_0_distance={agglom_cfg.level_0_distance})")
+    print(f"min_docs_for_clustering={min_docs_for_clustering}")
+    print(f"{'='*60}")
+    
+    # Get all uncategorized documents
+    uncategorized_docs = (
+        db.query(Document)
+        .filter(Document.assigned_topic_id == None)
+        .order_by(Document.captured_at.desc())
+        .all()
+    )
+    
+    if not uncategorized_docs:
+        return {
+            "status": "ok",
+            "mode": "incremental",
+            "message": "No uncategorized documents found",
+            "phase1_assigned": 0,
+            "phase2_assigned": 0,
+            "topics_created": 0,
+            "documents_remaining_unassigned": 0
+        }
+    
+    print(f"Found {len(uncategorized_docs)} uncategorized documents")
+    
+    # Compute embeddings for uncategorized docs
+    doc_embeddings = compute_document_embeddings(db, uncategorized_docs)
+    docs_with_embeddings = [d for d in uncategorized_docs if d.id in doc_embeddings]
+    
+    if not docs_with_embeddings:
+        return {
+            "status": "ok",
+            "mode": "incremental",
+            "message": "No uncategorized documents have embeddings",
+            "phase1_assigned": 0,
+            "phase2_assigned": 0,
+            "topics_created": 0,
+            "documents_remaining_unassigned": len(uncategorized_docs)
+        }
+    
+    print(f"Processing {len(docs_with_embeddings)} documents with embeddings")
+    
+    # ========== PHASE 1: Individual assignment to existing topics ==========
+    print(f"\n--- Phase 1: Matching documents to existing topics ---")
+    
+    phase1_assigned = 0
+    unmatched_docs = []
+    
+    for doc in docs_with_embeddings:
+        doc_embedding = doc_embeddings[doc.id]
+        centroid = compute_centroid([doc_embedding], normalize=True)
+        
+        # Try to find best matching existing topic
+        match = _find_matching_topic(
+            db,
+            centroid,
+            min_similarity=min_similarity,
+            level_index=0,
+            exclude_stale=True
+        )
+        
+        if match:
+            topic_id, topic_title, _ = match
+            doc.assigned_topic_id = topic_id
+            doc.assigned_topic_title = topic_title
+            phase1_assigned += 1
+            print(f"  [MATCHED] '{doc.title[:40]}...' -> '{topic_title[:40]}...'")
+        else:
+            unmatched_docs.append(doc)
+    
+    db.commit()
+    print(f"Phase 1 complete: {phase1_assigned} documents assigned to existing topics")
+    print(f"Remaining unmatched: {len(unmatched_docs)} documents")
+    
+    # ========== PHASE 2: Cluster remaining unmatched documents ==========
+    phase2_assigned = 0
+    topics_created = 0
+    
+    if len(unmatched_docs) >= min_docs_for_clustering:
+        print(f"\n--- Phase 2: Clustering {len(unmatched_docs)} unmatched documents ---")
+        
+        # Get summaries for unmatched docs
+        unmatched_doc_ids = [d.id for d in unmatched_docs]
+        doc_summaries = get_document_summaries(db, unmatched_doc_ids)
+        
+        # Build embedding matrix for unmatched docs
+        X_full = np.stack([doc_embeddings[d.id] for d in unmatched_docs], axis=0)
+        X = reduce_embeddings(X_full)
+        
+        # Cluster the unmatched documents
+        labels_by_level, structure, Z = cluster_embeddings_hierarchical(
+            X,
+            doc_ids=unmatched_doc_ids,
+            thresholds=agglom_cfg.level_thresholds,
+            linkage_method=agglom_cfg.linkage_method
+        )
+        
+        # Only create Level 0 topics for incremental mode
+        level_0_structure = structure[0]
+        print(f"Created {len(level_0_structure)} clusters from unmatched documents")
+        
+        doc_by_id = {d.id: d for d in unmatched_docs}
+        
+        for cluster_label, doc_ids_in_cluster in level_0_structure.items():
+            docs_in_cluster = [doc_by_id[did] for did in doc_ids_in_cluster if did in doc_by_id]
+            
+            if not docs_in_cluster:
+                continue
+            
+            # Compute centroid
+            cluster_embeddings_list = [doc_embeddings[d.id] for d in docs_in_cluster]
+            centroid = compute_centroid(cluster_embeddings_list, normalize=True)
+            
+            # Generate title and summary for the new topic
+            title, summary = _generate_title_and_summary(
+                docs_in_cluster,
+                db=db,
+                doc_embeddings=doc_embeddings,
+                doc_summaries=doc_summaries
+            )
+            
+            # Save new topic
+            topic_db_id = _save_topic_to_db(
+                db=db,
+                title=title,
+                centroid=centroid,
+                document_count=len(docs_in_cluster),
+                summary=summary,
+                parent_id=None,
+                level_index=0
+            )
+            topics_created += 1
+            
+            # Assign documents to the new topic
+            for doc in docs_in_cluster:
+                doc.assigned_topic_id = topic_db_id
+                doc.assigned_topic_title = title
+                phase2_assigned += 1
+            
+            print(f"  [NEW TOPIC] '{title[:50]}...' ({len(docs_in_cluster)} docs)")
+        
+        db.commit()
+        print(f"Phase 2 complete: {phase2_assigned} documents assigned to {topics_created} new topics")
+    else:
+        if len(unmatched_docs) > 0:
+            print(f"\n--- Phase 2: Skipped (only {len(unmatched_docs)} unmatched docs, need {min_docs_for_clustering}) ---")
+    
+    # Clear cache
+    clear_topics_cache()
+    
+    remaining_unassigned = len(unmatched_docs) - phase2_assigned
+    
+    result = {
+        "status": "ok",
+        "mode": "incremental",
+        "phase1_assigned": phase1_assigned,
+        "phase2_assigned": phase2_assigned,
+        "topics_created": topics_created,
+        "documents_remaining_unassigned": remaining_unassigned
+    }
+    
+    print(f"\n{'='*60}")
+    print(f"Incremental assignment complete")
+    print(f"Phase 1 (matched to existing): {phase1_assigned}")
+    print(f"Phase 2 (new topics created): {topics_created}, docs assigned: {phase2_assigned}")
+    print(f"Still unassigned: {remaining_unassigned}")
+    print(f"{'='*60}\n")
+    
+    return result
 
 
 # ---------- URL canonicalization ----------
@@ -1051,7 +1269,7 @@ def compute_hierarchical_topics(
     cfg = PREFERENCES.clustering
     agglom_cfg = PREFERENCES.agglomerative
     
-    # 1) Select recent documents
+    # 1) Select documents based on mode
     cutoff = datetime.utcnow() - timedelta(days=days)
     
     if full_recluster:
@@ -1064,18 +1282,13 @@ def compute_hierarchical_topics(
         )
         mode_desc = "FULL RECLUSTER"
     else:
-        # Incremental: only get UNCATEGORIZED documents in time range
-        docs = (
-            db.query(Document)
-            .filter(Document.captured_at >= cutoff)
-            .filter(Document.assigned_topic_id == None)
-            .order_by(Document.captured_at.desc())
-            .all()
-        )
-        mode_desc = "INCREMENTAL (uncategorized only)"
+        # Incremental mode: two-phase approach
+        # Phase 1: Try to assign each uncategorized doc to existing topics individually
+        # Phase 2: Cluster any remaining unmatched docs if count >= min_docs_for_clustering
+        return _incremental_topic_assignment(db, agglom_cfg, cfg)
     
     if not docs:
-        return {"status": "no_documents", "message": f"No {'uncategorized ' if not full_recluster else ''}documents found in time range"}
+        return {"status": "no_documents", "message": "No documents found"}
     
     print(f"\n{'='*60}")
     print(f"Computing hierarchical topics - {mode_desc}")
@@ -1102,10 +1315,6 @@ def compute_hierarchical_topics(
     
     if len(docs_with_embeddings) == 0:
         return {"status": "no_embeddings", "message": "No documents have embeddings"}
-    
-    # For incremental mode with only 1 doc, try to assign to existing topic
-    if not full_recluster and len(docs_with_embeddings) == 1:
-        return _assign_single_document_to_topic(db, docs_with_embeddings[0], doc_embeddings)
     
     if len(docs_with_embeddings) < 2:
         return {"status": "insufficient_documents", "message": f"Need at least 2 documents, got {len(docs_with_embeddings)}"}
@@ -1140,21 +1349,16 @@ def compute_hierarchical_topics(
     for level, level_stats in stats.items():
         print(f"  Level {level}: {level_stats['n_clusters']} clusters, avg size: {level_stats['avg_size']:.1f}")
     
-    # 8) Handle existing topics based on mode
-    if full_recluster:
-        # Full recluster: clear existing topics
-        try:
-            deleted = db.query(TOPIC_TABLE).delete()
-            db.commit()
-            print(f"Cleared {deleted} existing topics")
-        except Exception as e:
-            db.rollback()
-            print(f"[WARN] Could not clear existing topics: {e}")
-    else:
-        # Incremental mode: keep existing topics, we'll try to match or create new ones
-        print("Keeping existing topics (incremental mode)")
+    # 8) Clear existing topics for full recluster
+    try:
+        deleted = db.query(TOPIC_TABLE).delete()
+        db.commit()
+        print(f"Cleared {deleted} existing topics")
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] Could not clear existing topics: {e}")
     
-    # 9) Handle topic creation differently based on mode
+    # 9) Create topics at all levels (coarsest to finest)
     
     # Map: (level, cluster_label) -> topic_db_id
     topic_id_map: Dict[Tuple[int, int], UUID] = {}
@@ -1163,117 +1367,57 @@ def compute_hierarchical_topics(
     doc_by_id = {d.id: d for d in docs_with_embeddings}
     
     created_topics = {level: 0 for level in range(len(agglom_cfg.level_thresholds))}
-    matched_topics = {level: 0 for level in range(len(agglom_cfg.level_thresholds))}
     
-    cfg_persist = PREFERENCES.topic_persistence
-    
-    if full_recluster:
-        # Full recluster: create new topics at all levels
-        for level in reversed(range(len(agglom_cfg.level_thresholds))):
-            level_labels = labels_by_level[level]
-            level_structure = structure[level]
-            
-            print(f"\nCreating Level {level} topics ({len(level_structure)} clusters)...")
-            
-            for cluster_label, doc_ids_in_cluster in level_structure.items():
-                # Get documents in this cluster
-                docs_in_cluster = [doc_by_id[did] for did in doc_ids_in_cluster if did in doc_by_id]
-                
-                if not docs_in_cluster:
-                    continue
-                
-                # Compute centroid
-                cluster_embeddings = [doc_embeddings[d.id] for d in docs_in_cluster]
-                centroid = compute_centroid(cluster_embeddings, normalize=True)
-                
-                # Find parent topic (for levels 0 and 1)
-                parent_id = None
-                if level < len(agglom_cfg.level_thresholds) - 1:
-                    parent_cluster_label = hierarchy.get(level, {}).get(cluster_label)
-                    if parent_cluster_label:
-                        parent_id = topic_id_map.get((level + 1, parent_cluster_label))
-                
-                # Generate title and summary
-                title, summary = _generate_title_and_summary(
-                    docs_in_cluster, 
-                    db=db, 
-                    doc_embeddings=doc_embeddings, 
-                    doc_summaries=doc_summaries
-                )
-                
-                level_names = {0: "Fine", 1: "Topic", 2: "Category"}
-                level_prefix = level_names.get(level, f"L{level}")
-                
-                # Save topic to database
-                topic_db_id = _save_topic_to_db(
-                    db=db,
-                    title=title,
-                    centroid=centroid,
-                    document_count=len(docs_in_cluster),
-                    summary=summary,
-                    parent_id=parent_id,
-                    level_index=level
-                )
-                
-                topic_id_map[(level, cluster_label)] = topic_db_id
-                created_topics[level] += 1
-                
-                print(f"  [{level_prefix}] {title[:50]}... ({len(docs_in_cluster)} docs)")
-            
-            db.commit()
-    else:
-        # Incremental mode: try to match existing topics first, only create if no match
-        # Only process Level 0 for document assignment (we match against existing hierarchy)
-        level_0_structure = structure[0]
+    for level in reversed(range(len(agglom_cfg.level_thresholds))):
+        level_labels = labels_by_level[level]
+        level_structure = structure[level]
         
-        print(f"\nIncremental mode: matching {len(level_0_structure)} clusters against existing topics...")
+        print(f"\nCreating Level {level} topics ({len(level_structure)} clusters)...")
         
-        for cluster_label, doc_ids_in_cluster in level_0_structure.items():
+        for cluster_label, doc_ids_in_cluster in level_structure.items():
+            # Get documents in this cluster
             docs_in_cluster = [doc_by_id[did] for did in doc_ids_in_cluster if did in doc_by_id]
             
             if not docs_in_cluster:
                 continue
             
-            # Compute centroid for this cluster
+            # Compute centroid
             cluster_embeddings = [doc_embeddings[d.id] for d in docs_in_cluster]
             centroid = compute_centroid(cluster_embeddings, normalize=True)
             
-            # Try to find a matching existing Level 0 topic
-            match = _find_matching_topic(
-                db,
-                centroid,
-                similarity_threshold=cfg_persist.similarity_threshold_topic,
-                level_index=0
+            # Find parent topic (for levels 0 and 1)
+            parent_id = None
+            if level < len(agglom_cfg.level_thresholds) - 1:
+                parent_cluster_label = hierarchy.get(level, {}).get(cluster_label)
+                if parent_cluster_label:
+                    parent_id = topic_id_map.get((level + 1, parent_cluster_label))
+            
+            # Generate title and summary
+            title, summary = _generate_title_and_summary(
+                docs_in_cluster, 
+                db=db, 
+                doc_embeddings=doc_embeddings, 
+                doc_summaries=doc_summaries
             )
             
-            if match:
-                # Found a matching topic - use it
-                topic_id, topic_title, _ = match
-                topic_id_map[(0, cluster_label)] = topic_id
-                matched_topics[0] += 1
-                print(f"  [MATCHED] {topic_title[:50]}... ({len(docs_in_cluster)} docs)")
-            else:
-                # No match found - create a new topic
-                title, summary = _generate_title_and_summary(
-                    docs_in_cluster,
-                    db=db,
-                    doc_embeddings=doc_embeddings,
-                    doc_summaries=doc_summaries
-                )
-                
-                topic_db_id = _save_topic_to_db(
-                    db=db,
-                    title=title,
-                    centroid=centroid,
-                    document_count=len(docs_in_cluster),
-                    summary=summary,
-                    parent_id=None,  # No parent in incremental mode (orphan topic)
-                    level_index=0
-                )
-                
-                topic_id_map[(0, cluster_label)] = topic_db_id
-                created_topics[0] += 1
-                print(f"  [NEW] {title[:50]}... ({len(docs_in_cluster)} docs)")
+            level_names = {0: "Fine", 1: "Topic", 2: "Category"}
+            level_prefix = level_names.get(level, f"L{level}")
+            
+            # Save topic to database
+            topic_db_id = _save_topic_to_db(
+                db=db,
+                title=title,
+                centroid=centroid,
+                document_count=len(docs_in_cluster),
+                summary=summary,
+                parent_id=parent_id,
+                level_index=level
+            )
+            
+            topic_id_map[(level, cluster_label)] = topic_db_id
+            created_topics[level] += 1
+            
+            print(f"  [{level_prefix}] {title[:50]}... ({len(docs_in_cluster)} docs)")
         
         db.commit()
     
@@ -1307,19 +1451,17 @@ def compute_hierarchical_topics(
     # Return summary
     result = {
         "status": "ok",
-        "mode": "full_recluster" if full_recluster else "incremental",
+        "mode": "full_recluster",
         "documents_processed": len(docs_with_embeddings),
         "topics_created": created_topics,
-        "topics_matched": matched_topics,
         "total_topics_created": sum(created_topics.values()),
-        "total_topics_matched": sum(matched_topics.values()),
         "documents_assigned": assignments,
         "level_stats": stats
     }
     
     print(f"\n{'='*60}")
-    print(f"Hierarchical topic computation complete ({result['mode']})")
-    print(f"Created: {created_topics}, Matched: {matched_topics}")
+    print(f"Full recluster complete")
+    print(f"Created: {created_topics}")
     print(f"{'='*60}\n")
     
     return result
