@@ -39,7 +39,7 @@ LinkageMethod = Literal["average", "single", "complete"]  # for agglomerative cl
 
 @dataclass
 class ClusteringConfig:
-    dim_reducer: DimReducer = "pca"   # "pca", "umap", or "none"
+    dim_reducer: DimReducer = "none"  # "pca", "umap", or "none" - using "none" for consistent full embeddings
     use_reducer_for_clustering: bool = True  # was use_umap_for_clustering
     cluster_algo: ClusterAlgo = "kmeans"
     min_docs_for_clustering: int = 3
@@ -103,11 +103,11 @@ class AgglomerativeConfig:
     
     # Cosine DISTANCE thresholds for each level (distance = 1 - similarity)
     # Level 0 (finest): very similar content, tightly related
-    level_0_distance: float = 0.5                 # distance <= 0.5 means similarity >= 0.5
+    level_0_distance: float = 0.6                 # distance <= 0.5 means similarity >= 0.5
     # Level 1: topics - related content
-    level_1_distance: float = 0.75                # distance <= 0.75 means similarity >= 0.25
+    level_1_distance: float = 0.7                # distance <= 0.75 means similarity >= 0.25
     # Level 2 (coarsest): super-topics - broad categories
-    level_2_distance: float = 0.95                # distance <= 0.95 means similarity >= 0.05
+    level_2_distance: float = 0.85                # distance <= 0.95 means similarity >= 0.05
     
     min_cluster_size: int = 1                     # Minimum docs per cluster
     use_document_summaries: bool = True           # Use document summaries for clustering input

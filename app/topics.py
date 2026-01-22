@@ -738,8 +738,10 @@ def _find_matching_topic(
         db: Database session
         centroid: Cluster centroid to match against
         min_similarity: Minimum cosine SIMILARITY to consider a match (NOT distance)
-        level_index: Topic level to search (0=topics, 1=subtopics)
-        exclude_stale: If True, only match topics that have at least one document assigned
+        level_index: Topic level to search (0=fine, 1=topics, 2=categories)
+        exclude_stale: If True, only match topics that are "active":
+                      - Level 0: has at least one document assigned
+                      - Level 1/2: has at least one child topic
     
     Returns:
         (topic_id, title, summary) if match found, else None
@@ -750,15 +752,24 @@ def _find_matching_topic(
     query = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.level_index == level_index)
     
     if exclude_stale:
-        # Only include topics that have at least one document assigned to them
-        # Subquery to get topic IDs that have documents
-        topics_with_docs = (
-            db.query(Document.assigned_topic_id)
-            .filter(Document.assigned_topic_id != None)
-            .distinct()
-            .subquery()
-        )
-        query = query.filter(TOPIC_TABLE.id.in_(topics_with_docs))
+        if level_index == 0:
+            # Level 0: Only include topics that have at least one document assigned
+            topics_with_docs = (
+                db.query(Document.assigned_topic_id)
+                .filter(Document.assigned_topic_id != None)
+                .distinct()
+                .subquery()
+            )
+            query = query.filter(TOPIC_TABLE.id.in_(topics_with_docs))
+        else:
+            # Level 1/2: Only include topics that have at least one child topic
+            topics_with_children = (
+                db.query(TOPIC_TABLE.parent_id)
+                .filter(TOPIC_TABLE.parent_id != None)
+                .distinct()
+                .subquery()
+            )
+            query = query.filter(TOPIC_TABLE.id.in_(topics_with_children))
     
     existing_topics = (
         query
@@ -856,15 +867,69 @@ def _assign_single_document_to_topic(
         }
 
 
+def _cleanup_empty_topics(
+    db: Session,
+    level0_ids: list,
+    level1_ids: list
+) -> int:
+    """
+    Clean up topics that have no documents assigned after orphan reassignment.
+    
+    Args:
+        db: Database session
+        level0_ids: List of Level 0 topic IDs that may be empty
+        level1_ids: List of Level 1 topic IDs that may be empty
+    
+    Returns:
+        Total number of topics deleted
+    """
+    topics_deleted = 0
+    
+    # Delete Level 0 topics that now have no documents
+    if level0_ids:
+        # Find which ones are truly empty
+        empty_level0 = []
+        for tid in level0_ids:
+            has_docs = db.query(Document).filter(Document.assigned_topic_id == tid).first()
+            if not has_docs:
+                empty_level0.append(tid)
+        
+        if empty_level0:
+            db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id.in_(empty_level0)).delete(synchronize_session=False)
+            topics_deleted += len(empty_level0)
+            print(f"Deleted {len(empty_level0)} empty Level 0 topics")
+    
+    # Delete Level 1 topics that now have no Level 0 children
+    if level1_ids:
+        empty_level1 = []
+        for tid in level1_ids:
+            has_children = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.parent_id == tid).first()
+            if not has_children:
+                empty_level1.append(tid)
+        
+        if empty_level1:
+            db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id.in_(empty_level1)).delete(synchronize_session=False)
+            topics_deleted += len(empty_level1)
+            print(f"Deleted {len(empty_level1)} empty Level 1 topics")
+    
+    if topics_deleted > 0:
+        db.commit()
+    
+    return topics_deleted
+
+
 def _incremental_topic_assignment(
     db: Session,
     agglom_cfg,
     clustering_cfg
 ) -> dict:
     """
-    Incremental topic assignment using a two-phase approach:
+    Incremental topic assignment using a three-phase approach:
     
-    Phase 1: For each uncategorized document, try to assign it to the best 
+    Phase 0: Find "orphan" documents (sole member of a Level 1 topic) and 
+             include them in reclustering to give them a chance to merge.
+    
+    Phase 1: For each uncategorized/orphan document, try to assign it to the best 
              matching existing topic (by centroid similarity).
     
     Phase 2: Any remaining unassigned documents, if count >= min_docs_for_clustering,
@@ -879,6 +944,7 @@ def _incremental_topic_assignment(
         Dict with assignment statistics
     """
     from .mmr import compute_centroid
+    from collections import defaultdict
     
     min_similarity = 1.0 - agglom_cfg.level_0_distance
     min_docs_for_clustering = clustering_cfg.min_docs_for_clustering
@@ -889,7 +955,81 @@ def _incremental_topic_assignment(
     print(f"min_docs_for_clustering={min_docs_for_clustering}")
     print(f"{'='*60}")
     
-    # Get all uncategorized documents
+    # ========== PHASE 0: Find orphan documents (sole member of Level 1 topic) ==========
+    print(f"\n--- Phase 0: Finding orphan documents in singleton Level 1 topics ---")
+    
+    # A document is an "orphan" if its Level 1 topic has only 1 document total.
+    # This means there are no related documents at any granularity level.
+    
+    # Get Level 0 topics with their parent_id (Level 1)
+    level_0_topics = (
+        db.query(TOPIC_TABLE.id, TOPIC_TABLE.parent_id)
+        .filter(TOPIC_TABLE.level_index == 0)
+        .all()
+    )
+    
+    # Map Level 0 topic -> Level 1 parent
+    level0_to_level1 = {t.id: t.parent_id for t in level_0_topics if t.parent_id}
+    
+    # Count documents per Level 1 topic
+    docs_per_level1 = defaultdict(list)
+    
+    # Get all documents with topic assignments
+    assigned_docs = (
+        db.query(Document)
+        .filter(Document.assigned_topic_id != None)
+        .all()
+    )
+    
+    for doc in assigned_docs:
+        level1_parent = level0_to_level1.get(doc.assigned_topic_id)
+        if level1_parent:
+            docs_per_level1[level1_parent].append(doc)
+    
+    # Find Level 1 topics with exactly 1 document (orphans)
+    orphan_docs = []
+    orphan_level1_ids = []
+    orphan_level0_ids = []
+    
+    for level1_id, docs in docs_per_level1.items():
+        if len(docs) == 1:
+            orphan_docs.append(docs[0])
+            orphan_level1_ids.append(level1_id)
+            orphan_level0_ids.append(docs[0].assigned_topic_id)
+    
+    # Also check for documents in Level 0 topics that have NO Level 1 parent (truly orphaned)
+    level0_ids_with_parents = set(level0_to_level1.keys())
+    orphan_no_parent = (
+        db.query(Document)
+        .filter(Document.assigned_topic_id != None)
+        .filter(~Document.assigned_topic_id.in_(level0_ids_with_parents) if level0_ids_with_parents else True)
+        .all()
+    )
+    
+    # Filter to only those actually in Level 0 topics (not some other assignment)
+    level0_topic_ids = {t.id for t in level_0_topics}
+    for doc in orphan_no_parent:
+        if doc.assigned_topic_id in level0_topic_ids and doc not in orphan_docs:
+            orphan_docs.append(doc)
+            orphan_level0_ids.append(doc.assigned_topic_id)
+    
+    orphan_count = len(orphan_docs)
+    
+    if orphan_docs:
+        print(f"Found {orphan_count} orphan documents:")
+        print(f"  - {len(orphan_level1_ids)} in singleton Level 1 topics")
+        print(f"  - {orphan_count - len(orphan_level1_ids)} in Level 0 topics without Level 1 parent")
+        
+        # Clear their topic assignments so they can be reassigned
+        for doc in orphan_docs:
+            doc.assigned_topic_id = None
+            doc.assigned_topic_title = None
+        db.commit()
+        print(f"Cleared topic assignments for {orphan_count} orphan documents")
+    else:
+        print("No orphan documents found")
+    
+    # Get all uncategorized documents (now includes the cleared orphans)
     uncategorized_docs = (
         db.query(Document)
         .filter(Document.assigned_topic_id == None)
@@ -897,18 +1037,25 @@ def _incremental_topic_assignment(
         .all()
     )
     
+    new_uncategorized_count = len(uncategorized_docs) - orphan_count
+    
     if not uncategorized_docs:
+        # Clean up empty topics
+        topics_deleted = _cleanup_empty_topics(db, orphan_level0_ids, orphan_level1_ids)
+        
         return {
             "status": "ok",
             "mode": "incremental",
-            "message": "No uncategorized documents found",
+            "message": "No documents to process",
+            "orphans_found": orphan_count,
             "phase1_assigned": 0,
             "phase2_assigned": 0,
             "topics_created": 0,
+            "topics_deleted": topics_deleted,
             "documents_remaining_unassigned": 0
         }
     
-    print(f"Found {len(uncategorized_docs)} uncategorized documents")
+    print(f"Total documents to process: {len(uncategorized_docs)} ({new_uncategorized_count} new + {orphan_count} orphans)")
     
     # Compute embeddings for uncategorized docs
     doc_embeddings = compute_document_embeddings(db, uncategorized_docs)
@@ -928,20 +1075,35 @@ def _incremental_topic_assignment(
     print(f"Processing {len(docs_with_embeddings)} documents with embeddings")
     
     # ========== PHASE 1: Individual assignment to existing topics ==========
-    print(f"\n--- Phase 1: Matching documents to existing topics ---")
+    # Try matching at all hierarchy levels (Level 0 -> Level 1 -> Level 2)
+    # Each level has a different similarity threshold based on distance config
+    print(f"\n--- Phase 1: Matching documents to existing topics (all levels) ---")
+    
+    # Calculate similarity thresholds for each level (similarity = 1 - distance)
+    level_similarities = {
+        0: 1.0 - agglom_cfg.level_0_distance,
+        1: 1.0 - agglom_cfg.level_1_distance,
+        2: 1.0 - agglom_cfg.level_2_distance,
+    }
+    print(f"Similarity thresholds: L0={level_similarities[0]:.3f}, L1={level_similarities[1]:.3f}, L2={level_similarities[2]:.3f}")
     
     phase1_assigned = 0
+    phase1_level0_matched = 0
+    phase1_level1_matched = 0
+    phase1_level2_matched = 0
     unmatched_docs = []
     
     for doc in docs_with_embeddings:
         doc_embedding = doc_embeddings[doc.id]
         centroid = compute_centroid([doc_embedding], normalize=True)
         
-        # Try to find best matching existing topic
+        assigned = False
+        
+        # Try Level 0 first (finest granularity)
         match = _find_matching_topic(
             db,
             centroid,
-            min_similarity=min_similarity,
+            min_similarity=level_similarities[0],
             level_index=0,
             exclude_stale=True
         )
@@ -951,12 +1113,79 @@ def _incremental_topic_assignment(
             doc.assigned_topic_id = topic_id
             doc.assigned_topic_title = topic_title
             phase1_assigned += 1
-            print(f"  [MATCHED] '{doc.title[:40]}...' -> '{topic_title[:40]}...'")
-        else:
+            phase1_level0_matched += 1
+            assigned = True
+            print(f"  [L0 MATCH] '{doc.title[:35]}...' -> '{topic_title[:35]}...'")
+        
+        # Try Level 1 if no Level 0 match
+        if not assigned:
+            match = _find_matching_topic(
+                db,
+                centroid,
+                min_similarity=level_similarities[1],
+                level_index=1,
+                exclude_stale=False  # Level 1 topics don't have direct doc assignments
+            )
+            
+            if match:
+                parent_topic_id, parent_topic_title, _ = match
+                # Create a new Level 0 topic for this doc, attached to the Level 1 parent
+                doc_title_short = (doc.title or "Untitled")[:50]
+                new_topic_id = _save_topic_to_db(
+                    db=db,
+                    title=doc_title_short,
+                    centroid=centroid,
+                    document_count=1,
+                    summary=None,
+                    parent_id=parent_topic_id,
+                    level_index=0
+                )
+                doc.assigned_topic_id = new_topic_id
+                doc.assigned_topic_title = doc_title_short
+                phase1_assigned += 1
+                phase1_level1_matched += 1
+                assigned = True
+                print(f"  [L1 MATCH] '{doc.title[:35]}...' -> new L0 under '{parent_topic_title[:25]}...'")
+        
+        # Try Level 2 if no Level 1 match
+        if not assigned:
+            match = _find_matching_topic(
+                db,
+                centroid,
+                min_similarity=level_similarities[2],
+                level_index=2,
+                exclude_stale=False  # Level 2 topics don't have direct doc assignments
+            )
+            
+            if match:
+                parent_topic_id, parent_topic_title, _ = match
+                # Create a new Level 0 topic for this doc, attached to the Level 2 parent
+                # (skipping Level 1 - it will be an orphan at Level 1)
+                doc_title_short = (doc.title or "Untitled")[:50]
+                new_topic_id = _save_topic_to_db(
+                    db=db,
+                    title=doc_title_short,
+                    centroid=centroid,
+                    document_count=1,
+                    summary=None,
+                    parent_id=parent_topic_id,  # Directly under Level 2
+                    level_index=0
+                )
+                doc.assigned_topic_id = new_topic_id
+                doc.assigned_topic_title = doc_title_short
+                phase1_assigned += 1
+                phase1_level2_matched += 1
+                assigned = True
+                print(f"  [L2 MATCH] '{doc.title[:35]}...' -> new L0 under '{parent_topic_title[:25]}...'")
+        
+        if not assigned:
             unmatched_docs.append(doc)
     
     db.commit()
-    print(f"Phase 1 complete: {phase1_assigned} documents assigned to existing topics")
+    print(f"Phase 1 complete: {phase1_assigned} documents assigned")
+    print(f"  - Level 0 matches: {phase1_level0_matched}")
+    print(f"  - Level 1 matches (new L0 created): {phase1_level1_matched}")
+    print(f"  - Level 2 matches (new L0 created): {phase1_level2_matched}")
     print(f"Remaining unmatched: {len(unmatched_docs)} documents")
     
     # ========== PHASE 2: Cluster remaining unmatched documents ==========
@@ -1032,6 +1261,9 @@ def _incremental_topic_assignment(
         if len(unmatched_docs) > 0:
             print(f"\n--- Phase 2: Skipped (only {len(unmatched_docs)} unmatched docs, need {min_docs_for_clustering}) ---")
     
+    # ========== CLEANUP: Remove empty topics from orphan processing ==========
+    topics_deleted = _cleanup_empty_topics(db, orphan_level0_ids, orphan_level1_ids)
+    
     # Clear cache
     clear_topics_cache()
     
@@ -1040,16 +1272,26 @@ def _incremental_topic_assignment(
     result = {
         "status": "ok",
         "mode": "incremental",
+        "orphans_found": orphan_count,
         "phase1_assigned": phase1_assigned,
+        "phase1_level0_matched": phase1_level0_matched,
+        "phase1_level1_matched": phase1_level1_matched,
+        "phase1_level2_matched": phase1_level2_matched,
         "phase2_assigned": phase2_assigned,
-        "topics_created": topics_created,
+        "topics_created": topics_created + phase1_level1_matched + phase1_level2_matched,  # Include L0 topics created for L1/L2 matches
+        "topics_deleted": topics_deleted,
         "documents_remaining_unassigned": remaining_unassigned
     }
     
     print(f"\n{'='*60}")
     print(f"Incremental assignment complete")
+    print(f"Orphans processed: {orphan_count}")
     print(f"Phase 1 (matched to existing): {phase1_assigned}")
-    print(f"Phase 2 (new topics created): {topics_created}, docs assigned: {phase2_assigned}")
+    print(f"  - L0 matches: {phase1_level0_matched}")
+    print(f"  - L1 matches (new L0 created): {phase1_level1_matched}")
+    print(f"  - L2 matches (new L0 created): {phase1_level2_matched}")
+    print(f"Phase 2 (clustered): {topics_created} new topics, {phase2_assigned} docs assigned")
+    print(f"Topics deleted: {topics_deleted}")
     print(f"Still unassigned: {remaining_unassigned}")
     print(f"{'='*60}\n")
     
