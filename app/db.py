@@ -18,23 +18,18 @@ if "postgresql://" in DATABASE_URL and "+psycopg2" not in DATABASE_URL:
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def ensure_schemas():
-    with engine.connect() as conn:
+    # Use AUTOCOMMIT so a failed extension install doesn't poison the transaction
+    # (Fly Postgres can reject CREATE EXTENSION depending on setup/permissions).
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         # Enable pgvector extension (required for vector columns)
         try:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.commit()
             print("✓ pgvector extension enabled")
         except Exception as e:
             print(f"⚠ Could not enable pgvector extension: {e}")
-            # If CREATE EXTENSION fails, the transaction is aborted; rollback so we can proceed
-            # with other setup (like creating schemas) and fail more gracefully later if needed.
-            try:
-                conn.rollback()
-            except Exception:
-                pass
         
+        # Schema for dynamic embedding tables + metadata
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS embedding"))
-        conn.commit()
 
 
 def _migrate_add_summary_columns():
