@@ -681,6 +681,66 @@ def _generate_title_and_summary(
     return _generate_title_and_summary_fallback(docs)
 
 
+# ---------- Topic Title Caching & Reuse ----------
+
+def _cache_existing_topics(db: Session) -> Dict[int, List[Tuple[np.ndarray, str, str]]]:
+    """
+    Cache existing topic embeddings and titles before reclustering.
+    
+    Returns:
+        Dict mapping level_index -> list of (embedding, title, summary) tuples
+    """
+    from collections import defaultdict
+    
+    existing = db.query(TOPIC_TABLE).all()
+    
+    cached_by_level: Dict[int, List[Tuple[np.ndarray, str, str]]] = defaultdict(list)
+    
+    for t in existing:
+        if t.embedding is not None and t.title_text:
+            emb = normalize_embedding(t.embedding)
+            cached_by_level[t.level_index].append((emb, t.title_text, t.summary_text or ""))
+    
+    total_cached = sum(len(v) for v in cached_by_level.values())
+    print(f"Cached {total_cached} existing topic titles for potential reuse")
+    
+    return dict(cached_by_level)
+
+
+def _find_matching_title(
+    centroid: np.ndarray,
+    cached_topics: List[Tuple[np.ndarray, str, str]],
+    min_similarity: float = 0.90
+) -> Tuple[str, str] | None:
+    """
+    Find an existing topic title if centroid matches with high similarity.
+    
+    Args:
+        centroid: New cluster centroid to match
+        cached_topics: List of (embedding, title, summary) from existing topics
+        min_similarity: Minimum cosine similarity to consider a match (default 0.90)
+    
+    Returns:
+        (title, summary) if match found, else None
+    """
+    if not cached_topics:
+        return None
+    
+    best_match = None
+    best_sim = min_similarity
+    
+    for emb, title, summary in cached_topics:
+        sim = float(cosine_similarity(
+            centroid.reshape(1, -1),
+            emb.reshape(1, -1)
+        )[0, 0])
+        if sim > best_sim:
+            best_sim = sim
+            best_match = (title, summary)
+    
+    return best_match
+
+
 # ---------- Topic Persistence ----------
 
 def _save_topic_to_db(
@@ -1191,9 +1251,13 @@ def _incremental_topic_assignment(
     # ========== PHASE 2: Cluster remaining unmatched documents ==========
     phase2_assigned = 0
     topics_created = 0
+    titles_reused = 0
     
     if len(unmatched_docs) >= min_docs_for_clustering:
         print(f"\n--- Phase 2: Clustering {len(unmatched_docs)} unmatched documents ---")
+        
+        # Cache existing Level 0 topics for title reuse
+        cached_level0_topics = _cache_existing_topics(db).get(0, [])
         
         # Get summaries for unmatched docs
         unmatched_doc_ids = [d.id for d in unmatched_docs]
@@ -1227,13 +1291,22 @@ def _incremental_topic_assignment(
             cluster_embeddings_list = [doc_embeddings[d.id] for d in docs_in_cluster]
             centroid = compute_centroid(cluster_embeddings_list, normalize=True)
             
-            # Generate title and summary for the new topic
-            title, summary = _generate_title_and_summary(
-                docs_in_cluster,
-                db=db,
-                doc_embeddings=doc_embeddings,
-                doc_summaries=doc_summaries
-            )
+            # Try to reuse existing topic title if centroid matches (90% similarity)
+            existing_match = _find_matching_title(centroid, cached_level0_topics, min_similarity=0.90)
+            
+            if existing_match:
+                title, summary = existing_match
+                titles_reused += 1
+                print(f"  [REUSED] '{title[:50]}...' ({len(docs_in_cluster)} docs)")
+            else:
+                # Generate title and summary for the new topic
+                title, summary = _generate_title_and_summary(
+                    docs_in_cluster,
+                    db=db,
+                    doc_embeddings=doc_embeddings,
+                    doc_summaries=doc_summaries
+                )
+                print(f"  [NEW TOPIC] '{title[:50]}...' ({len(docs_in_cluster)} docs)")
             
             # Save new topic
             topic_db_id = _save_topic_to_db(
@@ -1252,11 +1325,11 @@ def _incremental_topic_assignment(
                 doc.assigned_topic_id = topic_db_id
                 doc.assigned_topic_title = title
                 phase2_assigned += 1
-            
-            print(f"  [NEW TOPIC] '{title[:50]}...' ({len(docs_in_cluster)} docs)")
         
         db.commit()
         print(f"Phase 2 complete: {phase2_assigned} documents assigned to {topics_created} new topics")
+        print(f"  - Titles reused (90% match): {titles_reused}")
+        print(f"  - New titles generated: {topics_created - titles_reused}")
     else:
         if len(unmatched_docs) > 0:
             print(f"\n--- Phase 2: Skipped (only {len(unmatched_docs)} unmatched docs, need {min_docs_for_clustering}) ---")
@@ -1279,6 +1352,7 @@ def _incremental_topic_assignment(
         "phase1_level2_matched": phase1_level2_matched,
         "phase2_assigned": phase2_assigned,
         "topics_created": topics_created + phase1_level1_matched + phase1_level2_matched,  # Include L0 topics created for L1/L2 matches
+        "phase2_titles_reused": titles_reused,
         "topics_deleted": topics_deleted,
         "documents_remaining_unassigned": remaining_unassigned
     }
@@ -1291,6 +1365,8 @@ def _incremental_topic_assignment(
     print(f"  - L1 matches (new L0 created): {phase1_level1_matched}")
     print(f"  - L2 matches (new L0 created): {phase1_level2_matched}")
     print(f"Phase 2 (clustered): {topics_created} new topics, {phase2_assigned} docs assigned")
+    if titles_reused > 0:
+        print(f"  - Titles reused (saved {titles_reused} LLM calls)")
     print(f"Topics deleted: {topics_deleted}")
     print(f"Still unassigned: {remaining_unassigned}")
     print(f"{'='*60}\n")
@@ -1591,7 +1667,9 @@ def compute_hierarchical_topics(
     for level, level_stats in stats.items():
         print(f"  Level {level}: {level_stats['n_clusters']} clusters, avg size: {level_stats['avg_size']:.1f}")
     
-    # 8) Clear existing topics for full recluster
+    # 8) Cache existing topic titles for reuse, then clear topics
+    cached_topics_by_level = _cache_existing_topics(db)
+    
     try:
         deleted = db.query(TOPIC_TABLE).delete()
         db.commit()
@@ -1609,6 +1687,7 @@ def compute_hierarchical_topics(
     doc_by_id = {d.id: d for d in docs_with_embeddings}
     
     created_topics = {level: 0 for level in range(len(agglom_cfg.level_thresholds))}
+    reused_titles = {level: 0 for level in range(len(agglom_cfg.level_thresholds))}
     
     for level in reversed(range(len(agglom_cfg.level_thresholds))):
         level_labels = labels_by_level[level]
@@ -1634,16 +1713,26 @@ def compute_hierarchical_topics(
                 if parent_cluster_label:
                     parent_id = topic_id_map.get((level + 1, parent_cluster_label))
             
-            # Generate title and summary
-            title, summary = _generate_title_and_summary(
-                docs_in_cluster, 
-                db=db, 
-                doc_embeddings=doc_embeddings, 
-                doc_summaries=doc_summaries
-            )
+            # Try to reuse existing topic title if centroid matches (90% similarity)
+            cached = cached_topics_by_level.get(level, [])
+            existing_match = _find_matching_title(centroid, cached, min_similarity=0.90)
             
             level_names = {0: "Fine", 1: "Topic", 2: "Category"}
             level_prefix = level_names.get(level, f"L{level}")
+            
+            if existing_match:
+                title, summary = existing_match
+                reused_titles[level] += 1
+                print(f"  [{level_prefix}] [REUSED] {title[:50]}... ({len(docs_in_cluster)} docs)")
+            else:
+                # Generate new title and summary via LLM
+                title, summary = _generate_title_and_summary(
+                    docs_in_cluster, 
+                    db=db, 
+                    doc_embeddings=doc_embeddings, 
+                    doc_summaries=doc_summaries
+                )
+                print(f"  [{level_prefix}] [NEW] {title[:50]}... ({len(docs_in_cluster)} docs)")
             
             # Save topic to database
             topic_db_id = _save_topic_to_db(
@@ -1658,8 +1747,6 @@ def compute_hierarchical_topics(
             
             topic_id_map[(level, cluster_label)] = topic_db_id
             created_topics[level] += 1
-            
-            print(f"  [{level_prefix}] {title[:50]}... ({len(docs_in_cluster)} docs)")
         
         db.commit()
     
@@ -1691,19 +1778,27 @@ def compute_hierarchical_topics(
     clear_topics_cache()
     
     # Return summary
+    total_reused = sum(reused_titles.values())
+    total_new = sum(created_topics.values()) - total_reused
+    
     result = {
         "status": "ok",
         "mode": "full_recluster",
         "documents_processed": len(docs_with_embeddings),
         "topics_created": created_topics,
         "total_topics_created": sum(created_topics.values()),
+        "titles_reused": reused_titles,
+        "total_titles_reused": total_reused,
+        "total_titles_generated": total_new,
         "documents_assigned": assignments,
         "level_stats": stats
     }
     
     print(f"\n{'='*60}")
     print(f"Full recluster complete")
-    print(f"Created: {created_topics}")
+    print(f"Topics created: {created_topics}")
+    print(f"Titles reused (90% match): {reused_titles} (saved {total_reused} LLM calls)")
+    print(f"New titles generated: {total_new}")
     print(f"{'='*60}\n")
     
     return result
