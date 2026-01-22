@@ -158,6 +158,11 @@ def initialize_embedding_tables():
     
     if _embedding_tables_cache is not None:
         return _embedding_tables_cache
+
+    # Ensure core schemas + metadata tables exist before we try to register dynamic embedding tables.
+    # This is critical in cloud deployments where the app may import EMBED_TABLE lazily before
+    # `app.main` has a chance to call init_db().
+    init_db()
     
     # Import here to avoid circular dependency
     from .helpers import get_embedding
