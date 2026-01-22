@@ -26,6 +26,12 @@ def ensure_schemas():
             print("✓ pgvector extension enabled")
         except Exception as e:
             print(f"⚠ Could not enable pgvector extension: {e}")
+            # If CREATE EXTENSION fails, the transaction is aborted; rollback so we can proceed
+            # with other setup (like creating schemas) and fail more gracefully later if needed.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS embedding"))
         conn.commit()
