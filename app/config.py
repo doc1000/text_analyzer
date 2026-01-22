@@ -155,13 +155,15 @@ class HuggingFaceConfig:
     api_token: str = os.getenv("HUGGINGFACE_API_TOKEN", "")
     embed_model: str = os.getenv("HUGGINGFACE_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     # HuggingFace Serverless Inference router.
-    # IMPORTANT: To reliably get embeddings, use the explicit feature-extraction pipeline endpoint.
+    # NOTE: The router supports /hf-inference/models/{model}. Some models return token-level embeddings
+    # (nested lists), which we mean-pool in code.
+    #
     # Supported formats:
-    # - With placeholder: https://router.huggingface.co/hf-inference/pipeline/feature-extraction/{model}
-    # - Without placeholder: https://router.huggingface.co/hf-inference/pipeline/feature-extraction  (we'll append /{model})
+    # - With placeholder: https://router.huggingface.co/hf-inference/models/{model}
+    # - Without placeholder: https://router.huggingface.co/hf-inference/models  (we'll append /{model})
     embed_url: str = os.getenv(
         "HUGGINGFACE_EMBED_URL",
-        "https://router.huggingface.co/hf-inference/pipeline/feature-extraction/{model}",
+        "https://router.huggingface.co/hf-inference/models/{model}",
     )
 
 @dataclass
