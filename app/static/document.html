@@ -531,7 +531,44 @@
   </main>
 
   <script>
-    const API_BASE = "http://localhost:8000"; // adjust if needed
+    // Auto-detect local vs cloud
+    const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+      ? "http://localhost:8000"
+      : "https://vaultbubbles.fly.dev";
+
+    // -------- AUTH HANDLING --------
+    let API_KEY = localStorage.getItem('vb_api_key') || '';
+
+    // Helper for authenticated fetch
+    function authFetch(url, options = {}) {
+      const headers = { ...options.headers };
+      if (API_KEY) {
+        headers['Authorization'] = `Bearer ${API_KEY}`;
+      }
+      return fetch(url, { ...options, headers });
+    }
+
+    // Redirect to main page if not authenticated and auth is required
+    async function checkAuth() {
+      if (!API_KEY) {
+        // Try a simple request to see if auth is required
+        try {
+          const res = await fetch(`${API_BASE}/health`);
+          if (res.ok) {
+            // Health check works, but we should still check a protected endpoint
+            const docRes = await fetch(`${API_BASE}/documents?limit=1`);
+            if (docRes.status === 401) {
+              alert('Please set your API key in Settings on the main page.');
+              window.location.href = '/';
+              return false;
+            }
+          }
+        } catch (e) {
+          console.error('Auth check failed:', e);
+        }
+      }
+      return true;
+    }
 
     const documentTitle = document.getElementById("documentTitle");
     const documentMeta = document.getElementById("documentMeta");
@@ -611,7 +648,7 @@
       saveBtn.disabled = true;
 
       try {
-        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`);
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`);
 
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: Failed to load document`);
@@ -700,7 +737,7 @@
       saveBtn.disabled = true;
 
       try {
-        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -770,7 +807,7 @@
       if (!docId) return;
 
       try {
-        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
           method: "DELETE"
         });
 
@@ -869,7 +906,7 @@
       topicDropdown.disabled = true;
 
       try {
-        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topics`);
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topics`);
 
         if (!res.ok) {
           if (res.status === 400) {
@@ -919,7 +956,7 @@
       updateTopicStatus(generateNew ? "Generating topic with AI..." : "Updating topic...", "loading");
 
       try {
-        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topic`, {
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topic`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -987,7 +1024,7 @@
 
       try {
         // Call a special endpoint that just generates without assigning
-        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topic/generate`, {
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}/topic/generate`, {
           method: "POST"
         });
 
@@ -1145,7 +1182,7 @@ ${content}
       saveBtn.disabled = true;
 
       try {
-        const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`);
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`);
 
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: Failed to load document`);

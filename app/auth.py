@@ -49,15 +49,9 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         require_auth_str = os.getenv("VB_REQUIRE_AUTH", "false").lower()
         require_auth = require_auth_str in ("1", "true", "yes", "y")
         
-        # Debug logging
-        print(f"[AUTH] VB_REQUIRE_AUTH={require_auth_str}, require_auth={require_auth}, path={request.url.path}")
-        
-        if not require_auth:
-            return await call_next(request)
-
         path = request.url.path or ""
 
-        # Public endpoints
+        # Public endpoints (never require auth)
         if (
             path == "/"
             or path == "/health"
@@ -70,13 +64,24 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
+        # Check for Bearer token
         auth = request.headers.get("authorization") or ""
-        if not auth.lower().startswith("bearer "):
+        has_token = auth.lower().startswith("bearer ")
+        
+        # If auth is disabled and no token provided, pass through
+        if not require_auth and not has_token:
+            return await call_next(request)
+        
+        # If auth required but no token, reject
+        if require_auth and not has_token:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
+        # Validate the token (auth required OR token was provided)
         token = auth.split(" ", 1)[1].strip()
         if not token:
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+            if require_auth:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+            return await call_next(request)
 
         token_hash = hash_api_key(token)
 

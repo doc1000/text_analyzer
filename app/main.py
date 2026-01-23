@@ -4,6 +4,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 import asyncio
 from pydantic import BaseModel
@@ -70,6 +71,9 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+# Security scheme for Swagger UI (shows Authorize button)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 # Allow extension + localhost
 app.add_middleware(
@@ -145,7 +149,10 @@ def bootstrap_create_api_key(
 
 
 @app.get("/auth/whoami", response_model=WhoAmIResponse)
-def whoami(user: models.User = Depends(get_current_user)):
+def whoami(
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     return WhoAmIResponse(user_id=str(user.id), email=user.email)
 
 
@@ -196,7 +203,12 @@ def revoke_api_key(api_key_id: str, user: models.User = Depends(get_current_user
 
 
 @app.post("/ingest")
-def ingest(payload: IngestPayload, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def ingest(
+    payload: IngestPayload,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     # Use captured_at from payload if provided, else now
     captured_at = payload.captured_at or datetime.utcnow()
 

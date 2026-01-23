@@ -548,29 +548,39 @@
           <h3>Providers</h3>
           <label for="chatProviderSelect">Chat Provider (for queries):</label>
           <select id="chatProviderSelect">
-            <option value="ollama">Ollama (default)</option>
-            <option value="openai">OpenAI</option>
+            <option value="openai">OpenAI (default)</option>
+            <option value="ollama">Ollama (local)</option>
           </select>
           
           <label for="topicProviderSelect" style="margin-top: 1rem;">Topic Provider (for topic generation):</label>
           <select id="topicProviderSelect">
-            <option value="ollama">Ollama (default)</option>
-            <option value="openai">OpenAI</option>
+            <option value="openai">OpenAI (default)</option>
+            <option value="ollama">Ollama (local)</option>
           </select>
           
           <label for="embeddingProviderSelect" style="margin-top: 1rem;">Embedding Provider:</label>
           <select id="embeddingProviderSelect">
+            <option value="huggingface">HuggingFace (default)</option>
             <option value="ollama">Ollama (local)</option>
-            <option value="openai">OpenAI</option>
-            <option value="huggingface">HuggingFace</option>
           </select>
           
-          <p class="hint">Choose which provider to use for each function. Ollama is the default and runs locally.</p>
+          <p class="hint">OpenAI is recommended for chat/topics. HuggingFace handles embeddings.</p>
+        </div>
+
+        <div class="settings-section">
+          <h3>VaultBubble API Key</h3>
+          <label for="vbApiKeyInput">Your API Key:</label>
+          <input type="password" id="vbApiKeyInput" placeholder="vb_live_..." />
+          <p class="hint" id="vbAuthStatus">Not authenticated</p>
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+            <button id="saveVbKeyBtn" class="save-btn">Save Key</button>
+            <button id="clearVbKeyBtn" class="cancel-btn">Clear Key</button>
+          </div>
         </div>
 
         <div class="settings-section">
           <h3>OpenAI API Key</h3>
-          <label for="openaiKeyInput">API Key:</label>
+          <label for="openaiKeyInput">API Key (for chat/topics):</label>
           <input type="password" id="openaiKeyInput" placeholder="sk-..." />
           <p class="hint" id="keyStatus">No API key set</p>
           <button id="saveKeyBtn" class="save-btn">Save API Key</button>
@@ -623,6 +633,35 @@
     const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
       ? "http://localhost:8000"
       : "https://vaultbubbles.fly.dev";
+
+    // -------- AUTH HANDLING --------
+    let API_KEY = localStorage.getItem('vb_api_key') || '';
+
+    // Prompt for API key if not set (only on localhost for now)
+    function promptForApiKey() {
+      const key = prompt('Enter your API key (vb_live_...):');
+      if (key && key.startsWith('vb_live_')) {
+        API_KEY = key;
+        localStorage.setItem('vb_api_key', key);
+        return true;
+      }
+      return false;
+    }
+
+    // Helper for authenticated fetch
+    function authFetch(url, options = {}) {
+      const headers = { ...options.headers };
+      if (API_KEY) {
+        headers['Authorization'] = `Bearer ${API_KEY}`;
+      }
+      return fetch(url, { ...options, headers });
+    }
+
+    // Clear API key (for logout/reset)
+    function clearApiKey() {
+      API_KEY = '';
+      localStorage.removeItem('vb_api_key');
+    }
 
     // -------- SPA TAB LOGIC --------
     const pageTopics = document.getElementById("page-topics");
@@ -862,7 +901,7 @@
       tooltip.style("opacity", 0);
       infoContent.innerHTML = "<p>Loading topics…</p>";
 
-      const res = await fetch(`${API_BASE}/topics/hierarchy?days=${days}`);
+      const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}`);
       const data = await res.json();
 
       // Increase size for topics (depth 1) to make them bigger
@@ -1166,7 +1205,7 @@
         reloadBtn.textContent = "Processing...";
         try {
           // Trigger incremental recluster (only uncategorized docs)
-          await fetch(`${API_BASE}/topics/recluster?days=${days}&clear_assignments=false`, {
+          await authFetch(`${API_BASE}/topics/recluster?days=${days}&clear_assignments=false`, {
             method: "POST"
           });
           // Reload the bubble map after reclustering
@@ -1217,7 +1256,7 @@
       }
 
       try {
-        const res = await fetch(`${API_BASE}/query`, {
+        const res = await authFetch(`${API_BASE}/query`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)
@@ -1359,7 +1398,7 @@
     // Load settings from API
     async function loadSettings() {
       try {
-        const res = await fetch(`${API_BASE}/settings`);
+        const res = await authFetch(`${API_BASE}/settings`);
         if (!res.ok) {
           console.error("Failed to load settings");
           return;
@@ -1425,7 +1464,7 @@
       }
       
       try {
-        const res = await fetch(`${API_BASE}/settings`, {
+        const res = await authFetch(`${API_BASE}/settings`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updates)
@@ -1460,7 +1499,7 @@
       }
       
       try {
-        const res = await fetch(`${API_BASE}/settings`, {
+        const res = await authFetch(`${API_BASE}/settings`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ openai_api_key: apiKey })
@@ -1514,6 +1553,54 @@
 
     // Load settings on page load
     loadSettings();
+
+    // -------- VAULTBUBBLE API KEY (in Settings) --------
+    const vbApiKeyInput = document.getElementById("vbApiKeyInput");
+    const vbAuthStatus = document.getElementById("vbAuthStatus");
+    const saveVbKeyBtn = document.getElementById("saveVbKeyBtn");
+    const clearVbKeyBtn = document.getElementById("clearVbKeyBtn");
+
+    function updateVbAuthStatus() {
+      if (API_KEY) {
+        const hint = API_KEY.substring(0, 10) + "..." + API_KEY.slice(-4);
+        vbAuthStatus.textContent = "✓ Authenticated: " + hint;
+        vbAuthStatus.style.color = "#10b981";
+        vbApiKeyInput.value = "";
+        vbApiKeyInput.placeholder = "••••••••••••";
+      } else {
+        vbAuthStatus.textContent = "Not authenticated";
+        vbAuthStatus.style.color = "#9ca3af";
+        vbApiKeyInput.placeholder = "vb_live_...";
+      }
+    }
+
+    // Save VaultBubble API key
+    saveVbKeyBtn.addEventListener("click", () => {
+      const key = vbApiKeyInput.value.trim();
+      if (key && key.startsWith("vb_live_")) {
+        API_KEY = key;
+        localStorage.setItem("vb_api_key", key);
+        updateVbAuthStatus();
+        alert("API key saved! Page will reload.");
+        location.reload();
+      } else {
+        alert("Please enter a valid API key (starts with vb_live_)");
+      }
+    });
+
+    // Clear VaultBubble API key
+    clearVbKeyBtn.addEventListener("click", () => {
+      clearApiKey();
+      updateVbAuthStatus();
+      alert("API key cleared");
+    });
+
+    // Update auth status on page load and when settings modal opens
+    updateVbAuthStatus();
+    
+    // Also update when settings modal opens
+    const origOpenSettings = settingsBtn.onclick;
+    settingsBtn.addEventListener("click", updateVbAuthStatus);
 
     // -------- INFO PANEL RESIZE --------
     const infoPanel = document.getElementById("info-panel");
