@@ -52,16 +52,12 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb
 
-      # Use HuggingFace dedicated endpoint for embeddings (same model as Ollama all-minilm)
+      # Cloud-like config: HuggingFace for embeddings, OpenAI for chat/topics
       EMBEDDING_PROVIDER: huggingface
       EMBEDDING_MODEL: all-minilm
       EMBEDDING_DIM: 384
-
-      # Ollama wiring - use host.docker.internal to reach host machine's Ollama
-      MODEL_PROVIDER: ollama
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
-      OLLAMA_CHAT_MODEL: phi3.5-mini-q2k
-      OLLAMA_EMBED_MODEL: all-minilm
+      CHAT_PROVIDER: openai
+      TOPIC_PROVIDER: openai
 
     ports:
       - "8000:8000"

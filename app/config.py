@@ -6,20 +6,18 @@ import json
 from pathlib import Path
 # You can extend these later or load them from JSON if you want.
 # For now: one central place to tweak your internal tools.
-Provider = Literal["openai", "ollama", "huggingface", "sentence_transformers"]
+Provider = Literal["openai", "ollama", "huggingface"]
 
 # Model alias mapping: internal name -> provider-specific model IDs
 # This ensures the same underlying model is used regardless of provider
 EMBEDDING_MODEL_ALIASES = {
     "all-minilm": {
         "ollama": "all-minilm",
-        "sentence_transformers": "all-MiniLM-L6-v2",
-        "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
+        "huggingface": "all-MiniLM-L6-v2",  # Used with dedicated endpoint
         "dim": 384,
     },
     "bge-m3": {
         "ollama": "bge-m3",
-        "sentence_transformers": "BAAI/bge-m3",
         "huggingface": "BAAI/bge-m3",
         "dim": 1024,
     },
@@ -188,9 +186,10 @@ class HuggingFaceConfig:
 @dataclass
 class ModelConfig:
     # Separate providers for different model types (read from env vars for cloud deployment)
-    chat_provider: Provider = field(default_factory=lambda: os.getenv("CHAT_PROVIDER", "ollama"))
-    embedding_provider: Provider = field(default_factory=lambda: os.getenv("EMBEDDING_PROVIDER", "ollama"))
-    topic_provider: Provider = field(default_factory=lambda: os.getenv("TOPIC_PROVIDER", "ollama"))
+    # Defaults to OpenAI for chat/topics (works both local and cloud)
+    chat_provider: Provider = field(default_factory=lambda: os.getenv("CHAT_PROVIDER", "openai"))
+    embedding_provider: Provider = field(default_factory=lambda: os.getenv("EMBEDDING_PROVIDER", "huggingface"))
+    topic_provider: Provider = field(default_factory=lambda: os.getenv("TOPIC_PROVIDER", "openai"))
     
     embedding_model: EmbeddingModel = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "all-minilm"))
     llm_model: ChatModel = field(default_factory=lambda: os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
