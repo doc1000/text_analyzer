@@ -13,9 +13,9 @@
 **Current:** Capture and analyze your reading with VaultBubble
 
 **Recommended:** 
-Capture web content, organize by topics, and query your research vault with AI-powered search. All stored locally on your computer.
+Capture web content, organize by topics, and query your research vault with AI-powered search. Cloud sync or local-only storage.
 
-*(Character count: 132 exactly)*
+*(Character count: 127)*
 
 ---
 
@@ -25,7 +25,7 @@ Capture web content, organize by topics, and query your research vault with AI-p
 
 **Transform your browsing into organized knowledge.** VaultBubble helps you capture, organize, and explore everything you read online. Whether you're researching a topic, saving articles for later, or building your personal knowledge base, VaultBubble makes it effortless to collect and find information when you need it.
 
-**How it works:** Simply capture URLs, text selections, and notes as you browse. VaultBubble automatically sends everything to your local vault where content is embedded, categorized into topics, and visualized in an intuitive hierarchical bubble interface. Everything stays private on your computer—your data never leaves your device unless you choose optional cloud storage.
+**How it works:** Simply capture URLs, text selections, and notes as you browse. VaultBubble automatically sends everything to your vault where content is embedded, categorized into topics, and visualized in an intuitive hierarchical bubble interface. Choose between our cloud service for instant setup, or run your own local server for complete data control.
 
 **Key Features:**
 
@@ -39,7 +39,7 @@ Capture web content, organize by topics, and query your research vault with AI-p
 
 • **Powerful search** - Quickly locate items from your browsing history or saved documents using semantic search that understands meaning, not just keywords
 
-• **Local-first privacy** - All data is stored on your computer by default. Your research stays private unless you opt for optional online storage
+• **Flexible storage options** - Use our cloud service for instant access across devices, or run locally for complete privacy
 
 • **Research workflow** - Perfect for students, researchers, writers, and anyone who needs to organize information from multiple sources
 
@@ -58,7 +58,7 @@ Stop losing track of valuable information. Start building your personal research
 
 **Capture, organize, and explore your web research with VaultBubble.**
 
-Save URLs, text, and notes as you browse. VaultBubble automatically organizes everything into topics and visualizes your knowledge in an interactive bubble chart. Ask questions about your captured documents using natural language search. Everything stays private on your computer.
+Save URLs, text, and notes as you browse. VaultBubble automatically organizes everything into topics and visualizes your knowledge in an interactive bubble chart. Ask questions about your captured documents using natural language search.
 
 **Features:**
 • One-click capture of URLs, text selections, and notes
@@ -66,7 +66,7 @@ Save URLs, text, and notes as you browse. VaultBubble automatically organizes ev
 • Hierarchical bubble visualization of your knowledge
 • Private RAG query system for asking questions about your documents
 • Semantic search across your browsing history
-• Local storage by default—your data stays on your device
+• Cloud sync or local-only storage—your choice
 
 Perfect for researchers, students, and anyone building a personal knowledge base.
 
@@ -79,7 +79,7 @@ Perfect for researchers, students, and anyone building a personal knowledge base
 ---
 
 ## Keywords/Tags (for internal use)
-research, knowledge base, note-taking, RAG, AI search, topic organization, research vault, document capture, semantic search, private storage, local storage, research tool, knowledge management, information organization
+research, knowledge base, note-taking, RAG, AI search, topic organization, research vault, document capture, semantic search, cloud storage, local storage, research tool, knowledge management, information organization
 
 ---
 
@@ -89,11 +89,12 @@ research, knowledge base, note-taking, RAG, AI search, topic organization, resea
 - `activeTab` - To capture content from the current tab
 - `tabs` - To access tab information for capturing URLs
 - `contextMenus` - To add right-click menu options for capturing text
-- `storage` - To store extension settings locally
-- `host_permissions: <all_urls>` - To capture content from any webpage you visit
-- `host_permissions: http://localhost:8000/*` - To communicate with your local vault server
+- `storage` - To store extension settings (server URL preference)
+- `scripting` - To inject content scripts for capturing page content
+- `host_permissions: https://*.vaultbubbles.com/*` - To communicate with VaultBubble cloud service
+- `host_permissions: http://localhost:8000/*` - To communicate with local vault server (optional)
 
-**Privacy note for users:** All captured content is sent only to your local vault server running on your computer. No data is sent to external servers unless you configure optional cloud storage.
+**Privacy note for users:** Captured content is sent to your configured vault—either our cloud service (vaultbubbles.com) or your local server. You control where your data is stored.
 
 ---
 
@@ -115,13 +116,13 @@ research, knowledge base, note-taking, RAG, AI search, topic organization, resea
 
 **Marquee Image (1400x560):**
 - Show the bubble visualization prominently with tagline: "Transform browsing into organized knowledge"
-- Emphasize privacy: "Your research vault. Private. Local. Powerful."
+- "Your research vault. Cloud synced or fully private."
 
 ---
 
 ## Notes for Developer
 
-- Emphasize the **privacy/local-first** aspect—this is a key differentiator
+- Emphasize **flexibility**—cloud for convenience, local for privacy
 - Highlight the **AI-powered organization** without overpromising
 - Focus on **user benefits** (finding information easily) rather than technical details
 - Mention **use cases** (research, students, knowledge workers) to help users self-identify

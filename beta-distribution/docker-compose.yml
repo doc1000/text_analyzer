@@ -13,10 +13,14 @@ services:
       - badger_db_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
+  # Ollama services are in the "ollama" profile - only start when needed:
+  #   docker compose --profile ollama up
+  # For cloud providers (OpenAI), just use:
+  #   docker compose up
   ollama:
     image: ollama/ollama:0.13.5
     restart: unless-stopped
-    # Optional: expose to host for debugging (not required if only backend talks to it)
+    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:
@@ -25,6 +29,7 @@ services:
   # One-shot model seeder: pulls models into the shared ollama_models volume
   ollama_seed:
     image: curlimages/curl:8.5.0
+    profiles: ["ollama"]
     depends_on:
       - ollama
     restart: "no"
@@ -47,7 +52,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb
 
-      # Ollama wiring
+      # Ollama wiring (only used when --profile ollama is active)
       MODEL_PROVIDER: ollama
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_CHAT_MODEL: gemma3:1b-it-q4_K_M
@@ -57,7 +62,6 @@ services:
       - "8000:8000"
     depends_on:
       - db
-      - ollama_seed
 
 volumes:
   badger_db_data:

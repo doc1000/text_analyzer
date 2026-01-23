@@ -7,14 +7,29 @@ from sqlalchemy.orm import sessionmaker #, Session
 from .models import Base, get_or_create_embedding_class
 from .config import PREFERENCES
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb")
+_raw_db_url = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb")
+
+# Fly.io uses postgres:// but SQLAlchemy needs postgresql://
+# Also ensure we use psycopg2 driver
+DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+if "postgresql://" in DATABASE_URL and "+psycopg2" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def ensure_schemas():
-    with engine.connect() as conn:
+    # Use AUTOCOMMIT so a failed extension install doesn't poison the transaction
+    # (Fly Postgres can reject CREATE EXTENSION depending on setup/permissions).
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        # Enable pgvector extension (required for vector columns)
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            print("✓ pgvector extension enabled")
+        except Exception as e:
+            print(f"⚠ Could not enable pgvector extension: {e}")
+        
+        # Schema for dynamic embedding tables + metadata
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS embedding"))
-        conn.commit()
 
 
 def _migrate_add_summary_columns():
@@ -94,6 +109,11 @@ def _update_schema_doc():
     Update DATABASE_SCHEMA.md by running the schema inspection script.
     This ensures Cursor/AI always has current schema information.
     """
+    # In production (Fly), this file isn't needed and writing to the container FS is not useful.
+    # Also avoids noisy warnings and slightly reduces startup time.
+    if os.getenv("FLY_APP_NAME") or os.getenv("DISABLE_SCHEMA_DOC_UPDATE") in ("1", "true", "True"):
+        return
+
     import subprocess
     import sys
     from pathlib import Path
@@ -144,11 +164,14 @@ def initialize_embedding_tables():
     
     if _embedding_tables_cache is not None:
         return _embedding_tables_cache
+
+    # Use configured embedding dimension (avoids network probe for fast startup)
+    # EMBEDDING_DIM env var or provider-specific defaults
+    if PREFERENCES.models.embedding_dim:
+        embed_dim = PREFERENCES.models.embedding_dim
+    else:
+        embed_dim = PREFERENCES.models.get_embedding_dim_default()
     
-    # Import here to avoid circular dependency
-    from .helpers import get_embedding
-    
-    embed_dim = len(get_embedding("dimension probe"))
     embed_model = PREFERENCES.models.embedding_model
     
     # Get a session for table creation (db parameter is not actually used in get_or_create_embedding_class)

@@ -1,7 +1,7 @@
 Privacy Policy for VaultBubble
 
-VaultBubble collects website content (text, URLs, page titles) and user-entered data (notes, tags) when you explicitly capture content. This data is sent only to your local vault server (localhost:8000) and stored on your computer by default. Data is used to organize content into topics and enable search functionality.
+VaultBubble collects website content (text, URLs, page titles) and user-entered data (notes, tags) when you explicitly capture content. This data is sent to your configured vault—either our cloud service (vaultbubbles.com) or your local server—and used to organize content into topics and enable search functionality.
 
-VaultBubble does not sell, share, or transmit your data to external servers unless you configure optional cloud storage. You control what you capture and can delete content at any time. All data remains private and local unless you choose otherwise.
+VaultBubble does not sell, share, or use your data for advertising. You control what you capture, where it's stored, and can delete content at any time. Cloud data is encrypted; local data stays entirely on your device.
 
-For questions, contact [your contact information].
+For questions, contact support@vaultbubbles.com.

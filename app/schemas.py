@@ -4,6 +4,37 @@ from typing import Optional, List, Literal
 from datetime import datetime
 from uuid import UUID
 
+# ---------- Auth / API keys ----------
+
+class CreateApiKeyRequest(BaseModel):
+    email: str = Field(..., description="User email to associate with this key")
+    name: Optional[str] = Field(None, description="Optional label for the key (e.g. 'chrome-extension')")
+
+
+class CreateApiKeyResponse(BaseModel):
+    api_key: str = Field(..., description="Raw API key (shown once). Store it securely.")
+    user_id: str
+    email: str
+
+
+class WhoAmIResponse(BaseModel):
+    user_id: str
+    email: str
+
+
+class ApiKeyInfo(BaseModel):
+    id: str
+    name: Optional[str] = None
+    prefix: str
+    key_hint: Optional[str] = None
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+
+
+class ListApiKeysResponse(BaseModel):
+    keys: List[ApiKeyInfo]
+
 # --- Ingest payload from extension ---
 class IngestPayload(BaseModel):
     url: str

@@ -558,6 +558,13 @@
             <option value="openai">OpenAI</option>
           </select>
           
+          <label for="embeddingProviderSelect" style="margin-top: 1rem;">Embedding Provider:</label>
+          <select id="embeddingProviderSelect">
+            <option value="ollama">Ollama (local)</option>
+            <option value="openai">OpenAI</option>
+            <option value="huggingface">HuggingFace</option>
+          </select>
+          
           <p class="hint">Choose which provider to use for each function. Ollama is the default and runs locally.</p>
         </div>
 
@@ -612,7 +619,10 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <script>
-    const API_BASE = "http://localhost:8000"; // adjust if needed
+    // Auto-detect local vs cloud
+    const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+      ? "http://localhost:8000"
+      : "https://vaultbubbles.fly.dev";
 
     // -------- SPA TAB LOGIC --------
     const pageTopics = document.getElementById("page-topics");
@@ -1336,6 +1346,7 @@
     const cancelSettingsBtn = document.getElementById("cancelSettingsBtn");
     const chatProviderSelect = document.getElementById("chatProviderSelect");
     const topicProviderSelect = document.getElementById("topicProviderSelect");
+    const embeddingProviderSelect = document.getElementById("embeddingProviderSelect");
     const openaiKeyInput = document.getElementById("openaiKeyInput");
     const saveKeyBtn = document.getElementById("saveKeyBtn");
     const keyStatus = document.getElementById("keyStatus");
@@ -1362,6 +1373,9 @@
         chatProviderSelect.value = currentSettings.chat_provider;
         if (topicProviderSelect) {
           topicProviderSelect.value = currentSettings.topic_provider || "ollama";
+        }
+        if (embeddingProviderSelect) {
+          embeddingProviderSelect.value = currentSettings.embedding_provider || "ollama";
         }
         
         // Update API key status
@@ -1393,6 +1407,11 @@
       // Check if topic provider changed
       if (topicProviderSelect && topicProviderSelect.value !== (currentSettings.topic_provider || "ollama")) {
         updates.topic_provider = topicProviderSelect.value;
+      }
+      
+      // Check if embedding provider changed
+      if (embeddingProviderSelect && embeddingProviderSelect.value !== (currentSettings.embedding_provider || "ollama")) {
+        updates.embedding_provider = embeddingProviderSelect.value;
       }
       
       // Check if API key was entered

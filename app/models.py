@@ -17,6 +17,32 @@ from pgvector.sqlalchemy import Vector as pgVector # pip install pgvector
 
 Base = declarative_base()
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(Text, nullable=False, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # SHA256 hash of (pepper + raw_key). Never store raw keys.
+    key_hash = Column(String(64), nullable=False, unique=True, index=True)
+
+    # Helpful metadata (non-sensitive)
+    prefix = Column(String(32), nullable=False, default="vb_live_")
+    name = Column(Text, nullable=True)
+    key_hint = Column(String(16), nullable=True)  # e.g., last 6 chars (optional)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -107,18 +133,35 @@ def register_embedding_model(
     table_name = make_safe_table_name(model_name, version, dim)
     table_location = f"embedding.{table_name}"
 
-    existing = (
+    # NOTE: In multi-machine deployments (Fly), two instances can race on first boot
+    # and insert duplicate metadata rows. We tolerate that by selecting the newest row
+    # and (optionally) cleaning up older duplicates.
+    existing_rows = (
         session.query(EmbeddingModel)
         .filter_by(model_name=model_name, version=version)
-        .one_or_none()
+        .order_by(EmbeddingModel.id.desc())
+        .all()
     )
-    if existing:
-        if existing.dimensions != dim:
-            raise ValueError(
-                f"Model {model_name} v{version} already registered with "
-                f"dim={existing.dimensions}, requested dim={dim}"
-            )
-        return existing
+    if existing_rows:
+        newest = existing_rows[0]
+        # Ensure consistent dimensions across duplicates (and across new requests)
+        for row in existing_rows:
+            if row.dimensions != dim:
+                raise ValueError(
+                    f"Model {model_name} v{version} already registered with "
+                    f"dim={row.dimensions}, requested dim={dim}"
+                )
+        # Cleanup duplicates (best-effort)
+        if len(existing_rows) > 1:
+            try:
+                ids_to_delete = [r.id for r in existing_rows[1:]]
+                session.query(EmbeddingModel).filter(EmbeddingModel.id.in_(ids_to_delete)).delete(
+                    synchronize_session=False
+                )
+                session.commit()
+            except Exception:
+                session.rollback()
+        return newest
 
     meta = EmbeddingModel(
         model_name=model_name,

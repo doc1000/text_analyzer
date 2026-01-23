@@ -1,6 +1,6 @@
 Privacy Policy for VaultBubble
 
-Last Updated: [Date]
+Last Updated: January 2026
 
 VaultBubble is committed to protecting your privacy. This policy explains what data we collect and how it's used.
 
@@ -12,21 +12,23 @@ VaultBubble collects the following when you use the extension:
 - User Activity: Button clicks and context menu selections used to trigger captures
 
 How We Use Your Data
-All captured data is sent to your local vault server running on your computer (localhost:8000). Your data is stored locally on your device by default, processed to organize content into topics, and used to enable search functionality.
+Captured data is sent to your configured vault server—either our cloud service (vaultbubbles.com) or your local server. Data is processed to organize content into topics, enable search functionality, and generate visualizations of your knowledge base.
 
 Data Storage
-All data is stored on your computer unless you configure optional cloud storage. Data is not sent to external servers unless you explicitly enable optional cloud storage. You can delete captured content at any time through your vault interface.
+Cloud Service: Data is stored on our secure servers with encryption at rest and in transit.
+Local Server: All data remains on your computer and never leaves your device.
+You control where your data is stored and can delete captured content at any time.
 
 Data Sharing
-VaultBubble does not sell or share your data with third parties, use your data for advertising or marketing, or send data to external servers (except optional cloud storage you configure).
+VaultBubble does not sell or share your data with third parties, use your data for advertising or marketing, or access your data for purposes other than providing the service.
 
 Security
-Your data is stored locally on your device. When using optional cloud storage, ensure you use secure credentials and review your cloud provider's privacy policy.
+Cloud data is encrypted in transit (HTTPS) and at rest with secure authentication. Local data security depends on your device configuration.
 
 Your Rights
-You have full control over your data: capture only the content you choose, delete captured content at any time, access all your stored data through your vault interface, and disable the extension at any time.
+You have full control over your data: capture only the content you choose, delete captured content at any time, export your data, switch between cloud and local storage, and disable the extension at any time.
 
 Changes to This Policy
 We may update this privacy policy. Changes will be posted here with an updated date.
 
-For questions about this privacy policy, please contact [your contact information].
+For questions about this privacy policy, please contact support@vaultbubbles.com.
