@@ -170,17 +170,19 @@ class OllamaConfig:
 class HuggingFaceConfig:
     """Configuration for HuggingFace Inference API (cloud embeddings)."""
     api_token: str = os.getenv("HUGGINGFACE_API_TOKEN", "")
-    embed_model: str = os.getenv("HUGGINGFACE_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    # HuggingFace Serverless Inference router.
-    # NOTE: The router supports /hf-inference/models/{model}. Some models return token-level embeddings
-    # (nested lists), which we mean-pool in code.
+    embed_model: str = os.getenv("HUGGINGFACE_EMBED_MODEL", "all-MiniLM-L6-v2")
+    # HuggingFace endpoint URL. Supports two modes:
     #
-    # Supported formats:
-    # - With placeholder: https://router.huggingface.co/hf-inference/models/{model}
-    # - Without placeholder: https://router.huggingface.co/hf-inference/models  (we'll append /{model})
+    # 1. Dedicated Inference Endpoint (recommended):
+    #    Set HUGGINGFACE_EMBED_URL to your endpoint URL directly.
+    #    Example: https://xxxxx.us-east-1.aws.endpoints.huggingface.cloud
+    #    The model is baked into the endpoint, so embed_model is just for reference.
+    #
+    # 2. Shared Inference API (may have routing issues):
+    #    Use {model} placeholder: https://router.huggingface.co/hf-inference/models/{model}
     embed_url: str = os.getenv(
         "HUGGINGFACE_EMBED_URL",
-        "https://router.huggingface.co/hf-inference/models/{model}",
+        "https://h52cfilt2ukml8vc.us-east-1.aws.endpoints.huggingface.cloud",  # Dedicated endpoint for all-MiniLM-L6-v2
     )
 
 @dataclass

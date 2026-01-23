@@ -832,11 +832,18 @@ def _huggingface_embed_batch(texts: List[str]) -> List[List[float]]:
     # Clean all inputs
     cleaned_texts = [_clean_embed_input(t) for t in texts]
     
-    # HuggingFace Inference API endpoint for the model
-    # Allow either "{model}" placeholder or simple base that we append to.
+    # HuggingFace Inference API endpoint
+    # Supports:
+    # 1. Dedicated endpoint (URL is complete): https://xxxxx.aws.endpoints.huggingface.cloud
+    # 2. Shared API with {model} placeholder: https://router.huggingface.co/.../models/{model}
+    # 3. Shared API base URL: https://router.huggingface.co/.../models (we append /{model})
     if "{model}" in base_url:
         url = base_url.format(model=model)
+    elif "endpoints.huggingface.cloud" in base_url or not base_url.endswith("/models"):
+        # Dedicated endpoint - use URL as-is
+        url = base_url
     else:
+        # Shared API - append model name
         url = f"{base_url}/{model}"
     
     headers = {

@@ -52,8 +52,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb
 
-      # Use Ollama for all local embeddings and chat
-      EMBEDDING_PROVIDER: ollama
+      # Use HuggingFace dedicated endpoint for embeddings (same model as Ollama all-minilm)
+      EMBEDDING_PROVIDER: huggingface
       EMBEDDING_MODEL: all-minilm
       EMBEDDING_DIM: 384
 
