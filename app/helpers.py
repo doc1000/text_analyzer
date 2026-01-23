@@ -16,8 +16,17 @@ from pydantic import BaseModel
 from datetime import datetime
 import numpy as np
 import ast
-nlp = spacy.load("en_core_web_sm")
 from .models import Document, get_or_create_embedding_class
+
+# Lazy-load SpaCy model (defer ~40s of import-time work until first use)
+_nlp_instance = None
+
+def get_nlp():
+    """Get SpaCy NLP instance (lazy-loaded on first call)."""
+    global _nlp_instance
+    if _nlp_instance is None:
+        _nlp_instance = spacy.load("en_core_web_sm")
+    return _nlp_instance
 
 MAX_CHARS_PER_CHUNK = 1024  # tune this as you like
 MAX_CHARS_PER_SENTENCE = 170  # typical sentence is 75-100, academic 150
@@ -87,7 +96,7 @@ def chunk_text(text: str, max_char: int = MAX_CHARS_PER_CHUNK) -> List[str]:
     Very simple sentence-based chunker: walks spaCy sentences
     and groups them up to ~MAX_CHARS_PER_CHUNK.
     """
-    doc = nlp(text)
+    doc = get_nlp()(text)
     doc = list(split_doc_sentences(doc, max_tokens=max_char))
     chunks: List[str] = []
     current: List[str] = []

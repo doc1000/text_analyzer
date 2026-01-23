@@ -109,6 +109,11 @@ def _update_schema_doc():
     Update DATABASE_SCHEMA.md by running the schema inspection script.
     This ensures Cursor/AI always has current schema information.
     """
+    # In production (Fly), this file isn't needed and writing to the container FS is not useful.
+    # Also avoids noisy warnings and slightly reduces startup time.
+    if os.getenv("FLY_APP_NAME") or os.getenv("DISABLE_SCHEMA_DOC_UPDATE") in ("1", "true", "True"):
+        return
+
     import subprocess
     import sys
     from pathlib import Path
@@ -160,15 +165,13 @@ def initialize_embedding_tables():
     if _embedding_tables_cache is not None:
         return _embedding_tables_cache
 
-    # Ensure core schemas + metadata tables exist before we try to register dynamic embedding tables.
-    # This is critical in cloud deployments where the app may import EMBED_TABLE lazily before
-    # `app.main` has a chance to call init_db().
-    init_db()
+    # Use configured embedding dimension (avoids network probe for fast startup)
+    # EMBEDDING_DIM env var or provider-specific defaults
+    if PREFERENCES.models.embedding_dim:
+        embed_dim = PREFERENCES.models.embedding_dim
+    else:
+        embed_dim = PREFERENCES.models.get_embedding_dim_default()
     
-    # Import here to avoid circular dependency
-    from .helpers import get_embedding
-    
-    embed_dim = len(get_embedding("dimension probe"))
     embed_model = PREFERENCES.models.embedding_model
     
     # Get a session for table creation (db parameter is not actually used in get_or_create_embedding_class)

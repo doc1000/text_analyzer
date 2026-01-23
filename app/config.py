@@ -176,8 +176,31 @@ class ModelConfig:
     embedding_model: EmbeddingModel = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "all-minilm"))
     llm_model: ChatModel = field(default_factory=lambda: os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
     
+    # Embedding dimension override (avoids network probe at startup for fast boot)
+    # If not set, will use sensible defaults based on provider/model
+    embedding_dim: Optional[int] = field(default_factory=lambda: 
+        int(os.getenv("EMBEDDING_DIM", "0")) or None
+    )
+    
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     huggingface: HuggingFaceConfig = field(default_factory=HuggingFaceConfig)
+    
+    def get_embedding_dim_default(self) -> int:
+        """Sensible defaults per provider/model if EMBEDDING_DIM not set."""
+        if self.embedding_provider == "huggingface":
+            # BAAI/bge-small-en-v1.5 (most common for HF deployments)
+            return 384
+        elif self.embedding_provider == "openai":
+            if "large" in str(self.embedding_model):
+                return 3072  # text-embedding-3-large
+            return 1536  # text-embedding-3-small default
+        else:  # ollama
+            model_lower = str(self.ollama.embed_model).lower()
+            if "minilm" in model_lower:
+                return 384
+            elif "bge-m3" in model_lower:
+                return 1024
+            return 384  # Conservative default
 
 
 @dataclass

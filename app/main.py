@@ -3,6 +3,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import asyncio
 from pydantic import BaseModel
@@ -13,12 +14,15 @@ from typing import List
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
+from sqlalchemy.exc import IntegrityError
 #Internal imports
 from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE, DOCUMENT_TABLE
 from .schemas import (
     IngestPayload, DocumentDetailResponse, DocumentUpdateRequest, 
     SettingsResponse, SettingsUpdateRequest, TopicOption, TopicsListResponse,
-    TopicAssignmentRequest
+    TopicAssignmentRequest,
+    CreateApiKeyRequest, CreateApiKeyResponse, WhoAmIResponse,
+    ListApiKeysResponse, ApiKeyInfo
 )
 from . import models
 from .models import Document
@@ -34,6 +38,14 @@ from .topics import (
 )
 from .config import PREFERENCES
 from .helpers import update_openai_client
+from .auth import (
+    ApiKeyAuthMiddleware,
+    get_current_user,
+    require_bootstrap_token,
+    generate_api_key,
+    hash_api_key,
+    API_KEY_PREFIX,
+)
 
 
 
@@ -46,7 +58,14 @@ async def _fill_embeddings_async():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize DB schemas/extensions (lightweight, no network calls)
     init_db()
+    
+    # Initialize embedding tables (uses EMBEDDING_DIM env var, no network probe)
+    from .db import initialize_embedding_tables
+    initialize_embedding_tables()
+    
+    # Background task: fill any missing embeddings
     asyncio.create_task(_fill_embeddings_async())
     yield
 
@@ -61,6 +80,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# API key auth (protects all endpoints except explicit allowlist in middleware)
+app.add_middleware(ApiKeyAuthMiddleware)
+
+@app.get("/")
+def root():
+    """Serve the bubble map visualization at root."""
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -73,8 +100,103 @@ def test_db(db: Session = Depends(get_db)):
 
 from . import models
 
+@app.post("/auth/bootstrap/create-key", response_model=CreateApiKeyResponse)
+def bootstrap_create_api_key(
+    payload: CreateApiKeyRequest,
+    _: None = Depends(require_bootstrap_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Create an API key for a user (admin/bootstrap only).
+    Protect this endpoint with VB_BOOTSTRAP_TOKEN via X-Bootstrap-Token header.
+    """
+    email = (payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        user = models.User(email=email)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    # Generate + store hashed key (retry in the extremely unlikely case of hash collision)
+    for _attempt in range(3):
+        raw_key = generate_api_key(prefix=API_KEY_PREFIX)
+        key_hash = hash_api_key(raw_key)
+        key_hint = raw_key[-6:] if len(raw_key) >= 6 else None
+        row = models.ApiKey(
+            user_id=user.id,
+            key_hash=key_hash,
+            prefix=API_KEY_PREFIX,
+            name=payload.name,
+            key_hint=key_hint,
+        )
+        db.add(row)
+        try:
+            db.commit()
+            return CreateApiKeyResponse(api_key=raw_key, user_id=str(user.id), email=user.email)
+        except IntegrityError:
+            db.rollback()
+            continue
+
+    raise HTTPException(status_code=500, detail="Could not create API key (retry)")
+
+
+@app.get("/auth/whoami", response_model=WhoAmIResponse)
+def whoami(user: models.User = Depends(get_current_user)):
+    return WhoAmIResponse(user_id=str(user.id), email=user.email)
+
+
+@app.get("/auth/api-keys", response_model=ListApiKeysResponse)
+def list_api_keys(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = (
+        db.query(models.ApiKey)
+        .filter(models.ApiKey.user_id == user.id)
+        .order_by(models.ApiKey.created_at.desc())
+        .all()
+    )
+    return ListApiKeysResponse(
+        keys=[
+            ApiKeyInfo(
+                id=str(r.id),
+                name=r.name,
+                prefix=r.prefix,
+                key_hint=r.key_hint,
+                created_at=r.created_at,
+                last_used_at=r.last_used_at,
+                revoked_at=r.revoked_at,
+            )
+            for r in rows
+        ]
+    )
+
+
+@app.post("/auth/api-keys/{api_key_id}/revoke")
+def revoke_api_key(api_key_id: str, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from uuid import UUID as PyUUID
+    try:
+        key_uuid = PyUUID(api_key_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid api_key_id")
+
+    row = (
+        db.query(models.ApiKey)
+        .filter(models.ApiKey.id == key_uuid)
+        .filter(models.ApiKey.user_id == user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="API key not found")
+    if row.revoked_at is None:
+        row.revoked_at = datetime.utcnow()
+        db.commit()
+    return {"status": "ok", "revoked_at": row.revoked_at}
+
+
 @app.post("/ingest")
-def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
+def ingest(payload: IngestPayload, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     # Use captured_at from payload if provided, else now
     captured_at = payload.captured_at or datetime.utcnow()
 
@@ -96,6 +218,7 @@ def ingest(payload: IngestPayload, db: Session = Depends(get_db)):
         "status": "ok",
         "document_id": str(doc.id),
         "num_chunks": int(chunk_len),
+        "user_id": str(user.id),
     }
 
 @app.get("/documents", response_model=List[DocumentOut])

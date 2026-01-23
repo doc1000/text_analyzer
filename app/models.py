@@ -17,6 +17,32 @@ from pgvector.sqlalchemy import Vector as pgVector # pip install pgvector
 
 Base = declarative_base()
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(Text, nullable=False, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # SHA256 hash of (pepper + raw_key). Never store raw keys.
+    key_hash = Column(String(64), nullable=False, unique=True, index=True)
+
+    # Helpful metadata (non-sensitive)
+    prefix = Column(String(32), nullable=False, default="vb_live_")
+    name = Column(Text, nullable=True)
+    key_hint = Column(String(16), nullable=True)  # e.g., last 6 chars (optional)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
 class Document(Base):
     __tablename__ = "documents"
 
