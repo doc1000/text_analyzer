@@ -699,7 +699,7 @@ def get_embedding(text: str) -> List[float]:
     Get a single embedding vector for a text using the configured provider.
     Returns L2-normalized embeddings for consistent cosine similarity calculations.
     
-    Supports Ollama (local), OpenAI, and HuggingFace (cloud) providers.
+    Supports Ollama, OpenAI, HuggingFace, and sentence_transformers providers.
     """
     embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
     
@@ -708,6 +708,10 @@ def get_embedding(text: str) -> List[float]:
     elif embedding_provider == "huggingface":
         # Use batch function for single text (HuggingFace API is batch-oriented)
         results = _huggingface_embed_batch([text])
+        return results[0] if results else []
+    elif embedding_provider == "sentence_transformers":
+        # Use batch function for single text
+        results = _sentence_transformers_embed_batch([text])
         return results[0] if results else []
     else:
         # OpenAI embeddings
@@ -897,12 +901,55 @@ def _huggingface_embed_batch(texts: List[str]) -> List[List[float]]:
     return normalized
 
 
+# Lazy-loaded sentence-transformers model cache
+_sentence_transformer_model = None
+
+def _get_sentence_transformer_model():
+    """Lazy load sentence-transformers model to avoid import-time overhead."""
+    global _sentence_transformer_model
+    if _sentence_transformer_model is None:
+        from sentence_transformers import SentenceTransformer
+        from .config import EMBEDDING_MODEL_ALIASES
+        
+        # Get the model name from aliases
+        internal_model = PREFERENCES.models.embedding_model
+        if internal_model in EMBEDDING_MODEL_ALIASES:
+            model_name = EMBEDDING_MODEL_ALIASES[internal_model].get("sentence_transformers", internal_model)
+        else:
+            model_name = internal_model
+        
+        print(f"Loading sentence-transformers model: {model_name}")
+        _sentence_transformer_model = SentenceTransformer(model_name)
+    return _sentence_transformer_model
+
+
+def _sentence_transformers_embed_batch(texts: List[str]) -> List[List[float]]:
+    """
+    Get embeddings using sentence-transformers library (local, no API).
+    
+    Produces identical embeddings to Ollama's all-minilm model.
+    """
+    if not texts:
+        return []
+    
+    model = _get_sentence_transformer_model()
+    
+    # Clean inputs
+    cleaned_texts = [_clean_embed_input(t) for t in texts]
+    
+    # Get embeddings (already normalized by sentence-transformers)
+    embeddings = model.encode(cleaned_texts, normalize_embeddings=True)
+    
+    # Convert to list format
+    return [emb.tolist() for emb in embeddings]
+
+
 def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     """
     Get embeddings for multiple texts in a single API call.
     
     This is much faster than calling get_embedding() multiple times.
-    Supports Ollama (local), OpenAI, and HuggingFace (cloud) providers.
+    Supports Ollama, OpenAI, HuggingFace, and sentence_transformers providers.
     
     Args:
         texts: List of text strings to embed
@@ -925,6 +972,9 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     
     if embedding_provider == "huggingface":
         return _huggingface_embed_batch(texts)
+    
+    if embedding_provider == "sentence_transformers":
+        return _sentence_transformers_embed_batch(texts)
     
     # OpenAI batch embedding
     model_name = PREFERENCES.models.embedding_model

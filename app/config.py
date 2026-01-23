@@ -6,7 +6,24 @@ import json
 from pathlib import Path
 # You can extend these later or load them from JSON if you want.
 # For now: one central place to tweak your internal tools.
-Provider = Literal["openai", "ollama", "huggingface"]
+Provider = Literal["openai", "ollama", "huggingface", "sentence_transformers"]
+
+# Model alias mapping: internal name -> provider-specific model IDs
+# This ensures the same underlying model is used regardless of provider
+EMBEDDING_MODEL_ALIASES = {
+    "all-minilm": {
+        "ollama": "all-minilm",
+        "sentence_transformers": "all-MiniLM-L6-v2",
+        "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
+        "dim": 384,
+    },
+    "bge-m3": {
+        "ollama": "bge-m3",
+        "sentence_transformers": "BAAI/bge-m3",
+        "huggingface": "BAAI/bge-m3",
+        "dim": 1024,
+    },
+}
 
 EmbeddingModel = Literal[
     "text-embedding-3-large",
