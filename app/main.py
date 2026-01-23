@@ -214,12 +214,17 @@ def ingest(payload: IngestPayload, db: Session = Depends(get_db), user: models.U
     chunk_len = embed_doc_chunks(doc)
     #db.commit()
 
-    return {
+    result = {
         "status": "ok",
         "document_id": str(doc.id),
         "num_chunks": int(chunk_len),
-        "user_id": str(user.id),
     }
+    
+    # Include user_id only if auth is enabled and user is present
+    if user:
+        result["user_id"] = str(user.id)
+    
+    return result
 
 @app.get("/documents", response_model=List[DocumentOut])
 def list_documents(

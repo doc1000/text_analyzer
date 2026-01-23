@@ -41,10 +41,18 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app):
         super().__init__(app)
-        self._require_auth = os.getenv("VB_REQUIRE_AUTH", "true").lower() in ("1", "true", "yes", "y")
+        # Don't cache auth check - read env var per-request for dynamic config
 
     async def dispatch(self, request: Request, call_next):
-        if not self._require_auth:
+        # Check env var per-request (not cached at init time)
+        # Default to false for dev/testing - can be overridden with VB_REQUIRE_AUTH=true
+        require_auth_str = os.getenv("VB_REQUIRE_AUTH", "false").lower()
+        require_auth = require_auth_str in ("1", "true", "yes", "y")
+        
+        # Debug logging
+        print(f"[AUTH] VB_REQUIRE_AUTH={require_auth_str}, require_auth={require_auth}, path={request.url.path}")
+        
+        if not require_auth:
             return await call_next(request)
 
         path = request.url.path or ""
@@ -106,8 +114,14 @@ def require_bootstrap_token(x_bootstrap_token: Optional[str] = Header(None)) -> 
 
 
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """Get current authenticated user, or None if auth is disabled."""
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
+        # If auth is disabled, return None instead of raising 401
+        require_auth_str = os.getenv("VB_REQUIRE_AUTH", "false").lower()
+        require_auth = require_auth_str in ("1", "true", "yes", "y")
+        if not require_auth:
+            return None
         raise HTTPException(status_code=401, detail="Unauthorized")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

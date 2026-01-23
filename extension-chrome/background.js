@@ -1,7 +1,21 @@
 // background.js
 
 const browserAPI = typeof browser !== "undefined" ? browser : chrome;
-const API_BASE = "http://localhost:8000"; // adjust if needed
+
+// Get API endpoint from storage (defaults to cloud)
+async function getApiBase() {
+  try {
+    const result = await browserAPI.storage.sync.get({ endpoint: "cloud" });
+    if (result.endpoint === "local") {
+      return "http://localhost:8000";
+    } else {
+      return "https://vaultbubbles.fly.dev";
+    }
+  } catch (error) {
+    console.error("[VB] Error reading API endpoint setting:", error);
+    return "https://vaultbubbles.fly.dev"; // Default to cloud on error
+  }
+}
 
 // ---------------- FULL PAGE ANALYZE + INGEST ---------------- //
 
@@ -104,6 +118,7 @@ async function analyzeAndIngest(tab) {
 
     console.log("[VB] ingest payload:", ingestPayload);
 
+    const API_BASE = await getApiBase();
     const ingestRes = await fetch(`${API_BASE}/ingest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -206,6 +221,7 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
 
     console.log("[VB] Quick-capture payload:", payload);
 
+    const API_BASE = await getApiBase();
     const ingestRes = await fetch(`${API_BASE}/ingest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -329,20 +345,23 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     console.log("[VB] Popup snippet payload:", payload);
 
-    fetch(`${API_BASE}/ingest`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    })
-      .then((r) => r.json().catch(() => null))
-      .then((data) => {
-        console.log("[VB] /ingest response (popup capture):", data);
-        sendResponse({ ok: true, data });
+    // Get API endpoint and send request
+    getApiBase().then(API_BASE => {
+      fetch(`${API_BASE}/ingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
       })
-      .catch((err) => {
-        console.error("[VB] /ingest error (popup capture):", err);
-        sendResponse({ ok: false, error: String(err) });
-      });
+        .then((r) => r.json().catch(() => null))
+        .then((data) => {
+          console.log("[VB] /ingest response (popup capture):", data);
+          sendResponse({ ok: true, data });
+        })
+        .catch((err) => {
+          console.error("[VB] /ingest error (popup capture):", err);
+          sendResponse({ ok: false, error: String(err) });
+        });
+    });
 
     return true; // async response
   }

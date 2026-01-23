@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>VaultBubble Settings</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 2rem;
+      max-width: 600px;
+      margin: 0 auto;
+      background: #f9fafb;
+      color: #111827;
+    }
+    
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+      color: #111827;
+    }
+    
+    .subtitle {
+      color: #6b7280;
+      margin-bottom: 2rem;
+    }
+    
+    .section {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+      margin-bottom: 1.5rem;
+    }
+    
+    .section h2 {
+      font-size: 1.1rem;
+      margin-top: 0;
+      margin-bottom: 1rem;
+      color: #374151;
+    }
+    
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    
+    .radio-option {
+      display: flex;
+      align-items: flex-start;
+      padding: 0.75rem;
+      border: 2px solid #e5e7eb;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    
+    .radio-option:hover {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+    
+    .radio-option input[type="radio"] {
+      margin-top: 0.2rem;
+      margin-right: 0.75rem;
+    }
+    
+    .radio-option.selected {
+      border-color: #3b82f6;
+      background: #eff6ff;
+    }
+    
+    .radio-label {
+      flex: 1;
+    }
+    
+    .radio-title {
+      font-weight: 500;
+      color: #111827;
+      margin-bottom: 0.25rem;
+    }
+    
+    .radio-desc {
+      font-size: 0.875rem;
+      color: #6b7280;
+    }
+    
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: flex-end;
+    }
+    
+    button {
+      padding: 0.5rem 1.25rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border: none;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+    
+    .btn-primary {
+      background: #3b82f6;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #2563eb;
+    }
+    
+    .btn-primary:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+    
+    .status {
+      padding: 0.75rem;
+      border-radius: 6px;
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      display: none;
+    }
+    
+    .status.success {
+      background: #d1fae5;
+      color: #065f46;
+      border: 1px solid #6ee7b7;
+    }
+    
+    .status.error {
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fca5a5;
+    }
+    
+    .hint {
+      font-size: 0.8rem;
+      color: #6b7280;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>⚙️ VaultBubble Settings</h1>
+  <p class="subtitle">Configure where your data is stored and processed</p>
+  
+  <div class="section">
+    <h2>API Endpoint</h2>
+    <div class="radio-group">
+      <label class="radio-option" data-value="cloud">
+        <input type="radio" name="endpoint" value="cloud" checked>
+        <div class="radio-label">
+          <div class="radio-title">☁️ Cloud (Recommended)</div>
+          <div class="radio-desc">
+            Store and process data on vaultbubbles.fly.dev<br>
+            Fast, reliable, no local setup required
+          </div>
+        </div>
+      </label>
+      
+      <label class="radio-option" data-value="local">
+        <input type="radio" name="endpoint" value="local">
+        <div class="radio-label">
+          <div class="radio-title">🏠 Local</div>
+          <div class="radio-desc">
+            Use a local server running on localhost:8000<br>
+            Requires manual setup, full privacy
+          </div>
+        </div>
+      </label>
+    </div>
+    
+    <p class="hint">
+      💡 You can switch between cloud and local at any time. Your data stays where you choose to save it.
+    </p>
+  </div>
+  
+  <div class="actions">
+    <button id="saveBtn" class="btn-primary">Save Settings</button>
+  </div>
+  
+  <div id="status" class="status"></div>
+  
+  <script src="settings.js"></script>
+</body>
+</html>
