@@ -539,13 +539,37 @@
     // -------- AUTH HANDLING --------
     let API_KEY = localStorage.getItem('vb_api_key') || '';
 
-    // Helper for authenticated fetch
-    function authFetch(url, options = {}) {
+    // Helper for authenticated fetch with retry logic for cold starts
+    async function authFetch(url, options = {}, retries = 3, delay = 2000) {
       const headers = { ...options.headers };
       if (API_KEY) {
         headers['Authorization'] = `Bearer ${API_KEY}`;
       }
-      return fetch(url, { ...options, headers });
+      
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          const res = await fetch(url, { ...options, headers });
+          
+          // Retry on 503 (service unavailable - cold start)
+          if (res.status === 503 && attempt < retries) {
+            console.log(`Server warming up (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
+            await new Promise(r => setTimeout(r, delay));
+            delay *= 1.5; // Increase delay for next attempt
+            continue;
+          }
+          
+          return res;
+        } catch (err) {
+          // Network error - server might be starting
+          if (attempt < retries) {
+            console.log(`Network error (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
+            await new Promise(r => setTimeout(r, delay));
+            delay *= 1.5;
+            continue;
+          }
+          throw err;
+        }
+      }
     }
 
     // Redirect to main page if not authenticated and auth is required
@@ -644,7 +668,7 @@
 
     async function loadDocument(docId) {
       documentTitle.value = "Loading…";
-      documentBody.value = "";
+      documentBody.value = "Connecting to server...";
       saveBtn.disabled = true;
 
       try {
