@@ -23,6 +23,10 @@ RUN python -m spacy download en_core_web_sm
 # Copy app
 COPY app /code/app
 
+# Copy migrations
+COPY migrations /code/migrations
+COPY run_migration.py /code/run_migration.py
+
 # Non-root user
 RUN useradd --create-home --uid 10001 appuser \
   && chown -R appuser:appuser /code
