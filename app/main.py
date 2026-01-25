@@ -23,10 +23,11 @@ from .schemas import (
     SettingsResponse, SettingsUpdateRequest, TopicOption, TopicsListResponse,
     TopicAssignmentRequest,
     CreateApiKeyRequest, CreateApiKeyResponse, WhoAmIResponse,
-    ListApiKeysResponse, ApiKeyInfo
+    ListApiKeysResponse, ApiKeyInfo,
+    VaultResponse, VaultCreate, VaultListResponse,
 )
 from . import models
-from .models import Document
+from .models import Document, Vault, VaultMembership
 from .helpers import (get_embedding,embed_doc_chunks,
     _answer_from_hits,DocumentOut, QueryRequest, ChunkHit,
     QueryResponse, fill_empty_embed_docs
@@ -46,6 +47,10 @@ from .auth import (
     generate_api_key,
     hash_api_key,
     API_KEY_PREFIX,
+    get_user_vault,
+    check_vault_access,
+    get_user_accessible_vault_ids,
+    require_vault_access,
 )
 
 
@@ -211,8 +216,13 @@ def ingest(
 ):
     # Use captured_at from payload if provided, else now
     captured_at = payload.captured_at or datetime.utcnow()
+    
+    # Get user's vault (creates personal vault if doesn't exist)
+    vault = get_user_vault(user, db)
 
     doc = models.Document(
+        vault_id=vault.id if vault else None,
+        created_by=user.id if user else None,
         url=payload.url,
         title=payload.title,
         full_text=payload.text,
@@ -220,11 +230,9 @@ def ingest(
     )
 
     db.add(doc)
-    #db.flush() # get doc.id without committing yet
     db.commit()
 
     chunk_len = embed_doc_chunks(doc)
-    #db.commit()
 
     result = {
         "status": "ok",
@@ -232,9 +240,11 @@ def ingest(
         "num_chunks": int(chunk_len),
     }
     
-    # Include user_id only if auth is enabled and user is present
+    # Include user_id and vault_id if auth is enabled and user is present
     if user:
         result["user_id"] = str(user.id)
+    if vault:
+        result["vault_id"] = str(vault.id)
     
     return result
 
@@ -243,19 +253,34 @@ def list_documents(
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
-    docs = (
-        db.query(Document)
-        .order_by(Document.captured_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    # Get vault IDs the user can access
+    vault_ids = get_user_accessible_vault_ids(user, db)
+    
+    # Base query
+    query = db.query(Document).order_by(Document.captured_at.desc())
+    
+    # Filter by vault membership if user is authenticated
+    if user and vault_ids:
+        query = query.filter(Document.vault_id.in_(vault_ids))
+    elif user:
+        # User has no vaults - return empty
+        return []
+    # If user is None (auth disabled), return all documents for backward compatibility
+    
+    docs = query.offset(offset).limit(limit).all()
     return docs
 
 
 @app.post("/query", response_model=QueryResponse)
-def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
+def query_docs(
+    payload: QueryRequest, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     # 1) Embed the query
     q_emb = get_embedding(payload.query)
     # Convert to numpy array for pgvector compatibility
@@ -275,6 +300,15 @@ def query_docs(payload: QueryRequest, db: Session = Depends(get_db)):
         .join(Document, EMBED_TABLE.document_id == Document.id)
         .filter(SENTENCE_TABLE.embedding != None)  # ← ignore NULL embeddings
     )
+    
+    # 2a) Filter by vault membership - only search documents user can access
+    vault_ids = get_user_accessible_vault_ids(user, db)
+    if user and vault_ids:
+        base_query = base_query.filter(Document.vault_id.in_(vault_ids))
+    elif user:
+        # User has no vaults - return empty results
+        return QueryResponse(answer=None, hits=[])
+    # If user is None (auth disabled), search all documents for backward compatibility
 
     # 2b) Optional scoping by document IDs
     if payload.doc_ids:
@@ -543,10 +577,19 @@ def get_clustering_stats(days: int = 30, db: Session = Depends(get_db)):
     }
 
 @app.get("/documents/{document_id}", response_model=DocumentDetailResponse)
-def get_document_detail(document_id: str, db: Session = Depends(get_db)):
+def get_document_detail(
+    document_id: str, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check vault access
+    if doc.vault_id:
+        require_vault_access(user, doc.vault_id, db, min_role="viewer")
 
     # Reconstruct full captured text from chunks (ordered)
     chunks = (
@@ -559,19 +602,31 @@ def get_document_detail(document_id: str, db: Session = Depends(get_db)):
 
     return DocumentDetailResponse(
         id=str(doc.id),
+        vault_id=str(doc.vault_id) if doc.vault_id else None,
         url=doc.url,
         title=doc.title,
         captured_at=doc.captured_at,
         text=full_text,
         assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
         assigned_topic_title=doc.assigned_topic_title,
+        created_by=str(doc.created_by) if doc.created_by else None,
     )
 
 @app.put("/documents/{document_id}", response_model=DocumentDetailResponse)
-def update_document(document_id: str, payload: DocumentUpdateRequest, db: Session = Depends(get_db)):
+def update_document(
+    document_id: str, 
+    payload: DocumentUpdateRequest, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check vault access - need editor role to modify
+    if doc.vault_id:
+        require_vault_access(user, doc.vault_id, db, min_role="editor")
 
     # Update title if provided
     if payload.title is not None:
@@ -607,18 +662,31 @@ def update_document(document_id: str, payload: DocumentUpdateRequest, db: Sessio
 
     return DocumentDetailResponse(
         id=str(doc.id),
+        vault_id=str(doc.vault_id) if doc.vault_id else None,
         url=doc.url,
         title=doc.title,
         captured_at=doc.captured_at,
         text=full_text,
+        assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
+        assigned_topic_title=doc.assigned_topic_title,
+        created_by=str(doc.created_by) if doc.created_by else None,
     )
 
 @app.delete("/documents/{document_id}")
-def delete_document(document_id: str, db: Session = Depends(get_db)):
+def delete_document(
+    document_id: str, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     """Delete a document from the database. Chunks and sentences will be deleted via CASCADE."""
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check vault access - need editor role to delete
+    if doc.vault_id:
+        require_vault_access(user, doc.vault_id, db, min_role="editor")
     
     # Store document info for response
     doc_title = doc.title or "Untitled"
@@ -732,7 +800,12 @@ def update_settings(payload: SettingsUpdateRequest):
 # ---------- Topic Assignment Endpoints ----------
 
 @app.get("/documents/{document_id}/topics", response_model=TopicsListResponse)
-def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
+def get_topics_for_document(
+    document_id: str, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     """
     Get all existing topics sorted by semantic similarity to the document's embedding.
     Most similar topics appear first.
@@ -743,6 +816,10 @@ def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check vault access
+    if doc.vault_id:
+        require_vault_access(user, doc.vault_id, db, min_role="viewer")
     
     # Get table names for raw SQL
     embed_table_name = EMBED_TABLE.__tablename__
@@ -800,7 +877,12 @@ def get_topics_for_document(document_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/documents/{document_id}/topic/generate")
-def generate_topic_for_document(document_id: str, db: Session = Depends(get_db)):
+def generate_topic_for_document(
+    document_id: str, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     """
     Generate a topic title for a document using AI, but don't assign it yet.
     Returns the generated title for user preview/approval.
@@ -811,6 +893,10 @@ def generate_topic_for_document(document_id: str, db: Session = Depends(get_db))
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check vault access
+    if doc.vault_id:
+        require_vault_access(user, doc.vault_id, db, min_role="viewer")
     
     # Compute document embedding
     doc_embeddings = compute_document_embeddings(db, [doc])
@@ -831,7 +917,9 @@ def generate_topic_for_document(document_id: str, db: Session = Depends(get_db))
 def update_document_topic(
     document_id: str, 
     payload: TopicAssignmentRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
     """
     Update a document's topic assignment.
@@ -852,6 +940,10 @@ def update_document_topic(
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check vault access - need editor role to modify topic assignment
+    if doc.vault_id:
+        require_vault_access(user, doc.vault_id, db, min_role="editor")
     
     # Compute document embedding (needed for new topic creation)
     doc_embeddings = compute_document_embeddings(db, [doc])
@@ -957,6 +1049,144 @@ def update_document_topic(
             "assigned_topic_id": None,
             "assigned_topic_title": None
         }
+
+
+# ---------- Vault Management Endpoints ----------
+
+@app.get("/vaults", response_model=VaultListResponse)
+def list_vaults(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """
+    List all vaults the current user has access to.
+    Returns vaults with the user's role in each.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    # Get all vaults user has membership in
+    results = (
+        db.query(Vault, VaultMembership.role, func.count(Document.id).label("doc_count"))
+        .join(VaultMembership, VaultMembership.vault_id == Vault.id)
+        .outerjoin(Document, Document.vault_id == Vault.id)
+        .filter(VaultMembership.user_id == user.id)
+        .filter(Vault.archived_at == None)  # noqa: E711
+        .group_by(Vault.id, VaultMembership.role)
+        .order_by(Vault.is_personal.desc(), Vault.created_at.asc())
+        .all()
+    )
+    
+    vaults = [
+        VaultResponse(
+            id=str(vault.id),
+            name=vault.name,
+            owner_id=str(vault.owner_id) if vault.owner_id else None,
+            is_personal=vault.is_personal,
+            created_at=vault.created_at,
+            archived_at=vault.archived_at,
+            role=role,
+            document_count=doc_count,
+        )
+        for vault, role, doc_count in results
+    ]
+    
+    return VaultListResponse(vaults=vaults)
+
+
+@app.post("/vaults", response_model=VaultResponse)
+def create_vault(
+    payload: VaultCreate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """
+    Create a new vault. The current user becomes the owner.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    vault = Vault(
+        name=payload.name,
+        owner_id=user.id,
+        is_personal=payload.is_personal,
+    )
+    db.add(vault)
+    db.flush()
+    
+    # Create owner membership
+    membership = VaultMembership(
+        vault_id=vault.id,
+        user_id=user.id,
+        role="owner",
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(vault)
+    
+    return VaultResponse(
+        id=str(vault.id),
+        name=vault.name,
+        owner_id=str(vault.owner_id) if vault.owner_id else None,
+        is_personal=vault.is_personal,
+        created_at=vault.created_at,
+        archived_at=vault.archived_at,
+        role="owner",
+        document_count=0,
+    )
+
+
+@app.get("/vaults/{vault_id}", response_model=VaultResponse)
+def get_vault(
+    vault_id: str,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """
+    Get details of a specific vault.
+    """
+    from uuid import UUID as PyUUID
+    
+    try:
+        vault_uuid = PyUUID(vault_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid vault_id format")
+    
+    vault = db.query(Vault).filter(Vault.id == vault_uuid).first()
+    if not vault:
+        raise HTTPException(status_code=404, detail="Vault not found")
+    
+    # Check access
+    require_vault_access(user, vault_uuid, db, min_role="viewer")
+    
+    # Get user's role
+    membership = (
+        db.query(VaultMembership)
+        .filter(VaultMembership.vault_id == vault_uuid)
+        .filter(VaultMembership.user_id == user.id)
+        .first()
+    )
+    
+    # Get document count
+    doc_count = (
+        db.query(func.count(Document.id))
+        .filter(Document.vault_id == vault_uuid)
+        .scalar()
+    )
+    
+    return VaultResponse(
+        id=str(vault.id),
+        name=vault.name,
+        owner_id=str(vault.owner_id) if vault.owner_id else None,
+        is_personal=vault.is_personal,
+        created_at=vault.created_at,
+        archived_at=vault.archived_at,
+        role=membership.role if membership else None,
+        document_count=doc_count,
+    )
 
 
 if __name__ == "__main__":

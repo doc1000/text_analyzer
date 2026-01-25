@@ -9,8 +9,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from uuid import UUID
+
 from .db import SessionLocal, get_db
-from .models import ApiKey, User
+from .models import ApiKey, User, Vault, VaultMembership
 
 
 API_KEY_PREFIX = "vb_live_"
@@ -132,4 +134,133 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return user
+
+
+# ---------- Vault Helpers ----------
+
+# Role hierarchy: owner > admin > editor > viewer
+ROLE_LEVELS = {
+    "owner": 100,
+    "admin": 75,
+    "editor": 50,
+    "viewer": 25,
+}
+
+
+def role_level(role: str) -> int:
+    """Get numeric level for a role. Higher = more permissions."""
+    return ROLE_LEVELS.get(role, 0)
+
+
+def create_personal_vault(user: User, db: Session) -> Vault:
+    """Create a personal vault for a user with owner membership."""
+    vault = Vault(
+        name="Personal Vault",
+        owner_id=user.id,
+        is_personal=True,
+    )
+    db.add(vault)
+    db.flush()  # Get vault.id before creating membership
+    
+    membership = VaultMembership(
+        vault_id=vault.id,
+        user_id=user.id,
+        role="owner",
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(vault)
+    return vault
+
+
+def get_user_vault(user: User, db: Session) -> Optional[Vault]:
+    """
+    Get the user's personal vault (create if doesn't exist).
+    
+    Returns None if user is None (auth disabled mode).
+    """
+    if user is None:
+        return None
+    
+    # Look for user's personal vault through membership
+    vault = (
+        db.query(Vault)
+        .join(VaultMembership, VaultMembership.vault_id == Vault.id)
+        .filter(VaultMembership.user_id == user.id)
+        .filter(Vault.is_personal == True)  # noqa: E712
+        .filter(Vault.archived_at == None)  # noqa: E711
+        .first()
+    )
+    
+    if not vault:
+        vault = create_personal_vault(user, db)
+    
+    return vault
+
+
+def check_vault_access(
+    user: User, 
+    vault_id: UUID, 
+    db: Session, 
+    min_role: str = "viewer"
+) -> bool:
+    """
+    Check if user has at least min_role access to the specified vault.
+    
+    Returns False if user is None (auth disabled mode returns True for backward compat).
+    """
+    if user is None:
+        # Auth disabled - allow access for backward compatibility
+        return True
+    
+    membership = (
+        db.query(VaultMembership)
+        .filter(VaultMembership.vault_id == vault_id)
+        .filter(VaultMembership.user_id == user.id)
+        .first()
+    )
+    
+    if not membership:
+        return False
+    
+    return role_level(membership.role) >= role_level(min_role)
+
+
+def get_user_accessible_vault_ids(user: User, db: Session, min_role: str = "viewer") -> list[UUID]:
+    """
+    Get all vault IDs the user can access with at least min_role.
+    
+    Returns empty list if user is None.
+    """
+    if user is None:
+        return []
+    
+    memberships = (
+        db.query(VaultMembership)
+        .filter(VaultMembership.user_id == user.id)
+        .all()
+    )
+    
+    return [
+        m.vault_id for m in memberships 
+        if role_level(m.role) >= role_level(min_role)
+    ]
+
+
+def require_vault_access(
+    user: User, 
+    vault_id: UUID, 
+    db: Session, 
+    min_role: str = "viewer"
+) -> None:
+    """
+    Raise HTTPException 403 if user doesn't have required access to vault.
+    
+    Use in endpoints that operate on specific vaults.
+    """
+    if not check_vault_access(user, vault_id, db, min_role):
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Access denied: requires at least '{min_role}' role on this vault"
+        )
 

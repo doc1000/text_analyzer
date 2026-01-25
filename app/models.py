@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import (
     Column, Text, Float, DateTime,
     ForeignKey, Integer, Index, BigInteger,
-    String, text
+    String, text, Boolean, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
@@ -43,10 +43,41 @@ class ApiKey(Base):
     last_used_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
 
+
+class Vault(Base):
+    """Knowledge container - the unit of sharing, permissions, and billing."""
+    __tablename__ = "vaults"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_personal = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    archived_at = Column(DateTime, nullable=True)
+
+
+class VaultMembership(Base):
+    """Permission control plane - all access checks flow through this table."""
+    __tablename__ = "vault_memberships"
+    __table_args__ = (
+        UniqueConstraint('vault_id', 'user_id', name='uq_vault_user'),
+        Index('idx_vault_memberships_user', 'user_id'),
+        Index('idx_vault_memberships_vault', 'vault_id'),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    vault_id = Column(UUID(as_uuid=True), ForeignKey("vaults.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role = Column(Text, nullable=False, default="owner")  # owner, admin, editor, viewer
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Document(Base):
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    vault_id = Column(UUID(as_uuid=True), ForeignKey("vaults.id", ondelete="CASCADE"), nullable=True, index=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     url = Column(Text, nullable=False)
     title = Column(Text, nullable=True)
     full_text = Column(Text, nullable=False)
@@ -55,7 +86,6 @@ class Document(Base):
     # References the dynamically-created TOPIC_TABLE (no FK constraint due to dynamic table)
     assigned_topic_id = Column(UUID(as_uuid=True), nullable=True)
     # Denormalized topic title for quick access without joins
-    assigned_topic_title = Column(Text, nullable=True)
 
 
 class EmbeddingModel(Base):

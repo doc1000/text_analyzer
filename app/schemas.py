@@ -35,6 +35,47 @@ class ApiKeyInfo(BaseModel):
 class ListApiKeysResponse(BaseModel):
     keys: List[ApiKeyInfo]
 
+
+# ---------- Vaults ----------
+
+class VaultResponse(BaseModel):
+    """Response schema for a vault."""
+    id: str
+    name: str
+    owner_id: Optional[str] = None
+    is_personal: bool = True
+    created_at: datetime
+    archived_at: Optional[datetime] = None
+    role: Optional[str] = None  # The current user's role in this vault (from membership)
+    document_count: Optional[int] = None  # Optional count of documents in the vault
+
+    class Config:
+        from_attributes = True
+
+
+class VaultCreate(BaseModel):
+    """Request schema for creating a vault."""
+    name: str = Field(..., min_length=1, max_length=255, description="Name of the vault")
+    is_personal: bool = Field(default=False, description="Whether this is a personal vault")
+
+
+class VaultMembershipResponse(BaseModel):
+    """Response schema for a vault membership."""
+    id: str
+    vault_id: str
+    user_id: str
+    role: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class VaultListResponse(BaseModel):
+    """Response containing user's vaults."""
+    vaults: List[VaultResponse]
+
+
 # --- Ingest payload from extension ---
 class IngestPayload(BaseModel):
     url: str
@@ -141,12 +182,14 @@ class HierarchicalTopicsResponse(BaseModel):
 
 class DocumentDetailResponse(BaseModel):
     id: str
+    vault_id: Optional[str] = None
     url: str
     title: Optional[str] = None
     captured_at: Optional[datetime] = None
     text: str
     assigned_topic_id: Optional[str] = None
     assigned_topic_title: Optional[str] = None
+    created_by: Optional[str] = None
 
 class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None
