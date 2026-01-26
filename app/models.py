@@ -113,7 +113,12 @@ class Document(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     url = Column(Text, nullable=False)
     title = Column(Text, nullable=True)
-    full_text = Column(Text, nullable=False)
+    
+    # Text storage - separated for display vs NLP
+    captured_text = Column(Text, nullable=True)   # What extension captured (displayed to user)
+    extracted_text = Column(Text, nullable=True)  # Trafilatura output (for NLP/embeddings, optional)
+    full_text = Column(Text, nullable=True)       # Deprecated - kept for migration compatibility
+    
     captured_at = Column(DateTime, default=datetime.utcnow)
     # Assigned topic - stores the UUID of the topic this document belongs to
     # References the dynamically-created TOPIC_TABLE (no FK constraint due to dynamic table)

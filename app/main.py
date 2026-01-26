@@ -217,6 +217,63 @@ def revoke_api_key(api_key_id: str, user: models.User = Depends(get_current_user
     return {"status": "ok", "revoked_at": row.revoked_at}
 
 
+def format_linked_pdfs_as_markdown(pdf_urls: list, exclude: str = None) -> str:
+    """Format PDF URLs as markdown links for reference."""
+    if not pdf_urls:
+        return ""
+    refs = []
+    for url in pdf_urls:
+        if url == exclude:
+            continue
+        # Extract filename from URL or use truncated URL
+        if '/' in url:
+            filename = url.split('/')[-1]
+            # Clean up query params
+            if '?' in filename:
+                filename = filename.split('?')[0]
+        else:
+            filename = url[:50] + "..." if len(url) > 50 else url
+        refs.append(f"- [{filename}]({url})")
+    return "\n".join(refs)
+
+
+def extract_arxiv_id(url: str) -> str:
+    """Extract arXiv paper ID from URL (works for both /abs/ and /pdf/ URLs)."""
+    import re
+    # Match both /abs/ID and /pdf/ID patterns
+    # Paper IDs can contain dots (e.g., 2601.15299) so don't exclude them
+    # But stop at .pdf extension if present
+    match = re.search(r'arxiv\.org/(?:abs|pdf)/([^/?#]+?)(?:\.pdf)?$', url)
+    return match.group(1) if match else None
+
+
+def normalize_pdf_url(url: str) -> str:
+    """Normalize PDF URL to ensure it's properly formatted for extraction."""
+    if not url:
+        return url
+    
+    # Special handling for arxiv.org/pdf/ URLs - ensure they have .pdf extension
+    # arxiv.org/pdf/2601.15299 -> arxiv.org/pdf/2601.15299.pdf
+    if 'arxiv.org/pdf/' in url and not url.endswith('.pdf'):
+        paper_id = extract_arxiv_id(url)
+        if paper_id:
+            return f"https://arxiv.org/pdf/{paper_id}.pdf"
+    
+    return url
+
+
+def is_pdf_url(url: str) -> bool:
+    """Check if URL is a direct PDF."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    return (
+        url_lower.endswith('.pdf') or 
+        '/pdf/' in url_lower or
+        url_lower.endswith('/pdf')
+    )
+
+
 @app.post("/ingest")
 def ingest(
     payload: IngestPayload,
@@ -230,62 +287,109 @@ def ingest(
     # Get user's vault (creates personal vault if doesn't exist)
     vault = get_user_vault(user, db)
 
-    # Start with the page text from extension
-    full_text = payload.text or ""
+    # 1. Start with extension text as captured_text
+    captured_text = payload.text or ""
     title = payload.title
-    extraction_method = "extension"
+    extracted_text = None
+    pdf_parsed = False
     
-    # For page captures, re-fetch with trafilatura for cleaner text
-    if payload.mode == "page" and payload.url and not payload.url.startswith("note://"):
-        try:
-            from .extraction import extract_from_url
-            extracted = extract_from_url(payload.url)
-            if extracted and extracted.get("text"):
-                full_text = extracted["text"]
-                extraction_method = "trafilatura"
-                print(f"[INFO] Used trafilatura extraction: {len(full_text)} chars")
-                # Only use extracted title if user didn't provide one
-                if not payload.title:
-                    title = extracted.get("title")
-            else:
-                print(f"[WARN] Trafilatura extraction failed, using extension text")
-        except Exception as e:
-            print(f"[WARN] Trafilatura extraction error: {e}, using extension text")
+    # Debug logging for PDF detection
+    print(f"[DEBUG] Ingest URL: {payload.url}")
+    print(f"[DEBUG] payload.pdf_to_parse: {payload.pdf_to_parse}")
+    print(f"[DEBUG] payload.pdf_urls: {payload.pdf_urls}")
+    print(f"[DEBUG] is_pdf_url result: {is_pdf_url(payload.url)}")
     
-    # Parse PDFs if provided
-    if payload.pdf_urls and len(payload.pdf_urls) > 0:
-        print(f"[INFO] Parsing {len(payload.pdf_urls)} PDF(s) for document")
+    # 2. Determine if we should parse a PDF (URL is PDF or arXiv)
+    pdf_to_parse = payload.pdf_to_parse  # New field from extension
+    
+    # Check URL patterns if pdf_to_parse not explicitly set
+    if not pdf_to_parse and payload.url:
+        if is_pdf_url(payload.url):
+            pdf_to_parse = payload.url
+            print(f"[DEBUG] Set pdf_to_parse from URL detection: {pdf_to_parse}")
+        elif 'arxiv.org/abs/' in payload.url:
+            # arXiv abstract page - the PDF IS the content
+            paper_id = extract_arxiv_id(payload.url)
+            if paper_id:
+                pdf_to_parse = f"https://arxiv.org/pdf/{paper_id}.pdf"
+    
+    # Legacy support: if old pdf_urls field used, check if any should be parsed
+    if not pdf_to_parse and payload.pdf_urls and len(payload.pdf_urls) > 0:
+        # Only parse if URL itself is a PDF (old behavior for direct PDF pages)
+        if is_pdf_url(payload.url):
+            pdf_to_parse = payload.url
+    
+    # 3. Parse the PDF if needed (PDF IS the captured content)
+    if pdf_to_parse:
+        # Normalize URL (e.g., add .pdf to arxiv URLs)
+        pdf_to_parse = normalize_pdf_url(pdf_to_parse)
+        print(f"[INFO] Parsing PDF as primary content: {pdf_to_parse}")
         try:
             from .extraction import extract_from_pdf_urls
-            pdf_text = extract_from_pdf_urls(payload.pdf_urls, max_pages_per_pdf=50)
+            pdf_text = extract_from_pdf_urls([pdf_to_parse], max_pages_per_pdf=50)
             if pdf_text:
-                # Combine page text and PDF text
-                if full_text:
-                    full_text = f"{full_text}\n\n--- PDF Content ---\n\n{pdf_text}"
-                else:
-                    full_text = pdf_text
-                print(f"[INFO] Successfully parsed PDFs, total text length: {len(full_text)}")
+                captured_text = pdf_text  # PDF content IS the captured content
+                pdf_parsed = True
+                print(f"[INFO] PDF parsed successfully: {len(pdf_text)} chars")
             else:
-                print(f"[WARN] No text extracted from PDFs")
+                print(f"[WARN] No text extracted from PDF: {pdf_to_parse}")
         except Exception as e:
-            print(f"[ERROR] Failed to parse PDFs: {e}")
+            print(f"[ERROR] Failed to parse PDF {pdf_to_parse}: {e}")
             import traceback
             traceback.print_exc()
-            # Continue with just the page text if PDF parsing fails
+            # Keep extension text as fallback
     
-    # Ensure we have some text
-    if not full_text or not full_text.strip():
-        raise HTTPException(
-            status_code=400, 
-            detail="No text content found. Please ensure the page has text or PDFs are accessible."
-        )
+    # 4. Format linked PDFs as markdown references (don't parse them)
+    linked_pdfs = payload.linked_pdf_urls or []
+    # Legacy support: use old pdf_urls as linked refs if new field not provided
+    if not linked_pdfs and payload.pdf_urls:
+        linked_pdfs = payload.pdf_urls
+    
+    if linked_pdfs:
+        refs = format_linked_pdfs_as_markdown(linked_pdfs, exclude=pdf_to_parse)
+        if refs:
+            captured_text += f"\n\n---\n\n**Linked Documents:**\n{refs}"
+            print(f"[INFO] Added {len(linked_pdfs)} linked PDF references")
+    
+    # 5. Run trafilatura for NLP (optional, don't overwrite captured)
+    if payload.mode == "page" and not pdf_parsed and payload.url and not payload.url.startswith("note://"):
+        try:
+            from .extraction import extract_from_url
+            extraction_result = extract_from_url(payload.url)
+            if extraction_result and extraction_result.get("text"):
+                extracted_text = extraction_result["text"]
+                print(f"[INFO] Trafilatura extraction for NLP: {len(extracted_text)} chars")
+                # Only use extracted title if user didn't provide one
+                if not payload.title and extraction_result.get("title"):
+                    title = extraction_result.get("title")
+            else:
+                print(f"[INFO] Trafilatura extraction returned no text")
+        except Exception as e:
+            print(f"[WARN] Trafilatura extraction error (non-fatal): {e}")
+            # Trafilatura failure is fine - we still have captured_text
+    
+    # 6. Ensure we have some text
+    if not captured_text or not captured_text.strip():
+        # Build a helpful error message
+        if pdf_to_parse and not pdf_parsed:
+            detail = f"PDF extraction failed for: {pdf_to_parse}. The PDF may be inaccessible, password-protected, or contain only images."
+        elif is_pdf_url(payload.url):
+            detail = f"Could not extract text from PDF URL: {payload.url}. Try accessing the PDF directly."
+        else:
+            detail = "No text content found. Please ensure the page has text content."
+        
+        print(f"[ERROR] Ingest failed - no text content. URL: {payload.url}, pdf_to_parse: {pdf_to_parse}, pdf_parsed: {pdf_parsed}")
+        raise HTTPException(status_code=400, detail=detail)
 
+    # 7. Create document with separated text fields
     doc = models.Document(
         vault_id=vault.id if vault else None,
         created_by=user.id if user else None,
         url=payload.url,
         title=title,
-        full_text=full_text,
+        captured_text=captured_text,
+        extracted_text=extracted_text,
+        full_text=captured_text,  # Deprecated field - keep for backward compat
         captured_at=captured_at,
     )
 
@@ -298,8 +402,9 @@ def ingest(
         "status": "ok",
         "document_id": str(doc.id),
         "num_chunks": int(chunk_len),
-        "extraction_method": extraction_method,
-        "pdfs_parsed": len(payload.pdf_urls) if payload.pdf_urls else 0,
+        "pdf_parsed": pdf_parsed,
+        "linked_pdfs_count": len(linked_pdfs) if linked_pdfs else 0,
+        "has_extracted_text": extracted_text is not None,
     }
     
     # Include user_id and vault_id if auth is enabled and user is present
@@ -653,14 +758,9 @@ def get_document_detail(
     if doc.vault_id:
         require_vault_access(user, doc.vault_id, db, min_role="viewer")
 
-    # Reconstruct full captured text from chunks (ordered)
-    chunks = (
-        db.query(EMBED_TABLE)
-        .filter(EMBED_TABLE.document_id == doc.id)
-        .order_by(asc(EMBED_TABLE.chunk_index))
-        .all()
-    )
-    full_text = "\n\n".join([c.chunk_text for c in chunks]) if chunks else ""
+    # Return captured_text for display (what the user captured)
+    # Fall back to full_text for backward compatibility with older documents
+    display_text = doc.captured_text or doc.full_text or ""
 
     return DocumentDetailResponse(
         id=str(doc.id),
@@ -668,7 +768,7 @@ def get_document_detail(
         url=doc.url,
         title=doc.title,
         captured_at=doc.captured_at,
-        text=full_text,
+        text=display_text,
         assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
         assigned_topic_title=doc.assigned_topic_title,
         created_by=str(doc.created_by) if doc.created_by else None,
@@ -696,7 +796,8 @@ def update_document(
 
     # Update text if provided - need to re-chunk and re-embed
     if payload.text is not None:
-        doc.full_text = payload.text
+        doc.captured_text = payload.text
+        doc.full_text = payload.text  # Keep deprecated field in sync
         
         # Delete old chunks (CASCADE will delete sentences automatically)
         db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).delete()
@@ -713,14 +814,8 @@ def update_document(
 
     db.commit()
     
-    # Return updated document
-    chunks = (
-        db.query(EMBED_TABLE)
-        .filter(EMBED_TABLE.document_id == doc.id)
-        .order_by(asc(EMBED_TABLE.chunk_index))
-        .all()
-    )
-    full_text = "\n\n".join([c.chunk_text for c in chunks]) if chunks else ""
+    # Return updated document - use captured_text for display
+    display_text = doc.captured_text or doc.full_text or ""
 
     return DocumentDetailResponse(
         id=str(doc.id),
@@ -728,7 +823,7 @@ def update_document(
         url=doc.url,
         title=doc.title,
         captured_at=doc.captured_at,
-        text=full_text,
+        text=display_text,
         assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
         assigned_topic_title=doc.assigned_topic_title,
         created_by=str(doc.created_by) if doc.created_by else None,

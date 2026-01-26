@@ -84,7 +84,11 @@ class IngestPayload(BaseModel):
     mode: Literal["page", "selection", "note"] = "page"
     tags: Optional[List[str]] = None
     captured_at: Optional[datetime] = None
-    pdf_urls: Optional[List[str]] = None  # URLs of embedded PDFs to parse
+    # PDF handling - separated for clarity
+    pdf_to_parse: Optional[str] = None           # Single PDF URL to parse (when URL is a PDF or arXiv)
+    linked_pdf_urls: Optional[List[str]] = None  # URLs of linked PDFs (stored as references only)
+    # Legacy field - still accepted for backward compatibility
+    pdf_urls: Optional[List[str]] = None         # Deprecated: use pdf_to_parse and linked_pdf_urls
 
     # ---------- Pydantic response models ----------
 

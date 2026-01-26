@@ -6,45 +6,45 @@ console.log("[VB] content script loaded", location.href);
 function extractPageText() {
   let text = document.body ? (document.body.innerText || "") : "";
   
-  // Detect PDF iframes/embeds and extract their URLs
-  const pdfUrls = [];
   const currentUrl = window.location.href;
   
-  // Check if current page is a direct PDF URL (common on arxiv.org, etc.)
-  // Pattern: /pdf/ or ends with .pdf or content-type is application/pdf
+  // Separate: PDF to parse (when URL IS a PDF) vs linked PDFs (references only)
+  let pdfToParseUrl = null;
+  const linkedPdfUrls = [];
+  
+  // Check if current page is a direct PDF URL
   const isDirectPdf = currentUrl.match(/\/pdf\//) || 
                       currentUrl.endsWith('.pdf') || 
                       currentUrl.includes('/pdf?') ||
                       document.contentType === 'application/pdf';
   
   if (isDirectPdf) {
-    // Current page IS a PDF - add it to PDF URLs
-    pdfUrls.push(currentUrl);
-    console.log("[VB CS] Detected direct PDF URL:", currentUrl);
+    // Current page IS a PDF - this is the PDF to parse
+    pdfToParseUrl = currentUrl;
+    console.log("[VB CS] Direct PDF detected, will be parsed:", currentUrl);
   }
   
-  // Special handling for arxiv.org abstract pages - extract PDF URL
-  if (currentUrl.includes('arxiv.org/abs/')) {
-    // Convert abstract URL to PDF URL
-    // e.g., https://arxiv.org/abs/2512.13564 -> https://arxiv.org/pdf/2512.13564.pdf
+  // Special handling for arxiv.org abstract pages - the PDF IS the content
+  if (!pdfToParseUrl && currentUrl.includes('arxiv.org/abs/')) {
     const paperId = currentUrl.match(/arxiv\.org\/abs\/([^\/?#]+)/);
     if (paperId && paperId[1]) {
-      const pdfUrl = `https://arxiv.org/pdf/${paperId[1]}.pdf`;
-      pdfUrls.push(pdfUrl);
-      console.log("[VB CS] Extracted arxiv PDF URL:", pdfUrl);
+      pdfToParseUrl = `https://arxiv.org/pdf/${paperId[1]}.pdf`;
+      console.log("[VB CS] arXiv abstract page - PDF will be parsed:", pdfToParseUrl);
     }
   }
+  
+  // Collect linked PDFs (for reference only, not parsing)
+  // These are PDFs found on the page but not the page itself
   
   // Check for PDF iframes
   const pdfIframes = document.querySelectorAll('iframe[src*=".pdf"], iframe[src*="/pdf"], iframe[src*="application/pdf"]');
   pdfIframes.forEach(iframe => {
     const src = iframe.src || iframe.getAttribute('data-src') || iframe.getAttribute('data-url');
     if (src) {
-      // Resolve relative URLs
       try {
         const absoluteUrl = new URL(src, window.location.href).href;
-        if (absoluteUrl.includes('.pdf') || absoluteUrl.includes('/pdf') || absoluteUrl.includes('application/pdf')) {
-          pdfUrls.push(absoluteUrl);
+        if ((absoluteUrl.includes('.pdf') || absoluteUrl.includes('/pdf')) && absoluteUrl !== pdfToParseUrl) {
+          linkedPdfUrls.push(absoluteUrl);
         }
       } catch (e) {
         // Invalid URL, skip
@@ -59,7 +59,9 @@ function extractPageText() {
     if (src) {
       try {
         const absoluteUrl = new URL(src, window.location.href).href;
-        pdfUrls.push(absoluteUrl);
+        if (absoluteUrl !== pdfToParseUrl && !linkedPdfUrls.includes(absoluteUrl)) {
+          linkedPdfUrls.push(absoluteUrl);
+        }
       } catch (e) {
         // Invalid URL, skip
       }
@@ -67,14 +69,14 @@ function extractPageText() {
   });
   
   // Check for links to PDFs (common on academic sites)
-  const pdfLinks = document.querySelectorAll('a[href$=".pdf"], a[href*=".pdf?"], a[href*="/pdf"]');
+  const pdfLinks = document.querySelectorAll('a[href$=".pdf"], a[href*=".pdf?"]');
   pdfLinks.forEach(link => {
     const href = link.href;
-    if (href && !pdfUrls.includes(href)) {
+    if (href) {
       try {
         const absoluteUrl = new URL(href, window.location.href).href;
-        if (absoluteUrl.includes('.pdf')) {
-          pdfUrls.push(absoluteUrl);
+        if (absoluteUrl.includes('.pdf') && absoluteUrl !== pdfToParseUrl && !linkedPdfUrls.includes(absoluteUrl)) {
+          linkedPdfUrls.push(absoluteUrl);
         }
       } catch (e) {
         // Invalid URL, skip
@@ -82,28 +84,18 @@ function extractPageText() {
     }
   });
   
-  // For arxiv abstract pages, also look for "Download PDF" links
-  if (currentUrl.includes('arxiv.org/abs/')) {
-    const downloadLinks = document.querySelectorAll('a[href*="/pdf/"], a[href*=".pdf"]');
-    downloadLinks.forEach(link => {
-      const href = link.href || link.getAttribute('href');
-      if (href && href.includes('/pdf/') && !pdfUrls.includes(href)) {
-        try {
-          const absoluteUrl = new URL(href, window.location.href).href;
-          pdfUrls.push(absoluteUrl);
-        } catch (e) {
-          // Invalid URL, skip
-        }
-      }
-    });
-  }
-  
   // Remove duplicates
-  const uniquePdfUrls = [...new Set(pdfUrls)];
+  const uniqueLinkedPdfs = [...new Set(linkedPdfUrls)];
+  
+  console.log("[VB CS] PDF to parse:", pdfToParseUrl);
+  console.log("[VB CS] Linked PDFs (references):", uniqueLinkedPdfs.length);
   
   return {
     text: text,
-    pdfUrls: uniquePdfUrls
+    pdfToParseUrl: pdfToParseUrl,      // Single PDF to parse (or null)
+    linkedPdfUrls: uniqueLinkedPdfs,   // PDFs found on page (references only)
+    // Legacy field for backward compatibility
+    pdfUrls: pdfToParseUrl ? [pdfToParseUrl, ...uniqueLinkedPdfs] : uniqueLinkedPdfs
   };
 }
 
@@ -152,12 +144,15 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "collect-text") {
     const result = extractPageText();
     const text = result.text || "";
-    const pdfUrls = result.pdfUrls || [];
-    console.log("[VB CS] collect-text returning", text.length, "chars", pdfUrls.length, "PDFs");
+    console.log("[VB CS] collect-text returning", text.length, "chars");
+    console.log("[VB CS] PDF to parse:", result.pdfToParseUrl);
+    console.log("[VB CS] Linked PDFs:", result.linkedPdfUrls?.length || 0);
 
     sendResponse({
       text,
-      pdfUrls: pdfUrls,
+      pdfToParseUrl: result.pdfToParseUrl,     // Single PDF to parse (or null)
+      linkedPdfUrls: result.linkedPdfUrls,     // References only
+      pdfUrls: result.pdfUrls,                 // Legacy field for backward compat
       url: window.location.href,
       title: document.title
     });

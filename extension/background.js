@@ -149,8 +149,9 @@ async function analyzeAndIngest(tab) {
 
   try {
     let pageData = null;
-    let pdfUrls = [];
     let text = "";
+    let pdfToParseUrl = null;
+    let linkedPdfUrls = [];
     
     // Ensure we have a valid tab URL
     if (!tab.url) {
@@ -165,22 +166,18 @@ async function analyzeAndIngest(tab) {
     
     console.log("[VB] Is direct PDF?", isDirectPdf);
     
-    // Special handling for arxiv.org
-    if (tab.url.includes('arxiv.org/abs/')) {
-      // Extract PDF URL from abstract page
+    // Determine if we should parse a PDF (URL is a PDF or arXiv abstract)
+    if (isDirectPdf) {
+      pdfToParseUrl = tab.url;
+      console.log("[VB] Direct PDF - will parse:", pdfToParseUrl);
+    } else if (tab.url.includes('arxiv.org/abs/')) {
+      // arXiv abstract page - the PDF IS the content
       const paperId = tab.url.match(/arxiv\.org\/abs\/([^\/?#]+)/);
-      console.log("[VB] Arxiv paper ID match:", paperId);
       if (paperId && paperId[1]) {
-        pdfUrls.push(`https://arxiv.org/pdf/${paperId[1]}.pdf`);
-        console.log("[VB] Extracted arxiv PDF URL from abstract page:", pdfUrls[0]);
+        pdfToParseUrl = `https://arxiv.org/pdf/${paperId[1]}.pdf`;
+        console.log("[VB] arXiv abstract - will parse PDF:", pdfToParseUrl);
       }
-    } else if (isDirectPdf) {
-      // Direct PDF page - add current URL as PDF to parse
-      pdfUrls.push(tab.url);
-      console.log("[VB] Detected direct PDF URL:", tab.url);
     }
-    
-    console.log("[VB] Initial PDF URLs detected:", pdfUrls);
     
     // Try to get data from content script (may fail on PDF pages)
     try {
@@ -189,33 +186,20 @@ async function analyzeAndIngest(tab) {
       });
       
       text = pageData && pageData.text ? pageData.text : "";
-      // Merge PDF URLs from content script with those detected from URL
-      if (pageData && pageData.pdfUrls && pageData.pdfUrls.length > 0) {
-        pdfUrls = [...new Set([...pdfUrls, ...pageData.pdfUrls])];
+      
+      // Use content script's PDF detection if available
+      if (pageData && pageData.pdfToParseUrl && !pdfToParseUrl) {
+        pdfToParseUrl = pageData.pdfToParseUrl;
+      }
+      
+      // Get linked PDFs (references only, not parsed)
+      if (pageData && pageData.linkedPdfUrls) {
+        linkedPdfUrls = pageData.linkedPdfUrls;
       }
     } catch (e) {
       // Content script might not be available (e.g., on PDF pages)
       console.log("[VB] Content script not available (may be PDF page):", e.message);
-      console.log("[VB] Using PDF URLs detected from tab URL:", pdfUrls);
-      // Use tab URL and title as fallback
-      // Note: pdfUrls already populated from tab.url detection above
       text = "";
-    }
-    
-    // Ensure PDF URLs are preserved even if content script failed
-    // This is critical for Firefox where content scripts may not run on PDF pages
-    if (pdfUrls.length === 0) {
-      // Fallback: re-check if we should have detected a PDF
-      if (isDirectPdf) {
-        pdfUrls.push(tab.url);
-        console.log("[VB] Fallback: Re-added PDF URL:", tab.url);
-      } else if (tab.url.includes('arxiv.org/abs/')) {
-        const paperId = tab.url.match(/arxiv\.org\/abs\/([^\/?#]+)/);
-        if (paperId && paperId[1]) {
-          pdfUrls.push(`https://arxiv.org/pdf/${paperId[1]}.pdf`);
-          console.log("[VB] Fallback: Re-added arxiv PDF URL:", pdfUrls[0]);
-        }
-      }
     }
 
     const url = pageData && pageData.url ? pageData.url : tab.url;
@@ -223,18 +207,18 @@ async function analyzeAndIngest(tab) {
 
     console.log("[VB] collect-text response:", {
       textLength: text.length,
-      pdfUrlsCount: pdfUrls.length,
+      pdfToParseUrl,
+      linkedPdfUrlsCount: linkedPdfUrls.length,
       url,
-      title,
-      isDirectPdf: isDirectPdf
+      title
     });
 
-    // Allow ingestion if there's text OR PDFs to parse
-    if ((!text || text.trim().length === 0) && pdfUrls.length === 0) {
+    // Allow ingestion if there's text OR a PDF to parse
+    if ((!text || text.trim().length === 0) && !pdfToParseUrl) {
       try {
         await browserAPI.tabs.sendMessage(tab.id, {
           type: "show-error",
-          error: "No text content or PDFs found on this page."
+          error: "No text content found on this page."
         });
       } catch (e) {
         // Ignore if we can't send message (e.g., PDF page)
@@ -253,7 +237,7 @@ async function analyzeAndIngest(tab) {
       console.log("[VB] Could not show result overlay (expected on PDF pages):", e.message);
     }
 
-    // Build ingest payload
+    // Build ingest payload with separated PDF fields
     const ingestPayload = {
       url,
       title,
@@ -261,11 +245,17 @@ async function analyzeAndIngest(tab) {
       captured_at: new Date().toISOString(),
       mode: "page",
       tags: null,
-      pdf_urls: pdfUrls.length > 0 ? pdfUrls : null
+      pdf_to_parse: pdfToParseUrl,                               // Single PDF to parse (or null)
+      linked_pdf_urls: linkedPdfUrls.length > 0 ? linkedPdfUrls : null  // References only
     };
 
     console.log("[VB] ingest payload:", ingestPayload);
-    console.log("[VB] PDF URLs being sent:", pdfUrls);
+    if (pdfToParseUrl) {
+      console.log("[VB] PDF to parse:", pdfToParseUrl);
+    }
+    if (linkedPdfUrls.length > 0) {
+      console.log("[VB] Linked PDFs (references):", linkedPdfUrls.length);
+    }
 
     const API_BASE = await getApiBase();
     const ingestRes = await authenticatedFetch(`${API_BASE}/ingest`, {

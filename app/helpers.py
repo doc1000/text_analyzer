@@ -1097,7 +1097,8 @@ def embed_doc_chunks(
         # 1. Chunk the text
         if chunk_type == "chunk":
             max_char = MAX_CHARS_PER_CHUNK
-            text_input = doc.full_text
+            # Prefer extracted_text for NLP (cleaner), fall back to captured_text, then full_text
+            text_input = getattr(doc, 'extracted_text', None) or getattr(doc, 'captured_text', None) or doc.full_text
         else:
             max_char = MAX_CHARS_PER_SENTENCE
             text_input = doc.chunk_text
