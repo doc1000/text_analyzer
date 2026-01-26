@@ -537,13 +537,14 @@
       : "https://vaultbubbles.fly.dev";
 
     // -------- AUTH HANDLING --------
-    let API_KEY = localStorage.getItem('vb_api_key') || '';
+    // Support both vb_ext_ (OAuth tokens) and vb_live_ (API keys) for backward compatibility
+    let AUTH_TOKEN = localStorage.getItem('vb_auth_token') || localStorage.getItem('vb_api_key') || '';
 
     // Helper for authenticated fetch with retry logic for cold starts
     async function authFetch(url, options = {}, retries = 5, delay = 2000) {
       const headers = { ...options.headers };
-      if (API_KEY) {
-        headers['Authorization'] = `Bearer ${API_KEY}`;
+      if (AUTH_TOKEN) {
+        headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
       }
       
       for (let attempt = 1; attempt <= retries; attempt++) {
@@ -574,7 +575,7 @@
 
     // Redirect to main page if not authenticated and auth is required
     async function checkAuth() {
-      if (!API_KEY) {
+      if (!AUTH_TOKEN) {
         // Try a simple request to see if auth is required
         try {
           const res = await fetch(`${API_BASE}/health`);
@@ -582,7 +583,7 @@
             // Health check works, but we should still check a protected endpoint
             const docRes = await fetch(`${API_BASE}/documents?limit=1`);
             if (docRes.status === 401) {
-              alert('Please set your API key in Settings on the main page.');
+              alert('Please sign in on the main page first.');
               window.location.href = '/';
               return false;
             }

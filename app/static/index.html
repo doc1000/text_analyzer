@@ -34,6 +34,24 @@
       color: #9ca3af;
     }
 
+    .header-user {
+      padding: 0.25rem 0.6rem;
+      background: #1f2937;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      color: #9ca3af;
+      cursor: pointer;
+      max-width: 150px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .header-user:hover {
+      background: #374151;
+      color: #e5e7eb;
+    }
+
     .tabs {
       display: inline-flex;
       border-radius: 999px;
@@ -514,6 +532,7 @@
 
       <button id="reloadBtn">Reload</button>
       <button id="settingsBtn" title="Settings">⚙️</button>
+      <span id="headerUserInfo" class="header-user" title="Click to sign in/out">Sign In</span>
       <span class="hint" id="headerHint">Click big bubbles to zoom · click document bubbles to open</span>
     </div>
   </header>
@@ -567,18 +586,35 @@
           <p class="hint">OpenAI is recommended for chat/topics. HuggingFace handles embeddings.</p>
         </div>
 
-        <div class="settings-section">
-          <h3>VaultBubble API Key</h3>
-          <label for="vbApiKeyInput">Your API Key:</label>
-          <input type="password" id="vbApiKeyInput" placeholder="vb_live_..." />
-          <p class="hint" id="vbAuthStatus">Not authenticated</p>
-          <div id="vbKeyDisplay" style="display: none; margin: 0.5rem 0; padding: 0.5rem; background: #020617; border: 1px solid #374151; border-radius: 4px; font-family: monospace; font-size: 0.85rem; word-break: break-all;"></div>
-          <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
-            <button id="saveVbKeyBtn" class="save-btn">Save Key</button>
-            <button id="showVbKeyBtn" class="cancel-btn" style="display: none;">Show Key</button>
-            <button id="copyVbKeyBtn" class="cancel-btn" style="display: none;">Copy Key</button>
-            <button id="clearVbKeyBtn" class="cancel-btn">Clear Key</button>
+        <div class="settings-section" id="authSection">
+          <h3>Account</h3>
+          <!-- Logged out state -->
+          <div id="loggedOutState">
+            <p class="hint">Sign in to sync your documents across devices.</p>
+            <button id="openLoginBtn" class="save-btn">Sign In with Email</button>
           </div>
+          <!-- Logged in state -->
+          <div id="loggedInState" style="display: none;">
+            <div class="model-info" style="margin-bottom: 1rem;">
+              <div class="model-row">
+                <span class="model-label">Signed in as:</span>
+                <span class="model-value" id="userEmail">-</span>
+              </div>
+            </div>
+            <button id="signOutBtn" class="cancel-btn">Sign Out</button>
+          </div>
+          <!-- Legacy API key input (collapsed) -->
+          <details style="margin-top: 1rem;">
+            <summary style="cursor: pointer; font-size: 0.85rem; color: #9ca3af;">Advanced: Manual API Key</summary>
+            <div style="margin-top: 0.5rem;">
+              <label for="vbApiKeyInput">API Key:</label>
+              <input type="password" id="vbApiKeyInput" placeholder="vb_live_..." />
+              <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+                <button id="saveVbKeyBtn" class="save-btn">Save Key</button>
+                <button id="clearVbKeyBtn" class="cancel-btn">Clear Key</button>
+              </div>
+            </div>
+          </details>
         </div>
 
         <div class="settings-section">
@@ -592,6 +628,41 @@
         <div class="settings-actions">
           <button id="saveSettingsBtn" class="save-btn">Save Settings</button>
           <button id="cancelSettingsBtn" class="cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Login Modal -->
+  <div id="loginModal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 400px;">
+      <div class="modal-header">
+        <h2>Sign In</h2>
+        <button id="closeLoginBtn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Step 1: Email -->
+        <div id="loginStep1">
+          <p class="hint" style="margin-bottom: 1rem;">Enter your email to receive a verification code.</p>
+          <label for="loginEmailInput">Email Address:</label>
+          <input type="email" id="loginEmailInput" placeholder="you@example.com" />
+          <p id="loginEmailError" class="hint" style="color: #ef4444; display: none;"></p>
+          <button id="sendCodeBtn" class="save-btn" style="margin-top: 1rem; width: 100%;">Send Verification Code</button>
+        </div>
+        <!-- Step 2: Code verification -->
+        <div id="loginStep2" style="display: none;">
+          <p class="hint" style="margin-bottom: 1rem;">Enter the 6-digit code sent to <strong id="loginEmailDisplay"></strong></p>
+          <label for="loginCodeInput">Verification Code:</label>
+          <input type="text" id="loginCodeInput" placeholder="123456" maxlength="6" style="font-size: 1.5rem; text-align: center; letter-spacing: 0.5rem;" />
+          <p id="loginCodeError" class="hint" style="color: #ef4444; display: none;"></p>
+          <button id="verifyCodeBtn" class="save-btn" style="margin-top: 1rem; width: 100%;">Verify Code</button>
+          <button id="backToEmailBtn" class="cancel-btn" style="margin-top: 0.5rem; width: 100%;">Back</button>
+        </div>
+        <!-- Success state -->
+        <div id="loginSuccess" style="display: none; text-align: center;">
+          <p style="font-size: 2rem; margin-bottom: 0.5rem;">&#10003;</p>
+          <p>Successfully signed in!</p>
+          <p class="hint">Reloading...</p>
         </div>
       </div>
     </div>
@@ -638,24 +709,15 @@
       : "https://vaultbubbles.fly.dev";
 
     // -------- AUTH HANDLING --------
-    let API_KEY = localStorage.getItem('vb_api_key') || '';
-
-    // Prompt for API key if not set (only on localhost for now)
-    function promptForApiKey() {
-      const key = prompt('Enter your API key (vb_live_...):');
-      if (key && key.startsWith('vb_live_')) {
-        API_KEY = key;
-        localStorage.setItem('vb_api_key', key);
-        return true;
-      }
-      return false;
-    }
+    // Support both vb_ext_ (OAuth tokens) and vb_live_ (API keys) for backward compatibility
+    let AUTH_TOKEN = localStorage.getItem('vb_auth_token') || localStorage.getItem('vb_api_key') || '';
+    let currentUserEmail = null;
 
     // Helper for authenticated fetch with retry logic for cold starts
     async function authFetch(url, options = {}, retries = 3, delay = 2000) {
       const headers = { ...options.headers };
-      if (API_KEY) {
-        headers['Authorization'] = `Bearer ${API_KEY}`;
+      if (AUTH_TOKEN) {
+        headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
       }
       
       for (let attempt = 1; attempt <= retries; attempt++) {
@@ -684,10 +746,101 @@
       }
     }
 
-    // Clear API key (for logout/reset)
-    function clearApiKey() {
-      API_KEY = '';
+    // Clear auth token (for logout)
+    function signOut() {
+      AUTH_TOKEN = '';
+      currentUserEmail = null;
+      localStorage.removeItem('vb_auth_token');
       localStorage.removeItem('vb_api_key');
+      updateAuthUI();
+    }
+
+    // Check if user is authenticated and get their info
+    async function checkAuthStatus() {
+      if (!AUTH_TOKEN) {
+        updateAuthUI();
+        return;
+      }
+      
+      try {
+        const res = await authFetch(`${API_BASE}/auth/whoami`);
+        if (res.ok) {
+          const data = await res.json();
+          currentUserEmail = data.email;
+        } else {
+          // Token invalid, clear it
+          signOut();
+        }
+      } catch (e) {
+        console.error('Auth check failed:', e);
+      }
+      updateAuthUI();
+    }
+
+    // Update UI based on auth state
+    function updateAuthUI() {
+      const loggedOutState = document.getElementById('loggedOutState');
+      const loggedInState = document.getElementById('loggedInState');
+      const userEmailEl = document.getElementById('userEmail');
+      const headerUserInfo = document.getElementById('headerUserInfo');
+      
+      if (AUTH_TOKEN && currentUserEmail) {
+        // Logged in
+        if (loggedOutState) loggedOutState.style.display = 'none';
+        if (loggedInState) loggedInState.style.display = 'block';
+        if (userEmailEl) userEmailEl.textContent = currentUserEmail;
+        if (headerUserInfo) headerUserInfo.textContent = currentUserEmail;
+      } else {
+        // Logged out
+        if (loggedOutState) loggedOutState.style.display = 'block';
+        if (loggedInState) loggedInState.style.display = 'none';
+        if (userEmailEl) userEmailEl.textContent = '-';
+        if (headerUserInfo) headerUserInfo.textContent = 'Sign In';
+      }
+    }
+
+    // -------- LOGIN FLOW --------
+    let loginEmail = '';
+
+    async function sendVerificationCode(email) {
+      const res = await fetch(`${API_BASE}/extension/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      return res.json();
+    }
+
+    async function verifyCode(email, code) {
+      const res = await fetch(`${API_BASE}/extension/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code }),
+        redirect: 'follow'
+      });
+      
+      // The endpoint redirects to /extension/success?token=xxx
+      // We need to handle this differently since we're on the same origin
+      if (res.redirected) {
+        const url = new URL(res.url);
+        const token = url.searchParams.get('token');
+        if (token) {
+          return { success: true, token };
+        }
+      }
+      
+      // If no redirect, try to parse response
+      const data = await res.json().catch(() => ({}));
+      if (data.error) {
+        return { success: false, error: data.error };
+      }
+      
+      return { success: false, error: 'Verification failed' };
+    }
+
+    // Legacy: Clear API key (for backward compat)
+    function clearApiKey() {
+      signOut();
     }
 
     // -------- SPA TAB LOGIC --------
@@ -1581,106 +1734,184 @@
     // Load settings on page load
     loadSettings();
 
-    // -------- VAULTBUBBLE API KEY (in Settings) --------
-    const vbApiKeyInput = document.getElementById("vbApiKeyInput");
-    const vbAuthStatus = document.getElementById("vbAuthStatus");
-    const vbKeyDisplay = document.getElementById("vbKeyDisplay");
-    const saveVbKeyBtn = document.getElementById("saveVbKeyBtn");
-    const showVbKeyBtn = document.getElementById("showVbKeyBtn");
-    const copyVbKeyBtn = document.getElementById("copyVbKeyBtn");
-    const clearVbKeyBtn = document.getElementById("clearVbKeyBtn");
-    
-    let vbKeyVisible = false;
+    // -------- LOGIN MODAL HANDLING --------
+    const loginModal = document.getElementById("loginModal");
+    const closeLoginBtn = document.getElementById("closeLoginBtn");
+    const openLoginBtn = document.getElementById("openLoginBtn");
+    const signOutBtn = document.getElementById("signOutBtn");
+    const loginStep1 = document.getElementById("loginStep1");
+    const loginStep2 = document.getElementById("loginStep2");
+    const loginSuccess = document.getElementById("loginSuccess");
+    const loginEmailInput = document.getElementById("loginEmailInput");
+    const loginEmailDisplay = document.getElementById("loginEmailDisplay");
+    const loginCodeInput = document.getElementById("loginCodeInput");
+    const sendCodeBtn = document.getElementById("sendCodeBtn");
+    const verifyCodeBtn = document.getElementById("verifyCodeBtn");
+    const backToEmailBtn = document.getElementById("backToEmailBtn");
+    const loginEmailError = document.getElementById("loginEmailError");
+    const loginCodeError = document.getElementById("loginCodeError");
 
-    function updateVbAuthStatus() {
-      if (API_KEY) {
-        const hint = API_KEY.substring(0, 10) + "..." + API_KEY.slice(-4);
-        vbAuthStatus.textContent = "✓ Authenticated: " + hint;
-        vbAuthStatus.style.color = "#10b981";
-        vbApiKeyInput.value = "";
-        vbApiKeyInput.placeholder = "••••••••••••";
-        // Show the Show/Copy buttons when a key is set
-        showVbKeyBtn.style.display = "inline-block";
-        copyVbKeyBtn.style.display = "inline-block";
-        // Reset key visibility
-        vbKeyVisible = false;
-        vbKeyDisplay.style.display = "none";
-        showVbKeyBtn.textContent = "Show Key";
-      } else {
-        vbAuthStatus.textContent = "Not authenticated";
-        vbAuthStatus.style.color = "#9ca3af";
-        vbApiKeyInput.placeholder = "vb_live_...";
-        // Hide Show/Copy buttons when no key is set
-        showVbKeyBtn.style.display = "none";
-        copyVbKeyBtn.style.display = "none";
-        vbKeyDisplay.style.display = "none";
-      }
+    function openLoginModal() {
+      loginModal.style.display = "flex";
+      loginStep1.style.display = "block";
+      loginStep2.style.display = "none";
+      loginSuccess.style.display = "none";
+      loginEmailInput.value = "";
+      loginCodeInput.value = "";
+      loginEmailError.style.display = "none";
+      loginCodeError.style.display = "none";
     }
 
-    // Toggle show/hide API key
-    showVbKeyBtn.addEventListener("click", () => {
-      if (!API_KEY) return;
-      
-      vbKeyVisible = !vbKeyVisible;
-      if (vbKeyVisible) {
-        vbKeyDisplay.textContent = API_KEY;
-        vbKeyDisplay.style.display = "block";
-        showVbKeyBtn.textContent = "Hide Key";
-      } else {
-        vbKeyDisplay.style.display = "none";
-        showVbKeyBtn.textContent = "Show Key";
-      }
-    });
+    function closeLoginModal() {
+      loginModal.style.display = "none";
+    }
 
-    // Copy API key to clipboard
-    copyVbKeyBtn.addEventListener("click", async () => {
-      if (!API_KEY) return;
-      
-      try {
-        await navigator.clipboard.writeText(API_KEY);
-        const originalText = copyVbKeyBtn.textContent;
-        copyVbKeyBtn.textContent = "Copied!";
-        setTimeout(() => {
-          copyVbKeyBtn.textContent = originalText;
-        }, 1500);
-      } catch (err) {
-        console.error("Failed to copy API key:", err);
-        // Fallback: show the key so user can manually copy
-        vbKeyDisplay.textContent = API_KEY;
-        vbKeyDisplay.style.display = "block";
-        showVbKeyBtn.textContent = "Hide Key";
-        vbKeyVisible = true;
-        alert("Could not copy automatically. Please select and copy the key shown above.");
-      }
-    });
+    if (openLoginBtn) {
+      openLoginBtn.addEventListener("click", openLoginModal);
+    }
 
-    // Save VaultBubble API key
-    saveVbKeyBtn.addEventListener("click", () => {
-      const key = vbApiKeyInput.value.trim();
-      if (key && key.startsWith("vb_live_")) {
-        API_KEY = key;
-        localStorage.setItem("vb_api_key", key);
-        updateVbAuthStatus();
-        alert("API key saved! Page will reload.");
+    if (closeLoginBtn) {
+      closeLoginBtn.addEventListener("click", closeLoginModal);
+    }
+
+    if (loginModal) {
+      loginModal.addEventListener("click", (e) => {
+        if (e.target === loginModal) closeLoginModal();
+      });
+    }
+
+    if (sendCodeBtn) {
+      sendCodeBtn.addEventListener("click", async () => {
+        const email = loginEmailInput.value.trim();
+        if (!email || !email.includes("@")) {
+          loginEmailError.textContent = "Please enter a valid email address.";
+          loginEmailError.style.display = "block";
+          return;
+        }
+
+        sendCodeBtn.disabled = true;
+        sendCodeBtn.textContent = "Sending...";
+        loginEmailError.style.display = "none";
+
+        try {
+          const result = await sendVerificationCode(email);
+          if (result.error) {
+            loginEmailError.textContent = result.error;
+            loginEmailError.style.display = "block";
+          } else {
+            loginEmail = email;
+            loginEmailDisplay.textContent = email;
+            loginStep1.style.display = "none";
+            loginStep2.style.display = "block";
+            loginCodeInput.focus();
+          }
+        } catch (e) {
+          loginEmailError.textContent = "Failed to send code. Please try again.";
+          loginEmailError.style.display = "block";
+        }
+
+        sendCodeBtn.disabled = false;
+        sendCodeBtn.textContent = "Send Verification Code";
+      });
+    }
+
+    if (verifyCodeBtn) {
+      verifyCodeBtn.addEventListener("click", async () => {
+        const code = loginCodeInput.value.trim();
+        if (!code || code.length !== 6) {
+          loginCodeError.textContent = "Please enter the 6-digit code.";
+          loginCodeError.style.display = "block";
+          return;
+        }
+
+        verifyCodeBtn.disabled = true;
+        verifyCodeBtn.textContent = "Verifying...";
+        loginCodeError.style.display = "none";
+
+        try {
+          const result = await verifyCode(loginEmail, code);
+          if (result.success && result.token) {
+            // Store the token
+            AUTH_TOKEN = result.token;
+            localStorage.setItem("vb_auth_token", result.token);
+            
+            // Show success
+            loginStep2.style.display = "none";
+            loginSuccess.style.display = "block";
+            
+            // Reload after a moment
+            setTimeout(() => location.reload(), 1500);
+          } else {
+            loginCodeError.textContent = result.error || "Invalid code. Please try again.";
+            loginCodeError.style.display = "block";
+          }
+        } catch (e) {
+          loginCodeError.textContent = "Verification failed. Please try again.";
+          loginCodeError.style.display = "block";
+        }
+
+        verifyCodeBtn.disabled = false;
+        verifyCodeBtn.textContent = "Verify Code";
+      });
+    }
+
+    if (backToEmailBtn) {
+      backToEmailBtn.addEventListener("click", () => {
+        loginStep2.style.display = "none";
+        loginStep1.style.display = "block";
+      });
+    }
+
+    if (signOutBtn) {
+      signOutBtn.addEventListener("click", () => {
+        signOut();
+        alert("Signed out successfully.");
         location.reload();
-      } else {
-        alert("Please enter a valid API key (starts with vb_live_)");
-      }
-    });
+      });
+    }
 
-    // Clear VaultBubble API key
-    clearVbKeyBtn.addEventListener("click", () => {
-      clearApiKey();
-      updateVbAuthStatus();
-      alert("API key cleared");
-    });
+    // -------- LEGACY API KEY (in Settings) --------
+    const vbApiKeyInput = document.getElementById("vbApiKeyInput");
+    const saveVbKeyBtn = document.getElementById("saveVbKeyBtn");
+    const clearVbKeyBtn = document.getElementById("clearVbKeyBtn");
 
-    // Update auth status on page load and when settings modal opens
-    updateVbAuthStatus();
-    
-    // Also update when settings modal opens
-    const origOpenSettings = settingsBtn.onclick;
-    settingsBtn.addEventListener("click", updateVbAuthStatus);
+    if (saveVbKeyBtn) {
+      saveVbKeyBtn.addEventListener("click", () => {
+        const key = vbApiKeyInput.value.trim();
+        if (key && (key.startsWith("vb_live_") || key.startsWith("vb_ext_"))) {
+          AUTH_TOKEN = key;
+          localStorage.setItem("vb_api_key", key);
+          alert("API key saved! Page will reload.");
+          location.reload();
+        } else {
+          alert("Please enter a valid API key (starts with vb_live_ or vb_ext_)");
+        }
+      });
+    }
+
+    if (clearVbKeyBtn) {
+      clearVbKeyBtn.addEventListener("click", () => {
+        signOut();
+        alert("Credentials cleared.");
+      });
+    }
+
+    // Header user info click handler
+    const headerUserInfo = document.getElementById("headerUserInfo");
+    if (headerUserInfo) {
+      headerUserInfo.addEventListener("click", () => {
+        if (AUTH_TOKEN && currentUserEmail) {
+          // Already logged in, open settings
+          settingsModal.style.display = "flex";
+        } else {
+          // Not logged in, open login modal
+          openLoginModal();
+        }
+      });
+    }
+
+    // Check auth status on page load
+    checkAuthStatus();
 
     // -------- INFO PANEL RESIZE --------
     const infoPanel = document.getElementById("info-panel");
