@@ -7,11 +7,45 @@ from uuid import UUID
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from sklearn.metrics.pairwise import cosine_similarity
-import umap
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
 from openai import OpenAI
+
+# Lazy-load heavy ML libraries (sklearn ~10s, umap ~8s import time)
+_cosine_similarity_fn = None
+_umap_module = None
+_pca_class = None
+_kmeans_class = None
+
+def get_cosine_similarity():
+    """Lazy-load sklearn cosine_similarity."""
+    global _cosine_similarity_fn
+    if _cosine_similarity_fn is None:
+        from sklearn.metrics.pairwise import cosine_similarity
+        _cosine_similarity_fn = cosine_similarity
+    return _cosine_similarity_fn
+
+def get_umap():
+    """Lazy-load umap module."""
+    global _umap_module
+    if _umap_module is None:
+        import umap
+        _umap_module = umap
+    return _umap_module
+
+def get_pca():
+    """Lazy-load sklearn PCA class."""
+    global _pca_class
+    if _pca_class is None:
+        from sklearn.decomposition import PCA
+        _pca_class = PCA
+    return _pca_class
+
+def get_kmeans():
+    """Lazy-load sklearn KMeans class."""
+    global _kmeans_class
+    if _kmeans_class is None:
+        from sklearn.cluster import KMeans
+        _kmeans_class = KMeans
+    return _kmeans_class
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
 from .config import PREFERENCES
 from .models import Document, get_or_create_embedding_class
@@ -62,6 +96,7 @@ def reduce_embeddings(X: np.ndarray) -> np.ndarray:
         return X
 
     if cfg.dim_reducer == "pca":
+        PCA = get_pca()
         pca = PCA(
             n_components=n_components,
             random_state=cfg.random_state,
@@ -71,7 +106,8 @@ def reduce_embeddings(X: np.ndarray) -> np.ndarray:
     if cfg.dim_reducer == "umap":
         const_neighbors = max(2, min(cfg.max_neighbors, n_docs - 1))
 
-        reducer = umap.UMAP(
+        umap_mod = get_umap()
+        reducer = umap_mod.UMAP(
             n_neighbors=const_neighbors,
             min_dist=0.1,
             n_components=n_components,
@@ -100,6 +136,7 @@ def _cluster_kmeans(X: np.ndarray) -> np.ndarray:
     n_docs = X.shape[0]
     k_topics = _choose_k(n_docs, cfg.k_topics_min, cfg.k_topics_max)
 
+    KMeans = get_kmeans()
     kmeans = KMeans(
         n_clusters=k_topics,
         random_state=cfg.random_state,
@@ -728,6 +765,7 @@ def _find_matching_title(
     
     best_match = None
     best_sim = min_similarity
+    cosine_similarity = get_cosine_similarity()
     
     for emb, title, summary in cached_topics:
         sim = float(cosine_similarity(
@@ -844,6 +882,7 @@ def _find_matching_topic(
     # Find best match using cosine similarity
     best_match = None
     best_similarity = min_similarity
+    cosine_similarity = get_cosine_similarity()
     
     for topic in existing_topics:
         topic_emb = normalize_embedding(topic.embedding)
@@ -1532,6 +1571,7 @@ def dedupe_documents_semantic(
 
     # Pre-cache embeddings in same order
     emb_by_id = embeddings
+    cosine_similarity = get_cosine_similarity()
 
     for i, d_i in enumerate(docs_sorted):
         if d_i.id in duplicate_ids:
@@ -1985,6 +2025,7 @@ def compute_topics(
             )
 
         k_sub = choose_k_sub(num_topic_docs)
+        KMeans = get_kmeans()
         sub_kmeans = KMeans(
             n_clusters=k_sub,
             random_state=cfg.random_state,

@@ -14,10 +14,45 @@ to coarsest (level 3, lowest similarity required).
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 from uuid import UUID
-from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.spatial.distance import squareform
-from sklearn.metrics.pairwise import cosine_distances, cosine_similarity
 from .config import PREFERENCES
+
+# Lazy-load heavy scipy/sklearn libraries (~10s import time each)
+_scipy_linkage = None
+_scipy_fcluster = None
+_scipy_squareform = None
+_sklearn_cosine_distances = None
+
+def get_scipy_linkage():
+    """Lazy-load scipy linkage function."""
+    global _scipy_linkage
+    if _scipy_linkage is None:
+        from scipy.cluster.hierarchy import linkage
+        _scipy_linkage = linkage
+    return _scipy_linkage
+
+def get_scipy_fcluster():
+    """Lazy-load scipy fcluster function."""
+    global _scipy_fcluster
+    if _scipy_fcluster is None:
+        from scipy.cluster.hierarchy import fcluster
+        _scipy_fcluster = fcluster
+    return _scipy_fcluster
+
+def get_scipy_squareform():
+    """Lazy-load scipy squareform function."""
+    global _scipy_squareform
+    if _scipy_squareform is None:
+        from scipy.spatial.distance import squareform
+        _scipy_squareform = squareform
+    return _scipy_squareform
+
+def get_cosine_distances():
+    """Lazy-load sklearn cosine_distances function."""
+    global _sklearn_cosine_distances
+    if _sklearn_cosine_distances is None:
+        from sklearn.metrics.pairwise import cosine_distances
+        _sklearn_cosine_distances = cosine_distances
+    return _sklearn_cosine_distances
 
 
 def build_linkage_tree(
@@ -47,6 +82,11 @@ def build_linkage_tree(
     
     if n_samples < 2:
         raise ValueError(f"Need at least 2 samples for clustering, got {n_samples}")
+    
+    # Lazy-load heavy libraries
+    cosine_distances = get_cosine_distances()
+    squareform = get_scipy_squareform()
+    linkage = get_scipy_linkage()
     
     # Compute pairwise cosine distances: D[i,j] = 1 - cosine_similarity(i, j)
     D = cosine_distances(embeddings)
@@ -94,6 +134,7 @@ def cut_tree_at_thresholds(
         thresholds = PREFERENCES.agglomerative.level_thresholds
     
     labels_by_level = {}
+    fcluster = get_scipy_fcluster()
     
     for level_idx, threshold in enumerate(thresholds):
         # fcluster with criterion='distance' cuts the tree at the given distance

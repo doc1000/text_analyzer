@@ -1,7 +1,6 @@
 ## \app\helpers.py
 
 from typing import List, Optional, Literal
-import spacy
 import os
 from openai import OpenAI
 import json
@@ -18,13 +17,14 @@ import numpy as np
 import ast
 from .models import Document, get_or_create_embedding_class
 
-# Lazy-load SpaCy model (defer ~40s of import-time work until first use)
+# Lazy-load SpaCy model (defer ~15s of import-time work until first use)
 _nlp_instance = None
 
 def get_nlp():
     """Get SpaCy NLP instance (lazy-loaded on first call)."""
     global _nlp_instance
     if _nlp_instance is None:
+        import spacy  # Lazy import - only loads when first document is ingested
         _nlp_instance = spacy.load("en_core_web_sm")
     return _nlp_instance
 
