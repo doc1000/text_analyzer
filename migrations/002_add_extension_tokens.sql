@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS extension_tokens (
     token_hash VARCHAR(64) NOT NULL UNIQUE,
     -- Device/browser name for display, e.g., "Chrome on Doster-PC"
     name TEXT,
-    -- Permission scopes (default: ingest only)
-    scopes TEXT[] DEFAULT ARRAY['ingest'],
+    -- Permission scopes (default: ingest only) - stored as comma-separated string
+    scopes TEXT DEFAULT 'ingest',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_used_at TIMESTAMPTZ,
     revoked_at TIMESTAMPTZ

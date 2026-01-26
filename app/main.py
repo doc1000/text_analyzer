@@ -293,12 +293,6 @@ def ingest(
     extracted_text = None
     pdf_parsed = False
     
-    # Debug logging for PDF detection
-    print(f"[DEBUG] Ingest URL: {payload.url}")
-    print(f"[DEBUG] payload.pdf_to_parse: {payload.pdf_to_parse}")
-    print(f"[DEBUG] payload.pdf_urls: {payload.pdf_urls}")
-    print(f"[DEBUG] is_pdf_url result: {is_pdf_url(payload.url)}")
-    
     # 2. Determine if we should parse a PDF (URL is PDF or arXiv)
     pdf_to_parse = payload.pdf_to_parse  # New field from extension
     
@@ -306,7 +300,6 @@ def ingest(
     if not pdf_to_parse and payload.url:
         if is_pdf_url(payload.url):
             pdf_to_parse = payload.url
-            print(f"[DEBUG] Set pdf_to_parse from URL detection: {pdf_to_parse}")
         elif 'arxiv.org/abs/' in payload.url:
             # arXiv abstract page - the PDF IS the content
             paper_id = extract_arxiv_id(payload.url)

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VaultBubble",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Capture web content, organize by topics, and query your research vault with AI-powered search. Cloud sync or local-only storage.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -19,6 +19,7 @@
   ],
   "host_permissions": [
     "https://*.vaultbubbles.com/*",
+    "https://vaultbubbles.fly.dev/*",
     "http://localhost:8000/*"
   ],
   "background": {
