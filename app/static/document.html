@@ -540,7 +540,7 @@
     let API_KEY = localStorage.getItem('vb_api_key') || '';
 
     // Helper for authenticated fetch with retry logic for cold starts
-    async function authFetch(url, options = {}, retries = 3, delay = 2000) {
+    async function authFetch(url, options = {}, retries = 5, delay = 2000) {
       const headers = { ...options.headers };
       if (API_KEY) {
         headers['Authorization'] = `Bearer ${API_KEY}`;
@@ -550,9 +550,9 @@
         try {
           const res = await fetch(url, { ...options, headers });
           
-          // Retry on 503 (service unavailable - cold start)
-          if (res.status === 503 && attempt < retries) {
-            console.log(`Server warming up (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
+          // Retry on 503 (service unavailable - cold start) or 500 (server error - may be temporary)
+          if ((res.status === 503 || res.status === 500) && attempt < retries) {
+            console.log(`Server ${res.status === 503 ? 'warming up' : 'error'} (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
             await new Promise(r => setTimeout(r, delay));
             delay *= 1.5; // Increase delay for next attempt
             continue;

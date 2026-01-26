@@ -227,12 +227,62 @@ def ingest(
     # Get user's vault (creates personal vault if doesn't exist)
     vault = get_user_vault(user, db)
 
+    # Start with the page text from extension
+    full_text = payload.text or ""
+    title = payload.title
+    extraction_method = "extension"
+    
+    # For page captures, re-fetch with trafilatura for cleaner text
+    if payload.mode == "page" and payload.url and not payload.url.startswith("note://"):
+        try:
+            from .extraction import extract_from_url
+            extracted = extract_from_url(payload.url)
+            if extracted and extracted.get("text"):
+                full_text = extracted["text"]
+                extraction_method = "trafilatura"
+                print(f"[INFO] Used trafilatura extraction: {len(full_text)} chars")
+                # Only use extracted title if user didn't provide one
+                if not payload.title:
+                    title = extracted.get("title")
+            else:
+                print(f"[WARN] Trafilatura extraction failed, using extension text")
+        except Exception as e:
+            print(f"[WARN] Trafilatura extraction error: {e}, using extension text")
+    
+    # Parse PDFs if provided
+    if payload.pdf_urls and len(payload.pdf_urls) > 0:
+        print(f"[INFO] Parsing {len(payload.pdf_urls)} PDF(s) for document")
+        try:
+            from .extraction import extract_from_pdf_urls
+            pdf_text = extract_from_pdf_urls(payload.pdf_urls, max_pages_per_pdf=50)
+            if pdf_text:
+                # Combine page text and PDF text
+                if full_text:
+                    full_text = f"{full_text}\n\n--- PDF Content ---\n\n{pdf_text}"
+                else:
+                    full_text = pdf_text
+                print(f"[INFO] Successfully parsed PDFs, total text length: {len(full_text)}")
+            else:
+                print(f"[WARN] No text extracted from PDFs")
+        except Exception as e:
+            print(f"[ERROR] Failed to parse PDFs: {e}")
+            import traceback
+            traceback.print_exc()
+            # Continue with just the page text if PDF parsing fails
+    
+    # Ensure we have some text
+    if not full_text or not full_text.strip():
+        raise HTTPException(
+            status_code=400, 
+            detail="No text content found. Please ensure the page has text or PDFs are accessible."
+        )
+
     doc = models.Document(
         vault_id=vault.id if vault else None,
         created_by=user.id if user else None,
         url=payload.url,
-        title=payload.title,
-        full_text=payload.text,
+        title=title,
+        full_text=full_text,
         captured_at=captured_at,
     )
 
@@ -245,6 +295,8 @@ def ingest(
         "status": "ok",
         "document_id": str(doc.id),
         "num_chunks": int(chunk_len),
+        "extraction_method": extraction_method,
+        "pdfs_parsed": len(payload.pdf_urls) if payload.pdf_urls else 0,
     }
     
     # Include user_id and vault_id if auth is enabled and user is present
@@ -1249,6 +1301,34 @@ def admin_init_db(
         return {"status": "ok", "message": "Database initialized successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB init failed: {e}")
+
+
+@app.get("/admin/test-extraction")
+def admin_test_extraction(
+    url: str,
+    _: None = Depends(require_bootstrap_token),
+):
+    """
+    Test trafilatura extraction for a given URL.
+    
+    Returns extracted title and text preview.
+    Requires bootstrap token via X-Bootstrap-Token header.
+    """
+    from .extraction import extract_from_url
+    
+    result = extract_from_url(url)
+    if not result:
+        raise HTTPException(status_code=404, detail="Extraction failed - could not fetch or extract content")
+    
+    return {
+        "url": url,
+        "title": result.get("title"),
+        "author": result.get("author"),
+        "date": result.get("date"),
+        "language": result.get("language"),
+        "text_preview": result.get("text", "")[:1000],
+        "text_length": len(result.get("text", "")),
+    }
 
 
 if __name__ == "__main__":

@@ -54,6 +54,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path or ""
 
         # Public endpoints (never require auth)
+        # Note: /admin/* endpoints use require_bootstrap_token for protection
         if (
             path == "/"
             or path == "/health"
@@ -64,6 +65,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             or path == "/redoc"
             or path.startswith("/static")
             or path.startswith("/auth/bootstrap")
+            or path.startswith("/admin/")
         ):
             return await call_next(request)
 

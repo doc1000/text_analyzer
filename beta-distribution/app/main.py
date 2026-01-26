@@ -25,7 +25,7 @@ from . import models
 from .models import Document
 from .helpers import (get_embedding,embed_doc_chunks,
     _answer_from_hits,DocumentOut, QueryRequest, ChunkHit,
-    QueryResponse, fill_empty_embed_docs, parse_pdfs_from_urls
+    QueryResponse, fill_empty_embed_docs
 )
 from .topics import (
     TopicsResponse,
@@ -137,20 +137,40 @@ def ingest(payload: IngestPayload, background_tasks: BackgroundTasks, db: Sessio
     Embedding and chunking happen asynchronously in the background.
     Topics will be assigned automatically during topic computation.
     
+    For mode="page", automatically re-fetches URL with trafilatura for cleaner text.
     If PDF URLs are provided, they will be parsed and their text appended to the document.
     """
     # Use captured_at from payload if provided, else now
     captured_at = payload.captured_at or datetime.utcnow()
 
-    # Start with the page text
+    # Start with the page text from extension
     full_text = payload.text or ""
+    title = payload.title
+    extraction_method = "extension"
+    
+    # For page captures, re-fetch with trafilatura for cleaner text
+    if payload.mode == "page" and payload.url and not payload.url.startswith("note://"):
+        try:
+            from .extraction import extract_from_url
+            extracted = extract_from_url(payload.url)
+            if extracted and extracted.get("text"):
+                full_text = extracted["text"]
+                extraction_method = "trafilatura"
+                print(f"[INFO] Used trafilatura extraction: {len(full_text)} chars")
+                # Only use extracted title if user didn't provide one
+                if not payload.title:
+                    title = extracted.get("title")
+            else:
+                print(f"[WARN] Trafilatura extraction failed, using extension text")
+        except Exception as e:
+            print(f"[WARN] Trafilatura extraction error: {e}, using extension text")
     
     # Parse PDFs if provided (this happens synchronously before saving)
-    pdf_text = ""
     if payload.pdf_urls and len(payload.pdf_urls) > 0:
         print(f"[INFO] Parsing {len(payload.pdf_urls)} PDF(s) for document")
         try:
-            pdf_text = parse_pdfs_from_urls(payload.pdf_urls, max_pages_per_pdf=50)  # Limit to 50 pages per PDF
+            from .extraction import extract_from_pdf_urls
+            pdf_text = extract_from_pdf_urls(payload.pdf_urls, max_pages_per_pdf=50)
             if pdf_text:
                 # Combine page text and PDF text
                 if full_text:
@@ -176,7 +196,7 @@ def ingest(payload: IngestPayload, background_tasks: BackgroundTasks, db: Sessio
     # Create document without topic assignment - topics will be assigned during topic computation
     doc = models.Document(
         url=payload.url,
-        title=payload.title,
+        title=title,
         full_text=full_text,
         captured_at=captured_at,
         # No topic assignment - documents will be assigned to topics during topic computation
@@ -204,6 +224,7 @@ def ingest(payload: IngestPayload, background_tasks: BackgroundTasks, db: Sessio
         "document_id": str(document_id),
         "num_chunks": 0,  # Will be updated asynchronously
         "message": "Document saved. Embedding in progress.",
+        "extraction_method": extraction_method,
         "pdfs_parsed": len(payload.pdf_urls) if payload.pdf_urls else 0
     }
 
@@ -888,6 +909,30 @@ def update_document_topic(
             "assigned_topic_id": None,
             "assigned_topic_title": None
         }
+
+
+@app.get("/admin/test-extraction")
+def admin_test_extraction(url: str):
+    """
+    Test trafilatura extraction for a given URL.
+    
+    Returns extracted title and text preview.
+    """
+    from .extraction import extract_from_url
+    
+    result = extract_from_url(url)
+    if not result:
+        raise HTTPException(status_code=404, detail="Extraction failed - could not fetch or extract content")
+    
+    return {
+        "url": url,
+        "title": result.get("title"),
+        "author": result.get("author"),
+        "date": result.get("date"),
+        "language": result.get("language"),
+        "text_preview": result.get("text", "")[:1000],
+        "text_length": len(result.get("text", "")),
+    }
 
 
 if __name__ == "__main__":
