@@ -17,6 +17,48 @@ async function getApiBase() {
   }
 }
 
+// Get API key from storage
+async function getApiKey() {
+  try {
+    const result = await browserAPI.storage.sync.get({ api_key: "" });
+    return result.api_key || "";
+  } catch (error) {
+    console.error("[VB] Error reading API key:", error);
+    return "";
+  }
+}
+
+// Authenticated fetch wrapper - adds Authorization header and handles 401 errors
+async function authenticatedFetch(url, options = {}) {
+  const apiKey = await getApiKey();
+  
+  // Build headers with auth
+  const headers = {
+    ...options.headers,
+    "Content-Type": "application/json"
+  };
+  
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+  
+  const response = await fetch(url, {
+    ...options,
+    headers
+  });
+  
+  // Handle 401 Unauthorized
+  if (response.status === 401) {
+    const errorMsg = apiKey 
+      ? "Authentication failed. Please check your API key in extension settings."
+      : "No API key configured. Please set your API key in extension settings.";
+    console.error("[VB] Authentication error:", errorMsg);
+    throw new Error(errorMsg);
+  }
+  
+  return response;
+}
+
 // ---------------- FULL PAGE ANALYZE + INGEST ---------------- //
 
 async function analyzeAndIngest(tab) {
@@ -119,20 +161,17 @@ async function analyzeAndIngest(tab) {
     console.log("[VB] ingest payload:", ingestPayload);
 
     const API_BASE = await getApiBase();
-    const ingestRes = await fetch(`${API_BASE}/ingest`, {
+    const ingestRes = await authenticatedFetch(`${API_BASE}/ingest`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(ingestPayload)
     });
 
     console.log("[VB] /ingest status:", ingestRes.status);
 
     if (!ingestRes.ok) {
-      console.error(
-        "[VB] ingest error:",
-        ingestRes.status,
-        await ingestRes.text()
-      );
+      const errorText = await ingestRes.text();
+      console.error("[VB] ingest error:", ingestRes.status, errorText);
+      throw new Error(`Server error: ${ingestRes.status}`);
     } else {
       const ingestResult = await ingestRes.json().catch(() => null);
       console.log("[VB] ingest success:", ingestResult);
@@ -142,7 +181,7 @@ async function analyzeAndIngest(tab) {
     try {
       await browserAPI.tabs.sendMessage(tab.id, {
         type: "show-error",
-        error: e.toString()
+        error: e.message || e.toString()
       });
     } catch (inner) {
       console.error("[VB] Failed to send error to tab:", inner);
@@ -222,19 +261,15 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
     console.log("[VB] Quick-capture payload:", payload);
 
     const API_BASE = await getApiBase();
-    const ingestRes = await fetch(`${API_BASE}/ingest`, {
+    const ingestRes = await authenticatedFetch(`${API_BASE}/ingest`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
     console.log("[VB] /ingest (quick selection) status:", ingestRes.status);
     if (!ingestRes.ok) {
-      console.error(
-        "[VB] ingest error (quick selection):",
-        ingestRes.status,
-        await ingestRes.text()
-      );
+      const errorText = await ingestRes.text();
+      console.error("[VB] ingest error (quick selection):", ingestRes.status, errorText);
     } else {
       const ingestResult = await ingestRes.json().catch(() => null);
       console.log("[VB] ingest success (quick selection):", ingestResult);
@@ -346,22 +381,27 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("[VB] Popup snippet payload:", payload);
 
     // Get API endpoint and send request
-    getApiBase().then(API_BASE => {
-      fetch(`${API_BASE}/ingest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      })
-        .then((r) => r.json().catch(() => null))
-        .then((data) => {
-          console.log("[VB] /ingest response (popup capture):", data);
-          sendResponse({ ok: true, data });
-        })
-        .catch((err) => {
-          console.error("[VB] /ingest error (popup capture):", err);
-          sendResponse({ ok: false, error: String(err) });
+    (async () => {
+      try {
+        const API_BASE = await getApiBase();
+        const response = await authenticatedFetch(`${API_BASE}/ingest`, {
+          method: "POST",
+          body: JSON.stringify(payload)
         });
-    });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Server error: ${response.status} - ${errorText}`);
+        }
+        
+        const data = await response.json().catch(() => null);
+        console.log("[VB] /ingest response (popup capture):", data);
+        sendResponse({ ok: true, data });
+      } catch (err) {
+        console.error("[VB] /ingest error (popup capture):", err);
+        sendResponse({ ok: false, error: err.message || String(err) });
+      }
+    })();
 
     return true; // async response
   }

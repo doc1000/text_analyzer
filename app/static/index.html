@@ -572,8 +572,11 @@
           <label for="vbApiKeyInput">Your API Key:</label>
           <input type="password" id="vbApiKeyInput" placeholder="vb_live_..." />
           <p class="hint" id="vbAuthStatus">Not authenticated</p>
-          <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+          <div id="vbKeyDisplay" style="display: none; margin: 0.5rem 0; padding: 0.5rem; background: #020617; border: 1px solid #374151; border-radius: 4px; font-family: monospace; font-size: 0.85rem; word-break: break-all;"></div>
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
             <button id="saveVbKeyBtn" class="save-btn">Save Key</button>
+            <button id="showVbKeyBtn" class="cancel-btn" style="display: none;">Show Key</button>
+            <button id="copyVbKeyBtn" class="cancel-btn" style="display: none;">Copy Key</button>
             <button id="clearVbKeyBtn" class="cancel-btn">Clear Key</button>
           </div>
         </div>
@@ -1581,8 +1584,13 @@
     // -------- VAULTBUBBLE API KEY (in Settings) --------
     const vbApiKeyInput = document.getElementById("vbApiKeyInput");
     const vbAuthStatus = document.getElementById("vbAuthStatus");
+    const vbKeyDisplay = document.getElementById("vbKeyDisplay");
     const saveVbKeyBtn = document.getElementById("saveVbKeyBtn");
+    const showVbKeyBtn = document.getElementById("showVbKeyBtn");
+    const copyVbKeyBtn = document.getElementById("copyVbKeyBtn");
     const clearVbKeyBtn = document.getElementById("clearVbKeyBtn");
+    
+    let vbKeyVisible = false;
 
     function updateVbAuthStatus() {
       if (API_KEY) {
@@ -1591,12 +1599,60 @@
         vbAuthStatus.style.color = "#10b981";
         vbApiKeyInput.value = "";
         vbApiKeyInput.placeholder = "••••••••••••";
+        // Show the Show/Copy buttons when a key is set
+        showVbKeyBtn.style.display = "inline-block";
+        copyVbKeyBtn.style.display = "inline-block";
+        // Reset key visibility
+        vbKeyVisible = false;
+        vbKeyDisplay.style.display = "none";
+        showVbKeyBtn.textContent = "Show Key";
       } else {
         vbAuthStatus.textContent = "Not authenticated";
         vbAuthStatus.style.color = "#9ca3af";
         vbApiKeyInput.placeholder = "vb_live_...";
+        // Hide Show/Copy buttons when no key is set
+        showVbKeyBtn.style.display = "none";
+        copyVbKeyBtn.style.display = "none";
+        vbKeyDisplay.style.display = "none";
       }
     }
+
+    // Toggle show/hide API key
+    showVbKeyBtn.addEventListener("click", () => {
+      if (!API_KEY) return;
+      
+      vbKeyVisible = !vbKeyVisible;
+      if (vbKeyVisible) {
+        vbKeyDisplay.textContent = API_KEY;
+        vbKeyDisplay.style.display = "block";
+        showVbKeyBtn.textContent = "Hide Key";
+      } else {
+        vbKeyDisplay.style.display = "none";
+        showVbKeyBtn.textContent = "Show Key";
+      }
+    });
+
+    // Copy API key to clipboard
+    copyVbKeyBtn.addEventListener("click", async () => {
+      if (!API_KEY) return;
+      
+      try {
+        await navigator.clipboard.writeText(API_KEY);
+        const originalText = copyVbKeyBtn.textContent;
+        copyVbKeyBtn.textContent = "Copied!";
+        setTimeout(() => {
+          copyVbKeyBtn.textContent = originalText;
+        }, 1500);
+      } catch (err) {
+        console.error("Failed to copy API key:", err);
+        // Fallback: show the key so user can manually copy
+        vbKeyDisplay.textContent = API_KEY;
+        vbKeyDisplay.style.display = "block";
+        showVbKeyBtn.textContent = "Hide Key";
+        vbKeyVisible = true;
+        alert("Could not copy automatically. Please select and copy the key shown above.");
+      }
+    });
 
     // Save VaultBubble API key
     saveVbKeyBtn.addEventListener("click", () => {
