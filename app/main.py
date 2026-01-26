@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, text
 from sqlalchemy.exc import IntegrityError
 #Internal imports
-from .db import init_db, get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE, DOCUMENT_TABLE
+from .db import get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE, DOCUMENT_TABLE
 from .schemas import (
     IngestPayload, DocumentDetailResponse, DocumentUpdateRequest, 
     SettingsResponse, SettingsUpdateRequest, TopicOption, TopicsListResponse,
@@ -55,24 +55,12 @@ from .auth import (
 
 
 
-async def _fill_embeddings_async():
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,
-        fill_empty_embed_docs,
-    )
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB schemas/extensions (lightweight, no network calls)
-    init_db()
-    
-    # Initialize embedding tables (uses EMBEDDING_DIM env var, no network probe)
-    from .db import initialize_embedding_tables
-    initialize_embedding_tables()
-    
-    # Background task: fill any missing embeddings
-    asyncio.create_task(_fill_embeddings_async())
+    # Startup is intentionally minimal for fast Fly boots
+    # - DB migrations run via run_migration.py at deploy time
+    # - Embedding tables are lazy-initialized on first use (via __getattr__ in db.py)
+    # - Background fill moved to /admin/backfill endpoint
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -99,7 +87,26 @@ def root():
 
 @app.get("/health")
 def health():
+    """Liveness probe - fast, no DB. Used by Fly health checks."""
     return {"status": "ok"}
+
+@app.get("/ready")
+def readiness_check(db: Session = Depends(get_db)):
+    """
+    Readiness probe - checks if DB is reachable and embedding tables exist.
+    Use this for internal checks, NOT for Fly health checks.
+    """
+    try:
+        # Check DB connectivity
+        db.execute(text("SELECT 1"))
+        
+        # Check if embedding tables are initialized (lazy init if needed)
+        from .db import ensure_embedding_ready
+        ensure_embedding_ready()
+        
+        return {"ready": True, "db": "connected", "embeddings": "initialized"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Not ready: {e}")
 
 @app.get("/test-db")
 def test_db(db: Session = Depends(get_db)):
@@ -1187,6 +1194,61 @@ def get_vault(
         role=membership.role if membership else None,
         document_count=doc_count,
     )
+
+
+# ---------- Admin Endpoints ----------
+
+@app.post("/admin/backfill")
+def admin_backfill_embeddings(
+    _: None = Depends(require_bootstrap_token),
+):
+    """
+    Manually trigger background fill of missing embeddings.
+    
+    This was previously run automatically at startup but is now manual
+    to keep startup fast for Fly.io.
+    
+    Requires bootstrap token via X-Bootstrap-Token header.
+    """
+    import asyncio
+    
+    async def _fill_embeddings_async():
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, fill_empty_embed_docs)
+    
+    # Run in background
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_fill_embeddings_async())
+            return {"status": "started", "message": "Backfill task started in background"}
+        else:
+            # Fallback for sync context
+            fill_empty_embed_docs()
+            return {"status": "completed", "message": "Backfill completed synchronously"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start backfill: {e}")
+
+
+@app.post("/admin/init-db")
+def admin_init_db(
+    _: None = Depends(require_bootstrap_token),
+):
+    """
+    Manually run database initialization (schemas, extensions, migrations).
+    
+    This was previously run automatically at startup but is now manual
+    to keep startup fast for Fly.io.
+    
+    Requires bootstrap token via X-Bootstrap-Token header.
+    """
+    from .db import init_db
+    
+    try:
+        init_db()
+        return {"status": "ok", "message": "Database initialized successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB init failed: {e}")
 
 
 if __name__ == "__main__":

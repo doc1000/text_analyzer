@@ -221,6 +221,18 @@ def initialize_embedding_tables():
     return _embedding_tables_cache
 
 
+def ensure_embedding_ready():
+    """
+    Ensure embedding tables are initialized. Fast if already done.
+    
+    Call this in endpoints that need embedding tables to trigger lazy initialization.
+    This is a no-op if tables are already cached.
+    """
+    global _embedding_tables_cache
+    if _embedding_tables_cache is None:
+        initialize_embedding_tables()
+
+
 # Lazy attribute access for embedding tables (Python 3.7+)
 def __getattr__(name):
     """Lazy attribute access for embedding tables to avoid circular imports."""

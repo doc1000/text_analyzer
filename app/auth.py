@@ -57,6 +57,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         if (
             path == "/"
             or path == "/health"
+            or path == "/ready"
             or path == "/test-db"
             or path == "/docs"
             or path == "/openapi.json"
