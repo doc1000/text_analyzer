@@ -552,14 +552,26 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/topics", response_model=TopicsResponse)
-def get_topics(days: int = 10, db: Session = Depends(get_db)):
+def get_topics(
+    days: int = 10, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     """
     Return hierarchical topics for documents in the last `days` days.
+    Only returns documents from vaults the user has access to.
     """
-    return get_topics_with_cache(db, days=days)
+    vault_ids = get_user_accessible_vault_ids(user, db)
+    return get_topics_with_cache(db, days=days, vault_ids=vault_ids)
 
 @app.get("/topics/hierarchy")
-def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
+def get_topics_hierarchy(
+    days: int = 30, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     """
     Return a D3-friendly hierarchy representation of topics with 3 levels:
     
@@ -569,9 +581,11 @@ def get_topics_hierarchy(days: int = 30, db: Session = Depends(get_db)):
     - Documents: Leaf nodes within Level 0 topics
     
     Uses the hierarchical topic structure from TOPIC_TABLE with parent_id relationships.
+    Only returns documents from vaults the user has access to.
     """
     from .topics import build_hierarchical_topics_for_d3
-    return build_hierarchical_topics_for_d3(db, days=days)
+    vault_ids = get_user_accessible_vault_ids(user, db)
+    return build_hierarchical_topics_for_d3(db, days=days, vault_ids=vault_ids)
 
 @app.get("/topics/clear_cache")
 def clear_cache():
@@ -582,10 +596,12 @@ def clear_cache():
 @app.post("/topics/backfill")
 def backfill_document_embeddings_endpoint(
     generate_summaries: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_bootstrap_token),
 ):
     """
     Comprehensive backfill for chunk summaries, document embeddings, and document summaries.
+    Requires admin bootstrap token.
     
     When generate_summaries=True, this runs three phases:
     1. Generate summaries for chunks that don't have them
@@ -615,10 +631,12 @@ def backfill_document_embeddings_endpoint(
 def backfill_chunk_summaries_endpoint(
     batch_size: int = 50,
     max_workers: int = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_bootstrap_token),
 ):
     """
     Backfill summaries for chunks that don't have them using parallel batch processing.
+    Requires admin bootstrap token.
     
     This is useful if you want to only generate chunk summaries without
     running the full document backfill.
@@ -645,10 +663,12 @@ def backfill_chunk_summaries_endpoint(
 def recluster_topics(
     days: int = 30,
     clear_assignments: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _: None = Depends(require_bootstrap_token),
 ):
     """
     Recluster documents using hierarchical agglomerative clustering.
+    Requires admin bootstrap token.
     
     Creates topics at 3 levels:
     - Level 0: Fine-grained (cosine sim >= 0.85)
@@ -690,32 +710,61 @@ def recluster_topics(
 
 
 @app.get("/topics/stats")
-def get_clustering_stats(days: int = 30, db: Session = Depends(get_db)):
+def get_clustering_stats(
+    days: int = 30, 
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
     """
     Get statistics about the current clustering without recomputing.
     
     Returns info about document counts, cluster distribution, etc.
+    Only counts documents from vaults the user has access to.
     """
     from .db import DOCUMENT_TABLE
     from datetime import timedelta
     
     cutoff = datetime.utcnow() - timedelta(days=days)
+    vault_ids = get_user_accessible_vault_ids(user, db)
+    
+    # Base query with vault filtering
+    base_query = db.query(func.count(Document.id)).filter(Document.captured_at >= cutoff)
+    if user and vault_ids:
+        base_query = base_query.filter(Document.vault_id.in_(vault_ids))
+    elif user:
+        # User has no vaults - return zeros
+        return {
+            "time_range_days": days,
+            "total_documents": 0,
+            "documents_with_embeddings": 0,
+            "documents_with_topics": 0,
+            "topic_counts_by_level": {"fine_topics": 0, "topics": 0, "categories": 0},
+            "agglomerative_enabled": PREFERENCES.agglomerative.enabled,
+            "clustering_thresholds": PREFERENCES.agglomerative.level_thresholds
+        }
     
     # Count documents
-    total_docs = db.query(func.count(Document.id)).filter(Document.captured_at >= cutoff).scalar()
+    total_docs = base_query.scalar()
     
-    # Count documents with embeddings in DOCUMENT_TABLE
-    docs_with_embeddings = db.query(func.count(DOCUMENT_TABLE.id)).scalar()
+    # Count documents with embeddings in DOCUMENT_TABLE (join with vault filter)
+    embed_query = db.query(func.count(DOCUMENT_TABLE.id))
+    if user and vault_ids:
+        embed_query = embed_query.join(Document, Document.id == DOCUMENT_TABLE.id).filter(Document.vault_id.in_(vault_ids))
+    docs_with_embeddings = embed_query.scalar()
     
     # Count documents with topic assignments
-    docs_with_topics = (
+    topics_query = (
         db.query(func.count(Document.id))
         .filter(Document.captured_at >= cutoff)
         .filter(Document.assigned_topic_id != None)
-        .scalar()
     )
+    if user and vault_ids:
+        topics_query = topics_query.filter(Document.vault_id.in_(vault_ids))
+    docs_with_topics = topics_query.scalar()
     
     # Count topics at each level (0=fine, 1=topics, 2=categories)
+    # Note: Topic counts are global, not per-user, as topics can be shared
     topic_counts = {}
     level_names = {0: "fine_topics", 1: "topics", 2: "categories"}
     for level in range(3):
@@ -890,8 +939,13 @@ def get_settings():
     )
 
 @app.put("/settings", response_model=SettingsResponse)
-def update_settings(payload: SettingsUpdateRequest):
-    """Update settings including providers, model names, and OpenAI API key."""
+def update_settings(
+    payload: SettingsUpdateRequest,
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """Update settings including providers, model names, and OpenAI API key.
+    Requires authentication."""
     # Update chat provider if provided
     if payload.chat_provider is not None:
         if payload.chat_provider not in ["openai", "ollama"]:

@@ -68,8 +68,8 @@ from .agglomerative import (
     get_cluster_hierarchy,
     get_nested_cluster_structure,
 )
-# Simple in-memory cache for topics per (days, max_captured_at)
-_topics_cache: dict[tuple[int, datetime | None], TopicsResponse] = {}
+# Simple in-memory cache for topics per (days, max_captured_at, vault_ids_tuple)
+_topics_cache: dict[tuple[int, datetime | None, tuple | None], TopicsResponse] = {}
 
 
 
@@ -1849,21 +1849,31 @@ def compute_topics(
     days: int = 30,
     min_cluster_size: int = 5,
     min_docs_for_clustering: int = 3,
+    vault_ids: list = None,
 ) -> TopicsResponse:
     """
     Main entry point to compute topics for the last `days` days.
+    
+    Args:
+        db: Database session
+        days: Number of days to look back
+        min_cluster_size: Minimum cluster size for HDBSCAN
+        min_docs_for_clustering: Minimum documents needed for clustering
+        vault_ids: List of vault IDs to filter by. If None, returns all (auth disabled).
     """
     cfg = PREFERENCES.clustering
     min_docs_for_clustering = cfg.min_docs_for_clustering
 
-    # 1) Select recent documents
+    # 1) Select recent documents with vault filtering
     cutoff = datetime.utcnow() - timedelta(days=days)
-    docs = (
+    query = (
         db.query(Document)
         .filter(Document.captured_at >= cutoff)
         .order_by(Document.captured_at.desc())
-        .all()
     )
+    if vault_ids is not None:
+        query = query.filter(Document.vault_id.in_(vault_ids))
+    docs = query.all()
 
     if not docs:
         return TopicsResponse(time_range_days=days, topics=[])
@@ -2163,16 +2173,35 @@ def compute_topics(
 
     return TopicsResponse(time_range_days=days, topics=topics)
 
-def get_topics_with_cache(db: Session, days: int = 30) -> TopicsResponse:
+def get_topics_with_cache(
+    db: Session, 
+    days: int = 30,
+    vault_ids: list = None
+) -> TopicsResponse:
     """
     Lightweight in-process cache for topics:
-    - Keyed by (days, max_captured_at)
+    - Keyed by (days, max_captured_at, vault_ids)
     - If no new documents since last compute, reuse cached TopicsResponse
+    
+    Args:
+        db: Database session
+        days: Number of days to look back
+        vault_ids: List of vault IDs to filter by. If None, returns all (auth disabled).
+                   If empty list, returns empty result (user has no vault access).
     """
+    # Handle case where user has no vault access
+    if vault_ids is not None and len(vault_ids) == 0:
+        return TopicsResponse(time_range_days=days, topics=[])
 
-    # 1) Figure out the most recent document timestamp
-    max_captured_at = db.query(func.max(Document.captured_at)).scalar()
-    cache_key = (days, max_captured_at)
+    # 1) Figure out the most recent document timestamp (for the user's vaults)
+    max_query = db.query(func.max(Document.captured_at))
+    if vault_ids is not None:
+        max_query = max_query.filter(Document.vault_id.in_(vault_ids))
+    max_captured_at = max_query.scalar()
+    
+    # Create hashable cache key including vault_ids
+    vault_key = tuple(sorted(str(v) for v in vault_ids)) if vault_ids else None
+    cache_key = (days, max_captured_at, vault_key)
 
     # 2) Return cached if we have it
     cached = _topics_cache.get(cache_key)
@@ -2180,7 +2209,7 @@ def get_topics_with_cache(db: Session, days: int = 30) -> TopicsResponse:
         return cached
 
     # 3) Otherwise compute and store
-    topics_resp = compute_topics(db, days=days)
+    topics_resp = compute_topics(db, days=days, vault_ids=vault_ids)
 
     # Optional: you can clear old entries if you want to keep cache tiny
     # For now we just store and let Python manage the small dict.
@@ -2239,7 +2268,11 @@ def build_topics_hierarchy(resp: TopicsResponse) -> dict:
     return root
 
 
-def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
+def build_hierarchical_topics_for_d3(
+    db: Session, 
+    days: int = 30,
+    vault_ids: list = None
+) -> dict:
     """
     Build a D3-friendly hierarchy from TOPIC_TABLE with 3 levels:
     
@@ -2249,18 +2282,33 @@ def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
     
     IMPORTANT: Only includes topics that have documents within the requested time window.
     Starts from documents, finds their topics, then builds up the ancestor chain.
+    
+    Args:
+        db: Database session
+        days: Number of days to look back for documents
+        vault_ids: List of vault IDs to filter by. If None, returns all (auth disabled mode).
+                   If empty list, returns empty result (user has no vault access).
     """
     from datetime import timedelta
     
     cutoff = datetime.utcnow() - timedelta(days=days)
     
+    # Handle case where user has no vault access
+    if vault_ids is not None and len(vault_ids) == 0:
+        return {
+            "name": "Topics",
+            "time_range_days": days,
+            "children": [],
+            "type": "root"
+        }
+    
+    # Build base query with vault filtering
+    base_query = db.query(Document).filter(Document.captured_at >= cutoff)
+    if vault_ids is not None:
+        base_query = base_query.filter(Document.vault_id.in_(vault_ids))
+    
     # Get documents in the time range with topic assignments
-    docs_with_topics = (
-        db.query(Document)
-        .filter(Document.captured_at >= cutoff)
-        .filter(Document.assigned_topic_id != None)
-        .all()
-    )
+    docs_with_topics = base_query.filter(Document.assigned_topic_id != None).all()
     
     # Group documents by their assigned topic (Level 0)
     docs_by_topic: Dict[UUID, List[Document]] = {}
@@ -2394,12 +2442,14 @@ def build_hierarchical_topics_for_d3(db: Session, days: int = 30) -> dict:
                 root["children"].append(topic_node)
     
     # Also include documents with no topic assignment as "Uncategorized"
-    unassigned_docs = (
+    unassigned_query = (
         db.query(Document)
         .filter(Document.captured_at >= cutoff)
         .filter(Document.assigned_topic_id == None)
-        .all()
     )
+    if vault_ids is not None:
+        unassigned_query = unassigned_query.filter(Document.vault_id.in_(vault_ids))
+    unassigned_docs = unassigned_query.all()
     
     if unassigned_docs:
         uncategorized = {
