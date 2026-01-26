@@ -44,6 +44,39 @@ class ApiKey(Base):
     revoked_at = Column(DateTime, nullable=True)
 
 
+class ExtensionToken(Base):
+    """OAuth-style tokens for browser extension authentication."""
+    __tablename__ = "extension_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # SHA256 hash of (pepper + raw_token). Never store raw tokens.
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+
+    # Device/browser name for display, e.g., "Chrome on Doster-PC"
+    name = Column(Text, nullable=True)
+
+    # Permission scopes (default: ingest only)
+    scopes = Column(Text, nullable=True, default="ingest")  # Comma-separated for simplicity
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+
+class ExtensionVerificationCode(Base):
+    """Temporary verification codes for extension OAuth flow."""
+    __tablename__ = "extension_verification_codes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(Text, nullable=False, index=True)
+    code = Column(String(6), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)  # Set when code is used
+
+
 class Vault(Base):
     """Knowledge container - the unit of sharing, permissions, and billing."""
     __tablename__ = "vaults"

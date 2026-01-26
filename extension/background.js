@@ -20,16 +20,94 @@ async function getApiBase() {
   }
 }
 
-// Get API key from storage
+// Get auth token from storage (extension token first, then legacy API key)
 async function getApiKey() {
   try {
+    // Check extension token first (new OAuth flow)
+    const extResult = await browserAPI.storage.local.get({ vaultbubble_token: "" });
+    if (extResult.vaultbubble_token) {
+      console.log("[VB] Using extension token (OAuth)");
+      return extResult.vaultbubble_token;
+    }
+    
+    // Fall back to legacy API key
     const result = await browserAPI.storage.sync.get({ api_key: "" });
+    if (result.api_key) {
+      console.log("[VB] Using legacy API key");
+    }
     return result.api_key || "";
   } catch (error) {
-    console.error("[VB] Error reading API key:", error);
+    console.error("[VB] Error reading auth token:", error);
     return "";
   }
 }
+
+// Check if extension is connected (has valid token)
+async function isConnected() {
+  try {
+    const extResult = await browserAPI.storage.local.get({ vaultbubble_token: "" });
+    if (extResult.vaultbubble_token) return true;
+    
+    const result = await browserAPI.storage.sync.get({ api_key: "" });
+    return !!result.api_key;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Open the extension connect page
+async function openConnectPage() {
+  const API_BASE = await getApiBase();
+  const connectUrl = `${API_BASE}/extension/connect`;
+  console.log("[VB] Opening connect page:", connectUrl);
+  browserAPI.tabs.create({ url: connectUrl });
+}
+
+// Disconnect (clear extension token)
+async function disconnect() {
+  await browserAPI.storage.local.remove("vaultbubble_token");
+  console.log("[VB] Extension disconnected (token cleared)");
+}
+
+// ---------- OAuth Token Capture ----------
+// Listen for successful extension connection and capture the token
+
+browserAPI.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  // Only check when URL changes and is complete
+  if (changeInfo.status !== "complete" || !tab.url) return;
+  
+  // Get the API base to determine which success URL to look for
+  const API_BASE = await getApiBase();
+  const successUrlPattern = `${API_BASE}/extension/success`;
+  
+  if (tab.url.startsWith(successUrlPattern)) {
+    console.log("[VB] Detected extension success page");
+    
+    try {
+      const url = new URL(tab.url);
+      const token = url.searchParams.get("token");
+      
+      if (token) {
+        console.log("[VB] Captured extension token from success URL");
+        
+        // Store the token
+        await browserAPI.storage.local.set({ vaultbubble_token: token });
+        console.log("[VB] Extension token saved");
+        
+        // Close the tab after a brief delay to show success message
+        setTimeout(() => {
+          browserAPI.tabs.remove(tabId).catch(e => {
+            console.log("[VB] Tab may have been closed manually:", e);
+          });
+        }, 1500);
+      } else {
+        console.warn("[VB] Success page loaded but no token in URL");
+      }
+    } catch (e) {
+      console.error("[VB] Error capturing token:", e);
+    }
+  }
+});
 
 // Authenticated fetch wrapper - adds Authorization header and handles 401 errors
 async function authenticatedFetch(url, options = {}) {
@@ -314,6 +392,45 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) {
     console.log("[VB] Invalid message, returning false");
     return false;
+  }
+
+  // Check connection status
+  if (message.type === "VB_CHECK_CONNECTION") {
+    (async () => {
+      try {
+        const connected = await isConnected();
+        const extResult = await browserAPI.storage.local.get({ vaultbubble_token: "" });
+        const hasExtToken = !!extResult.vaultbubble_token;
+        const apiKeyResult = await browserAPI.storage.sync.get({ api_key: "" });
+        const hasApiKey = !!apiKeyResult.api_key;
+        
+        sendResponse({ 
+          connected, 
+          hasExtToken,
+          hasApiKey,
+          authMethod: hasExtToken ? "oauth" : (hasApiKey ? "api_key" : "none")
+        });
+      } catch (err) {
+        sendResponse({ connected: false, error: err.message });
+      }
+    })();
+    return true; // async response
+  }
+
+  // Open connect page
+  if (message.type === "VB_OPEN_CONNECT") {
+    openConnectPage();
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Disconnect (clear token)
+  if (message.type === "VB_DISCONNECT") {
+    (async () => {
+      await disconnect();
+      sendResponse({ ok: true });
+    })();
+    return true; // async response
   }
 
   // Popup-triggered note capture

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connected! - VaultBubble</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      color: #e5e7eb;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .container {
+      max-width: 400px;
+      width: 100%;
+      padding: 2rem;
+    }
+
+    .card {
+      background: #111827;
+      border-radius: 12px;
+      padding: 2rem;
+      border: 1px solid #1f2937;
+      text-align: center;
+    }
+
+    .success-icon {
+      width: 80px;
+      height: 80px;
+      background: #22c55e;
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 0 auto 1.5rem;
+      animation: scaleIn 0.3s ease-out;
+    }
+
+    @keyframes scaleIn {
+      0% { transform: scale(0); }
+      80% { transform: scale(1.1); }
+      100% { transform: scale(1); }
+    }
+
+    .success-icon svg {
+      width: 40px;
+      height: 40px;
+      stroke: white;
+      stroke-width: 3;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      margin: 0 0 0.75rem 0;
+      color: #22c55e;
+    }
+
+    .message {
+      color: #9ca3af;
+      font-size: 0.95rem;
+      margin-bottom: 1.5rem;
+      line-height: 1.5;
+    }
+
+    .closing-note {
+      color: #6b7280;
+      font-size: 0.85rem;
+      padding-top: 1rem;
+      border-top: 1px solid #1f2937;
+    }
+
+    .manual-close {
+      display: inline-block;
+      margin-top: 1rem;
+      padding: 0.5rem 1.5rem;
+      background: #374151;
+      color: #e5e7eb;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border: none;
+    }
+
+    .manual-close:hover {
+      background: #4b5563;
+    }
+
+    .error-state {
+      display: none;
+    }
+
+    .error-state.show {
+      display: block;
+    }
+
+    .error-state h1 {
+      color: #ef4444;
+    }
+
+    .error-state .error-icon {
+      background: #ef4444;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <!-- Success State -->
+      <div id="success-state">
+        <div class="success-icon">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        
+        <h1>Extension Connected!</h1>
+        <p class="message">
+          Your browser extension is now linked to your VaultBubble account. 
+          You can start saving content right away.
+        </p>
+        
+        <div class="closing-note">
+          <p>This tab will close automatically.</p>
+          <button class="manual-close" onclick="window.close()">Close this tab</button>
+        </div>
+      </div>
+
+      <!-- Error State (if no token in URL) -->
+      <div id="error-state" class="error-state">
+        <div class="success-icon error-icon">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M6 18L18 6M6 6l12 12" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        
+        <h1>Connection Failed</h1>
+        <p class="message">
+          No authentication token found. Please try connecting again from the extension settings.
+        </p>
+        
+        <a href="/extension/connect" class="manual-close">Try Again</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Check if token is present in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+
+    if (!token) {
+      // Show error state
+      document.getElementById('success-state').style.display = 'none';
+      document.getElementById('error-state').classList.add('show');
+    } else {
+      // Token is present - the extension's background script should capture it
+      // and close this tab automatically. If it doesn't (e.g., extension not installed),
+      // show the manual close button.
+      
+      // Give the extension 2 seconds to capture and close, then show manual close more prominently
+      setTimeout(() => {
+        document.querySelector('.closing-note p').textContent = 
+          'If this tab doesn\'t close automatically, click the button below.';
+      }, 2000);
+    }
+  </script>
+</body>
+</html>

@@ -45,13 +45,16 @@ from .auth import (
     get_current_user,
     require_bootstrap_token,
     generate_api_key,
+    generate_extension_token,
     hash_api_key,
     API_KEY_PREFIX,
+    EXTENSION_TOKEN_PREFIX,
     get_user_vault,
     check_vault_access,
     get_user_accessible_vault_ids,
     require_vault_access,
 )
+from .email_service import send_verification_email
 
 
 
@@ -1329,6 +1332,217 @@ def admin_test_extraction(
         "text_preview": result.get("text", "")[:1000],
         "text_length": len(result.get("text", "")),
     }
+
+
+# ---------- Extension OAuth Connect Flow ----------
+
+from .schemas import (
+    ExtensionConnectRequest, ExtensionConnectResponse,
+    ExtensionVerifyRequest, ExtensionTokenInfo, ExtensionTokensListResponse,
+)
+import secrets
+import random
+from datetime import timedelta
+from fastapi.responses import RedirectResponse
+
+
+@app.get("/extension/connect")
+def extension_connect_page():
+    """Serve the extension connect HTML page."""
+    return FileResponse(os.path.join(STATIC_DIR, "extension-connect.html"))
+
+
+@app.post("/extension/connect", response_model=ExtensionConnectResponse)
+def extension_connect_send_code(
+    payload: ExtensionConnectRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Send a verification code to the user's email.
+    
+    This starts the OAuth-style connection flow for the browser extension.
+    """
+    email = (payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+    
+    # Generate a 6-digit code
+    code = "".join([str(random.randint(0, 9)) for _ in range(6)])
+    
+    # Calculate expiry (10 minutes from now)
+    expires_at = datetime.utcnow() + timedelta(minutes=10)
+    
+    # Store the verification code
+    verification = models.ExtensionVerificationCode(
+        email=email,
+        code=code,
+        expires_at=expires_at,
+    )
+    db.add(verification)
+    db.commit()
+    
+    # Send the email
+    if not send_verification_email(email, code):
+        raise HTTPException(
+            status_code=500, 
+            detail="Failed to send verification email. Please try again."
+        )
+    
+    # Mask the email for the response (e.g., j***@example.com)
+    parts = email.split("@")
+    if len(parts[0]) > 2:
+        masked = parts[0][0] + "***" + parts[0][-1] + "@" + parts[1]
+    else:
+        masked = parts[0][0] + "***@" + parts[1]
+    
+    return ExtensionConnectResponse(
+        status="ok",
+        message="Verification code sent to your email",
+        email=masked,
+    )
+
+
+@app.post("/extension/verify")
+def extension_verify_code(
+    payload: ExtensionVerifyRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Verify the code and issue an extension token.
+    
+    On success, redirects to /extension/success?token=xxx
+    """
+    email = (payload.email or "").strip().lower()
+    code = (payload.code or "").strip()
+    
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="Email and code are required")
+    
+    # Find the verification code
+    verification = (
+        db.query(models.ExtensionVerificationCode)
+        .filter(models.ExtensionVerificationCode.email == email)
+        .filter(models.ExtensionVerificationCode.code == code)
+        .filter(models.ExtensionVerificationCode.used_at == None)  # noqa: E711
+        .filter(models.ExtensionVerificationCode.expires_at > datetime.utcnow())
+        .order_by(models.ExtensionVerificationCode.created_at.desc())
+        .first()
+    )
+    
+    if not verification:
+        raise HTTPException(
+            status_code=400, 
+            detail="Invalid or expired verification code"
+        )
+    
+    # Mark code as used
+    verification.used_at = datetime.utcnow()
+    
+    # Get or create user
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        user = models.User(email=email)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    
+    # Generate extension token
+    raw_token = generate_extension_token()
+    token_hash = hash_api_key(raw_token)  # Use same hashing as API keys
+    
+    # Store token
+    ext_token = models.ExtensionToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        name="Browser Extension",  # Can be enhanced with browser info later
+    )
+    db.add(ext_token)
+    db.commit()
+    
+    # Return the token in URL for the extension to capture
+    return RedirectResponse(
+        url=f"/extension/success?token={raw_token}",
+        status_code=302,
+    )
+
+
+@app.get("/extension/success")
+def extension_success_page():
+    """
+    Serve the success page.
+    
+    The token is in the URL query param for the extension to capture.
+    """
+    return FileResponse(os.path.join(STATIC_DIR, "extension-success.html"))
+
+
+@app.get("/extension/tokens", response_model=ExtensionTokensListResponse)
+def list_extension_tokens(
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """
+    List all extension tokens (connected devices) for the current user.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    tokens = (
+        db.query(models.ExtensionToken)
+        .filter(models.ExtensionToken.user_id == user.id)
+        .order_by(models.ExtensionToken.created_at.desc())
+        .all()
+    )
+    
+    return ExtensionTokensListResponse(
+        tokens=[
+            ExtensionTokenInfo(
+                id=str(t.id),
+                name=t.name,
+                created_at=t.created_at,
+                last_used_at=t.last_used_at,
+                revoked_at=t.revoked_at,
+            )
+            for t in tokens
+        ]
+    )
+
+
+@app.post("/extension/tokens/{token_id}/revoke")
+def revoke_extension_token(
+    token_id: str,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """
+    Revoke an extension token (disconnect a device).
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    from uuid import UUID as PyUUID
+    try:
+        token_uuid = PyUUID(token_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid token_id")
+    
+    token = (
+        db.query(models.ExtensionToken)
+        .filter(models.ExtensionToken.id == token_uuid)
+        .filter(models.ExtensionToken.user_id == user.id)
+        .first()
+    )
+    
+    if not token:
+        raise HTTPException(status_code=404, detail="Token not found")
+    
+    if token.revoked_at is None:
+        token.revoked_at = datetime.utcnow()
+        db.commit()
+    
+    return {"status": "ok", "revoked_at": token.revoked_at}
 
 
 if __name__ == "__main__":

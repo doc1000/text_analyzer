@@ -157,6 +157,19 @@ class SummaryConfig:
 
 
 @dataclass
+class EmailConfig:
+    """Configuration for email sending (verification codes)."""
+    smtp_host: str = os.getenv("SMTP_HOST", "")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user: str = os.getenv("SMTP_USER", "")
+    smtp_pass: str = os.getenv("SMTP_PASS", "")
+    from_email: str = os.getenv("SMTP_FROM_EMAIL", "noreply@vaultbubbles.com")
+    from_name: str = os.getenv("SMTP_FROM_NAME", "VaultBubble")
+    # Dev mode: if True, codes are logged to console instead of sent
+    dev_mode: bool = os.getenv("EMAIL_DEV_MODE", "true").lower() in ("1", "true", "yes")
+
+
+@dataclass
 class OllamaConfig:
     base_url: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "llama3.2:3b")
@@ -231,6 +244,7 @@ class Preferences:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     topic_persistence: TopicPersistenceConfig = field(default_factory=TopicPersistenceConfig)
     query: QueryConfig = field(default_factory=QueryConfig)
+    email: EmailConfig = field(default_factory=EmailConfig)
 
 
 # Settings file path - store in the app directory

@@ -235,3 +235,37 @@ class TopicAssignmentRequest(BaseModel):
     topic_id: Optional[str] = None  # UUID of existing topic, or None to clear
     custom_title: Optional[str] = None  # Custom title for new topic
     generate_new: bool = False  # If True, generate a new topic using the model
+
+
+# ---------- Extension OAuth Connect Flow ----------
+
+class ExtensionConnectRequest(BaseModel):
+    """Request to initiate extension connection (send verification email)."""
+    email: str = Field(..., description="User email address")
+
+
+class ExtensionConnectResponse(BaseModel):
+    """Response after sending verification email."""
+    status: str
+    message: str
+    email: str  # Masked email for confirmation
+
+
+class ExtensionVerifyRequest(BaseModel):
+    """Request to verify email code and get extension token."""
+    email: str = Field(..., description="User email address")
+    code: str = Field(..., description="6-digit verification code")
+
+
+class ExtensionTokenInfo(BaseModel):
+    """Information about an extension token."""
+    id: str
+    name: Optional[str] = None
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+
+
+class ExtensionTokensListResponse(BaseModel):
+    """List of user's extension tokens (connected devices)."""
+    tokens: List[ExtensionTokenInfo]

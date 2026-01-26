@@ -8,7 +8,19 @@ const statusEl = document.getElementById("status");
 const radioOptions = document.querySelectorAll(".radio-option");
 const radioInputs = document.querySelectorAll('input[name="endpoint"]');
 
-// API key elements
+// Connection elements
+const connectionStatus = document.getElementById("connectionStatus");
+const connectionIcon = document.getElementById("connectionIcon");
+const connectionTitle = document.getElementById("connectionTitle");
+const connectionDesc = document.getElementById("connectionDesc");
+const connectSection = document.getElementById("connectSection");
+const disconnectSection = document.getElementById("disconnectSection");
+const connectBtn = document.getElementById("connectBtn");
+const disconnectBtn = document.getElementById("disconnectBtn");
+
+// API key elements (collapsible section)
+const toggleApiKeySection = document.getElementById("toggleApiKeySection");
+const apiKeySection = document.getElementById("apiKeySection");
 const apiKeyInput = document.getElementById("apiKeyInput");
 const toggleKeyBtn = document.getElementById("toggleKeyBtn");
 const saveKeyBtn = document.getElementById("saveKeyBtn");
@@ -18,7 +30,72 @@ const keyStatusIcon = document.getElementById("keyStatusIcon");
 const keyStatusText = document.getElementById("keyStatusText");
 const webAppLink = document.getElementById("webAppLink");
 
-// -------- API KEY MANAGEMENT --------
+// -------- CONNECTION MANAGEMENT (OAuth) --------
+
+// Check connection status
+async function checkConnection() {
+  try {
+    const response = await browserAPI.runtime.sendMessage({ type: "VB_CHECK_CONNECTION" });
+    
+    if (response.connected) {
+      // Connected
+      connectionStatus.className = "connection-status connected";
+      connectionIcon.textContent = "🟢";
+      
+      if (response.authMethod === "oauth") {
+        connectionTitle.textContent = "Connected";
+        connectionDesc.textContent = "Your extension is linked to your VaultBubble account";
+        connectSection.style.display = "none";
+        disconnectSection.style.display = "block";
+      } else if (response.authMethod === "api_key") {
+        connectionTitle.textContent = "Connected (API Key)";
+        connectionDesc.textContent = "Using legacy API key authentication";
+        connectSection.style.display = "none";
+        disconnectSection.style.display = "none";
+      }
+    } else {
+      // Not connected
+      connectionStatus.className = "connection-status not-connected";
+      connectionIcon.textContent = "⚪";
+      connectionTitle.textContent = "Not connected";
+      connectionDesc.textContent = "Connect to start saving content to your vault";
+      connectSection.style.display = "block";
+      disconnectSection.style.display = "none";
+    }
+    
+    console.log("[VB Settings] Connection status:", response);
+  } catch (error) {
+    console.error("[VB Settings] Error checking connection:", error);
+  }
+}
+
+// Open connect page
+function openConnect() {
+  browserAPI.runtime.sendMessage({ type: "VB_OPEN_CONNECT" });
+  showStatus("Opening connection page in a new tab...", "success");
+}
+
+// Disconnect
+async function disconnect() {
+  if (!confirm("Are you sure you want to disconnect? You can reconnect anytime.")) {
+    return;
+  }
+  
+  try {
+    await browserAPI.runtime.sendMessage({ type: "VB_DISCONNECT" });
+    showStatus("Disconnected successfully", "success");
+    await checkConnection();
+    
+    setTimeout(() => {
+      statusEl.style.display = "none";
+    }, 2000);
+  } catch (error) {
+    console.error("[VB Settings] Error disconnecting:", error);
+    showStatus("Error disconnecting. Please try again.", "error");
+  }
+}
+
+// -------- API KEY MANAGEMENT (Legacy) --------
 
 // Load API key status (don't show actual key, just hint)
 async function loadApiKey() {
@@ -74,6 +151,7 @@ async function saveApiKey() {
     apiKeyInput.type = "password";
     toggleKeyBtn.textContent = "Show";
     await loadApiKey();
+    await checkConnection();
     
     // Auto-hide success message
     setTimeout(() => {
@@ -98,6 +176,7 @@ async function clearApiKey() {
     
     apiKeyInput.value = "";
     await loadApiKey();
+    await checkConnection();
     
     setTimeout(() => {
       statusEl.style.display = "none";
@@ -116,6 +195,19 @@ function toggleKeyVisibility() {
   } else {
     apiKeyInput.type = "password";
     toggleKeyBtn.textContent = "Show";
+  }
+}
+
+// Toggle collapsible API key section
+function toggleApiKeySectionVisibility() {
+  const icon = toggleApiKeySection.querySelector(".collapse-icon");
+  
+  if (apiKeySection.style.display === "none") {
+    apiKeySection.style.display = "block";
+    icon.classList.add("open");
+  } else {
+    apiKeySection.style.display = "none";
+    icon.classList.remove("open");
   }
 }
 
@@ -184,6 +276,8 @@ function showStatus(message, type) {
   statusEl.style.display = "block";
 }
 
+// -------- EVENT LISTENERS --------
+
 // Handle radio option clicks (for better UX)
 radioOptions.forEach(option => {
   option.addEventListener("click", () => {
@@ -198,6 +292,13 @@ radioOptions.forEach(option => {
     updateWebAppLink();
   });
 });
+
+// Connection buttons
+connectBtn.addEventListener("click", openConnect);
+disconnectBtn.addEventListener("click", disconnect);
+
+// Collapsible API key section
+toggleApiKeySection.addEventListener("click", toggleApiKeySectionVisibility);
 
 // Endpoint save button click
 saveBtn.addEventListener("click", saveSettings);
@@ -214,6 +315,15 @@ apiKeyInput.addEventListener("keydown", (e) => {
   }
 });
 
+// Listen for storage changes (e.g., when token is captured from another tab)
+browserAPI.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes.vaultbubble_token) {
+    console.log("[VB Settings] Token changed, refreshing status");
+    checkConnection();
+  }
+});
+
 // Load all settings on page load
 loadSettings();
 loadApiKey();
+checkConnection();

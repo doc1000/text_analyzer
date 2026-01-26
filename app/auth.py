@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 
 from .db import SessionLocal, get_db
-from .models import ApiKey, User, Vault, VaultMembership
+from .models import ApiKey, ExtensionToken, User, Vault, VaultMembership
 
 
 API_KEY_PREFIX = "vb_live_"
+EXTENSION_TOKEN_PREFIX = "vb_ext_"
 
 
 def _get_pepper() -> str:
@@ -33,6 +34,11 @@ def hash_api_key(raw_key: str) -> str:
 def generate_api_key(prefix: str = API_KEY_PREFIX) -> str:
     # URL-safe, high entropy; shown only once to the user.
     return prefix + secrets.token_urlsafe(32)
+
+
+def generate_extension_token() -> str:
+    """Generate a new extension token with vb_ext_ prefix."""
+    return EXTENSION_TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -66,6 +72,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             or path.startswith("/static")
             or path.startswith("/auth/bootstrap")
             or path.startswith("/admin/")
+            or path.startswith("/extension/")  # Extension OAuth flow endpoints
         ):
             return await call_next(request)
 
@@ -93,12 +100,26 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         # Use an independent sync session inside middleware.
         db = SessionLocal()
         try:
-            row = (
-                db.query(ApiKey)
-                .filter(ApiKey.key_hash == token_hash)
-                .filter(ApiKey.revoked_at == None)  # noqa: E711
-                .first()
-            )
+            row = None
+            is_extension_token = token.startswith(EXTENSION_TOKEN_PREFIX)
+            
+            if is_extension_token:
+                # Check extension_tokens table for vb_ext_* tokens
+                row = (
+                    db.query(ExtensionToken)
+                    .filter(ExtensionToken.token_hash == token_hash)
+                    .filter(ExtensionToken.revoked_at == None)  # noqa: E711
+                    .first()
+                )
+            else:
+                # Check api_keys table for vb_live_* tokens (and other prefixes)
+                row = (
+                    db.query(ApiKey)
+                    .filter(ApiKey.key_hash == token_hash)
+                    .filter(ApiKey.revoked_at == None)  # noqa: E711
+                    .first()
+                )
+            
             if not row:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
@@ -108,7 +129,10 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 
             # Stash minimal identity on request.state; dependency can load full user.
             request.state.user_id = row.user_id
-            request.state.api_key_id = row.id
+            if is_extension_token:
+                request.state.extension_token_id = row.id
+            else:
+                request.state.api_key_id = row.id
         finally:
             db.close()
 

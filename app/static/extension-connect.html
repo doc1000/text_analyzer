@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connect Extension - VaultBubble</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      color: #e5e7eb;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .container {
+      max-width: 400px;
+      width: 100%;
+      padding: 2rem;
+    }
+
+    .card {
+      background: #111827;
+      border-radius: 12px;
+      padding: 2rem;
+      border: 1px solid #1f2937;
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+
+    .logo img {
+      width: 64px;
+      height: 64px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      margin: 0 0 0.5rem 0;
+      text-align: center;
+    }
+
+    .subtitle {
+      color: #9ca3af;
+      font-size: 0.9rem;
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: #9ca3af;
+      margin-bottom: 0.5rem;
+    }
+
+    input[type="email"],
+    input[type="text"] {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      border: 1px solid #374151;
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 1rem;
+    }
+
+    input[type="email"]:focus,
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #6366f1;
+    }
+
+    input[type="email"]::placeholder,
+    input[type="text"]::placeholder {
+      color: #6b7280;
+    }
+
+    .code-input {
+      letter-spacing: 0.5em;
+      text-align: center;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    button {
+      width: 100%;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      background: #6366f1;
+      color: white;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #4f46e5;
+    }
+
+    button:disabled {
+      background: #374151;
+      cursor: not-allowed;
+    }
+
+    .error {
+      color: #ef4444;
+      font-size: 0.85rem;
+      margin-top: 0.5rem;
+      display: none;
+    }
+
+    .error.show {
+      display: block;
+    }
+
+    .success {
+      color: #22c55e;
+      font-size: 0.85rem;
+      margin-top: 0.5rem;
+    }
+
+    .step {
+      display: none;
+    }
+
+    .step.active {
+      display: block;
+    }
+
+    .back-link {
+      display: block;
+      text-align: center;
+      margin-top: 1rem;
+      color: #9ca3af;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .back-link:hover {
+      color: #e5e7eb;
+    }
+
+    .loading {
+      display: inline-block;
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 0.5rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .masked-email {
+      font-weight: 600;
+      color: #e5e7eb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="logo">
+        <img src="/static/icon.svg" alt="VaultBubble">
+      </div>
+      
+      <h1>Connect Extension</h1>
+      <p class="subtitle">Link your browser extension to your VaultBubble account</p>
+
+      <!-- Step 1: Email entry -->
+      <div id="step-email" class="step active">
+        <form id="email-form">
+          <div class="form-group">
+            <label for="email">Email address</label>
+            <input 
+              type="email" 
+              id="email" 
+              name="email" 
+              placeholder="you@example.com"
+              required
+              autocomplete="email"
+            >
+          </div>
+          <button type="submit" id="send-btn">
+            Send verification code
+          </button>
+          <div id="email-error" class="error"></div>
+        </form>
+      </div>
+
+      <!-- Step 2: Code verification -->
+      <div id="step-code" class="step">
+        <p class="success" id="code-sent-msg">
+          Verification code sent to <span id="masked-email" class="masked-email"></span>
+        </p>
+        <form id="code-form">
+          <div class="form-group">
+            <label for="code">Enter 6-digit code</label>
+            <input 
+              type="text" 
+              id="code" 
+              name="code" 
+              class="code-input"
+              maxlength="6"
+              pattern="[0-9]{6}"
+              placeholder="000000"
+              required
+              autocomplete="one-time-code"
+            >
+          </div>
+          <button type="submit" id="verify-btn">
+            Connect extension
+          </button>
+          <div id="code-error" class="error"></div>
+        </form>
+        <span class="back-link" id="back-to-email">Use a different email</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const stepEmail = document.getElementById('step-email');
+    const stepCode = document.getElementById('step-code');
+    const emailForm = document.getElementById('email-form');
+    const codeForm = document.getElementById('code-form');
+    const emailInput = document.getElementById('email');
+    const codeInput = document.getElementById('code');
+    const sendBtn = document.getElementById('send-btn');
+    const verifyBtn = document.getElementById('verify-btn');
+    const emailError = document.getElementById('email-error');
+    const codeError = document.getElementById('code-error');
+    const maskedEmailSpan = document.getElementById('masked-email');
+    const backToEmail = document.getElementById('back-to-email');
+
+    let userEmail = '';
+
+    emailForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      emailError.classList.remove('show');
+      
+      userEmail = emailInput.value.trim();
+      if (!userEmail) return;
+
+      sendBtn.disabled = true;
+      sendBtn.innerHTML = '<span class="loading"></span>Sending...';
+
+      try {
+        const response = await fetch('/extension/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: userEmail })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Failed to send verification code');
+        }
+
+        maskedEmailSpan.textContent = data.email;
+        stepEmail.classList.remove('active');
+        stepCode.classList.add('active');
+        codeInput.focus();
+
+      } catch (err) {
+        emailError.textContent = err.message;
+        emailError.classList.add('show');
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send verification code';
+      }
+    });
+
+    codeForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      codeError.classList.remove('show');
+
+      const code = codeInput.value.trim();
+      if (!code || code.length !== 6) {
+        codeError.textContent = 'Please enter a 6-digit code';
+        codeError.classList.add('show');
+        return;
+      }
+
+      verifyBtn.disabled = true;
+      verifyBtn.innerHTML = '<span class="loading"></span>Verifying...';
+
+      try {
+        const response = await fetch('/extension/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: userEmail, code: code })
+        });
+
+        if (response.redirected) {
+          // Follow the redirect to /extension/success?token=xxx
+          window.location.href = response.url;
+          return;
+        }
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Invalid verification code');
+        }
+
+        // If we get a 302/redirect as JSON somehow, handle it
+        if (data.url) {
+          window.location.href = data.url;
+        }
+
+      } catch (err) {
+        codeError.textContent = err.message;
+        codeError.classList.add('show');
+        verifyBtn.disabled = false;
+        verifyBtn.textContent = 'Connect extension';
+      }
+    });
+
+    backToEmail.addEventListener('click', () => {
+      stepCode.classList.remove('active');
+      stepEmail.classList.add('active');
+      codeInput.value = '';
+      codeError.classList.remove('show');
+    });
+
+    // Auto-focus email input
+    emailInput.focus();
+
+    // Only allow digits in code input
+    codeInput.addEventListener('input', (e) => {
+      e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+    });
+  </script>
+</body>
+</html>

@@ -217,6 +217,85 @@
     a:hover {
       text-decoration: underline;
     }
+    
+    /* Connection status styles */
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+    }
+    
+    .connection-status.connected {
+      background: #d1fae5;
+      border: 1px solid #6ee7b7;
+    }
+    
+    .connection-status.not-connected {
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+    }
+    
+    .status-icon {
+      font-size: 1.5rem;
+    }
+    
+    .status-info {
+      flex: 1;
+    }
+    
+    .status-title {
+      font-weight: 600;
+      color: #111827;
+    }
+    
+    .status-desc {
+      font-size: 0.85rem;
+      color: #6b7280;
+    }
+    
+    .btn-connect {
+      width: 100%;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+    }
+    
+    /* Collapsible section styles */
+    .collapsible {
+      padding: 0;
+    }
+    
+    .collapse-toggle {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 1rem 1.5rem;
+      background: none;
+      border: none;
+      text-align: left;
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: #6b7280;
+    }
+    
+    .collapse-toggle:hover {
+      color: #374151;
+    }
+    
+    .collapse-icon {
+      transition: transform 0.2s;
+    }
+    
+    .collapse-icon.open {
+      transform: rotate(90deg);
+    }
+    
+    .collapse-content {
+      padding: 0 1.5rem 1.5rem;
+    }
   </style>
 </head>
 <body>
@@ -224,26 +303,66 @@
   <p class="subtitle">Configure where your data is stored and processed</p>
   
   <div class="section">
-    <h2>API Key</h2>
-    <div id="keyStatus" class="key-status not-set">
-      <span id="keyStatusIcon">⚠️</span>
-      <span id="keyStatusText">No API key set</span>
+    <h2>Connection</h2>
+    
+    <!-- Connection status -->
+    <div id="connectionStatus" class="connection-status not-connected">
+      <div class="status-icon" id="connectionIcon">⚪</div>
+      <div class="status-info">
+        <div class="status-title" id="connectionTitle">Not connected</div>
+        <div class="status-desc" id="connectionDesc">Connect to start saving content to your vault</div>
+      </div>
     </div>
     
-    <div class="input-group">
-      <input type="password" id="apiKeyInput" placeholder="vb_live_...">
-      <button id="toggleKeyBtn" class="btn-secondary" type="button">Show</button>
+    <!-- Connect button (shown when not connected) -->
+    <div id="connectSection">
+      <button id="connectBtn" class="btn-primary btn-connect" type="button">
+        Connect to VaultBubble
+      </button>
+      <p class="hint">
+        Click to securely link this extension to your VaultBubble account.
+        You'll verify your email and be ready to go in seconds.
+      </p>
     </div>
     
-    <div class="key-actions">
-      <button id="saveKeyBtn" class="btn-primary" type="button">Save Key</button>
-      <button id="clearKeyBtn" class="btn-danger" type="button">Clear Key</button>
+    <!-- Disconnect button (shown when connected via OAuth) -->
+    <div id="disconnectSection" style="display: none;">
+      <button id="disconnectBtn" class="btn-danger" type="button">Disconnect</button>
+      <p class="hint">
+        This will unlink the extension from your account. You can reconnect anytime.
+      </p>
     </div>
+  </div>
+  
+  <!-- Legacy API Key section (collapsible, for advanced users) -->
+  <div class="section collapsible">
+    <button class="collapse-toggle" type="button" id="toggleApiKeySection">
+      <span class="collapse-icon">▶</span>
+      <span>Advanced: Manual API Key</span>
+    </button>
     
-    <p class="hint">
-      Get your API key from the <a href="http://localhost:8000/static/index.html" target="_blank" id="webAppLink">VaultBubble web app</a> Settings page.
-      The key starts with <code>vb_live_</code>.
-    </p>
+    <div id="apiKeySection" class="collapse-content" style="display: none;">
+      <div id="keyStatus" class="key-status not-set">
+        <span id="keyStatusIcon">⚠️</span>
+        <span id="keyStatusText">No API key set</span>
+      </div>
+      
+      <div class="input-group">
+        <input type="password" id="apiKeyInput" placeholder="vb_live_...">
+        <button id="toggleKeyBtn" class="btn-secondary" type="button">Show</button>
+      </div>
+      
+      <div class="key-actions">
+        <button id="saveKeyBtn" class="btn-primary" type="button">Save Key</button>
+        <button id="clearKeyBtn" class="btn-danger" type="button">Clear Key</button>
+      </div>
+      
+      <p class="hint">
+        For advanced users: manually enter an API key from the 
+        <a href="http://localhost:8000/static/index.html" target="_blank" id="webAppLink">VaultBubble web app</a>.
+        The key starts with <code>vb_live_</code>.
+      </p>
+    </div>
   </div>
   
   <div class="section">
