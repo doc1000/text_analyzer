@@ -17,17 +17,6 @@ import numpy as np
 import ast
 from .models import Document, get_or_create_embedding_class
 
-# Lazy-load SpaCy model (defer ~15s of import-time work until first use)
-_nlp_instance = None
-
-def get_nlp():
-    """Get SpaCy NLP instance (lazy-loaded on first call)."""
-    global _nlp_instance
-    if _nlp_instance is None:
-        import spacy  # Lazy import - only loads when first document is ingested
-        _nlp_instance = spacy.load("en_core_web_sm")
-    return _nlp_instance
-
 MAX_CHARS_PER_CHUNK = 1024  # tune this as you like
 MAX_CHARS_PER_SENTENCE = 170  # typical sentence is 75-100, academic 150
 OLLAMA_EMBED_CHAR_LIMIT = int(os.getenv("OLLAMA_EMBED_CHAR_LIMIT", "500"))
@@ -70,42 +59,54 @@ class QueryResponse(BaseModel):
 
 
 def split_long_sentence(sent, max_tokens=MAX_CHARS_PER_CHUNK):
+    """Split a long sentence into smaller chunks."""
     if len(sent) <= max_tokens:
         return [sent]
 
     chunks = []
     offset = 0
     while offset < len(sent):
-        chunk = sent[offset: offset + max_tokens]  # token-based slice
+        chunk = sent[offset: offset + max_tokens]
         chunks.append(chunk)
         offset += max_tokens
     return chunks
 
-def split_doc_sentences(doc, max_tokens=MAX_CHARS_PER_CHUNK):
-    for sent in doc.sents:
-        s = sent.text.strip()
-        if len(s) <= max_tokens:
-            yield s
-        else:
-            # yield sub-spans of the long sentence
-            yield from split_long_sentence(s, max_tokens)
+
+def iter_sentences(text: str):
+    """
+    Iterate over sentences using syntok (fast, no ML model required).
+    Replaces spaCy sentence segmentation for much faster startup.
+    """
+    from syntok import segmenter
+    
+    for paragraph in segmenter.process(text):
+        for sentence in paragraph:
+            yield "".join(token.value for token in sentence).strip()
 
 
 def chunk_text(text: str, max_char: int = MAX_CHARS_PER_CHUNK) -> List[str]:
     """
-    Very simple sentence-based chunker: walks spaCy sentences
-    and groups them up to ~MAX_CHARS_PER_CHUNK.
+    Sentence-based chunker using syntok for segmentation.
+    Groups sentences up to ~MAX_CHARS_PER_CHUNK.
     """
-    doc = get_nlp()(text)
-    doc = list(split_doc_sentences(doc, max_tokens=max_char))
     chunks: List[str] = []
     current: List[str] = []
     current_len = 0
 
-    for s in doc: #.sents:
-        #s = sent.text.strip()
-
+    for s in iter_sentences(text):
         if not s:
+            continue
+
+        # Handle sentences longer than max_char
+        if len(s) > max_char:
+            for sub in split_long_sentence(s, max_char):
+                if current_len + len(sub) > max_char and current:
+                    chunks.append(" ".join(current))
+                    current = [sub]
+                    current_len = len(sub)
+                else:
+                    current.append(sub)
+                    current_len += len(sub) + 1
             continue
 
         if current_len + len(s) > max_char and current:
@@ -115,7 +116,6 @@ def chunk_text(text: str, max_char: int = MAX_CHARS_PER_CHUNK) -> List[str]:
         else:
             current.append(s)
             current_len += len(s) + 1
-        
 
     if current:
         chunks.append(" ".join(current))

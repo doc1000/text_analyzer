@@ -1,6 +1,6 @@
 fastapi
 pydantic
-spacy
+syntok
 uvicorn
 psycopg2-binary
 SQLAlchemy

@@ -17,9 +17,6 @@ WORKDIR /code
 COPY app/requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir -r /code/requirements.txt
 
-# Bake spaCy model
-RUN python -m spacy download en_core_web_sm
-
 # Copy app
 COPY app /code/app
 
