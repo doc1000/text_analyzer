@@ -10,11 +10,69 @@ const btnSave = document.getElementById("btn-save");
 const btnFullPage = document.getElementById("btn-fullpage");
 const statusEl = document.getElementById("status");
 
+// Connection status elements
+const connectionBar = document.getElementById("connection-bar");
+const connText = document.getElementById("conn-text");
+const connectLink = document.getElementById("connect-link");
+
 let currentPageUrl = "";
 let currentPageTitle = "";
+let isConnected = false;
+
+// Check connection status
+async function checkConnection() {
+  try {
+    const response = await browserAPI.runtime.sendMessage({ type: "VB_CHECK_CONNECTION" });
+    
+    isConnected = response.connected;
+    
+    if (response.connected) {
+      connectionBar.className = "connected";
+      connText.textContent = "Connected";
+      connectLink.style.display = "none";
+      
+      // Enable form
+      document.querySelectorAll("input, textarea, button").forEach(el => {
+        if (el.id !== "connect-link") {
+          el.disabled = false;
+        }
+      });
+    } else {
+      connectionBar.className = "not-connected";
+      connText.textContent = "Not connected";
+      connectLink.style.display = "inline";
+      connectLink.textContent = "Connect";
+      
+      // Don't disable form - allow users to try (they'll get auth error)
+    }
+    
+    console.log("[VB popup] Connection status:", response);
+  } catch (error) {
+    console.error("[VB popup] Error checking connection:", error);
+  }
+}
+
+// Open settings page
+function openSettings() {
+  browserAPI.runtime.openOptionsPage();
+}
+
+// Open connect page directly
+function openConnect() {
+  browserAPI.runtime.sendMessage({ type: "VB_OPEN_CONNECT" });
+  window.close();
+}
+
+// Connect link handler
+connectLink.addEventListener("click", (e) => {
+  e.preventDefault();
+  openConnect();
+});
 
 // On load, grab selection from active tab (but DO NOT prefill header)
 document.addEventListener("DOMContentLoaded", () => {
+  // Check connection first
+  checkConnection();
   browserAPI.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
     if (!tabs || !tabs[0]) return;
 

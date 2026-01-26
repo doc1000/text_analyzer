@@ -81,9 +81,75 @@
       font-size: 0.75rem;
       color: #9ca3af;
     }
+    
+    /* Connection status styles */
+    #connection-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.3rem 0.5rem;
+      margin: -0.5rem -0.6rem 0.5rem -0.6rem;
+      font-size: 0.72rem;
+      border-bottom: 1px solid #1f2937;
+    }
+    
+    #connection-bar.connected {
+      background: #064e3b;
+      border-bottom-color: #065f46;
+    }
+    
+    #connection-bar.not-connected {
+      background: #7f1d1d;
+      border-bottom-color: #991b1b;
+    }
+    
+    .conn-status {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    
+    .conn-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    
+    .connected .conn-dot {
+      background: #34d399;
+    }
+    
+    .not-connected .conn-dot {
+      background: #f87171;
+    }
+    
+    #connect-link {
+      color: #fca5a5;
+      font-size: 0.72rem;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    
+    #connect-link:hover {
+      color: #fecaca;
+    }
+    
+    .form-disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
+  <!-- Connection status bar -->
+  <div id="connection-bar" class="not-connected">
+    <div class="conn-status">
+      <span class="conn-dot"></span>
+      <span id="conn-text">Not connected</span>
+    </div>
+    <span id="connect-link">Connect</span>
+  </div>
+
   <h1>VaultBubble Capture</h1>
 
   <label for="vb-header">Header / notes</label>
