@@ -547,9 +547,13 @@ def query_docs(
 
 # Path: /code/app/static inside container
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "Screenshots")
 #print("STATIC DIR:", STATIC_DIR)  # optional debug
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# Mount Screenshots folder for extension install page images
+if os.path.exists(SCREENSHOTS_DIR):
+    app.mount("/Screenshots", StaticFiles(directory=SCREENSHOTS_DIR), name="screenshots")
 
 @app.get("/topics", response_model=TopicsResponse)
 def get_topics(

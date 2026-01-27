@@ -24,6 +24,13 @@ COPY app /code/app
 COPY migrations /code/migrations
 COPY run_migration.py /code/run_migration.py
 
+# Copy extension ZIPs for download
+COPY extension-chrome.zip /code/extension-chrome.zip
+COPY extension-firefox.zip /code/extension-firefox.zip
+
+# Copy Screenshots for install page
+COPY Screenshots /code/Screenshots
+
 # Non-root user
 RUN useradd --create-home --uid 10001 appuser \
   && chown -R appuser:appuser /code

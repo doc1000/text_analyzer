@@ -73,6 +73,8 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             or path.startswith("/auth/bootstrap")
             or path.startswith("/admin/")
             or path.startswith("/extension/")  # Extension OAuth flow endpoints
+            or path.startswith("/download/")  # Extension ZIP downloads
+            or path.startswith("/Screenshots/")  # Screenshot images for docs
         ):
             return await call_next(request)
 

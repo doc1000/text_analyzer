@@ -594,10 +594,6 @@
   <header>
     <h1><img src="/static/icon.svg" alt="V" style="height: 2.6rem; vertical-align: middle; margin-right: -0.3rem; margin-left: -0.2rem;">aultBubble</h1>
     <div class="controls">
-      <div class="tabs">
-        <button id="tabTopics" class="tab-btn active">Topics Map</button>
-      </div>
-
       <div class="add-docs-container">
         <button id="addDocsBtn" class="add-docs-btn">+ Add Documents</button>
         <div id="addDocsDropdown" class="add-docs-dropdown" style="display: none;">
@@ -621,16 +617,10 @@
       <span>Days:</span>
       <input type="number" id="daysInput" value="30" min="1" max="365" />
 
-      <span>Viz:</span>
-      <select id="vizMode">
-        <option value="circles" selected>Circles</option>
-        <!-- option value="multicolor">Multicolored</option-->
-      </select>
-
       <button id="reloadBtn">Reload</button>
+      <div style="flex: 1;"></div>
       <button id="settingsBtn" title="Settings">⚙️</button>
       <span id="headerUserInfo" class="header-user" title="Click to sign in/out">Sign In</span>
-      <span class="hint" id="headerHint">Click big bubbles to zoom · click document bubbles to open</span>
     </div>
   </header>
 
@@ -775,11 +765,11 @@
       <aside id="info-panel">
         <div id="info-panel-resize-handle"></div>
         <h2>Topic Details</h2>
-        <p>Select a topic, subtopic, or document bubble to see more information.</p>
+        <p>Click big bubbles to zoom · click document bubbles to open</p>
         <div id="info-content"></div>
 
         <div id="scope-query-panel">
-          <h3>Ask within this scope</h3>
+          <h3>Ask your Vault</h3>
           <div id="scope-label" class="meta">Scope: All documents</div>
           <textarea id="scopeQueryInput" placeholder="Ask questions or for summaries about topics in this bubble.&#10;Can be specific like names or confirm numbers... or more general"></textarea>
           <div class="scope-query-controls">
@@ -1441,7 +1431,7 @@
 
       // Initial zoom
       zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
-      infoContent.innerHTML = "<p>Click a topic bubble to see details. Zoom in to see subtopics.</p>";
+      infoContent.innerHTML = "";
       
       // Hide all background rectangles initially - they only appear on zoom out
       labelRects
@@ -1466,7 +1456,7 @@
             this.style.display = d.depth === 1 ? "inline" : "none";
           });
 
-        infoContent.innerHTML = "<p>Click a topic, subtopic, or document bubble to see details.</p>";
+        infoContent.innerHTML = "";
 
         // Reset scope to all documents but keep query results visible
         setScopeForNode(null);
@@ -1512,7 +1502,7 @@
       }
 
       // Default top_k for scoped queries
-      const topK = 5;
+      const topK = 10;
 
       // Clear previous results
       if (scopeAnswerContainer) {
