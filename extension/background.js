@@ -3,7 +3,6 @@
 const browserAPI = typeof browser !== "undefined" ? browser : chrome;
 
 console.log("[VB] Background script loaded");
-console.log("[VB] Browser API:", typeof browserAPI !== "undefined" ? "available" : "missing");
 
 // Get API endpoint from storage (defaults to cloud)
 async function getApiBase() {
@@ -145,19 +144,12 @@ async function authenticatedFetch(url, options = {}) {
 async function analyzeAndIngest(tab) {
   console.log("[VB] analyzeAndIngest for tab", tab.id);
   console.log("[VB] Tab URL:", tab.url);
-  console.log("[VB] Tab title:", tab.title);
 
   try {
     let pageData = null;
     let text = "";
     let pdfToParseUrl = null;
     let linkedPdfUrls = [];
-    
-    // Ensure we have a valid tab URL
-    if (!tab.url) {
-      console.error("[VB] No tab URL available!");
-      return;
-    }
     
     // Check if current tab is a direct PDF URL (content script might not work on PDFs)
     const isDirectPdf = tab.url.match(/\/pdf\//) || 
@@ -179,7 +171,18 @@ async function analyzeAndIngest(tab) {
       }
     }
     
-    // Try to get data from content script (may fail on PDF pages)
+    // 1) Inject content script if needed (activeTab permission)
+    try {
+      await browserAPI.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content-script.js"]
+      });
+    } catch (e) {
+      // Content script may already be injected, or tab may not be accessible (e.g., PDF pages)
+      console.log("[VB] Content script injection note:", e.message);
+    }
+
+    // 2) Try to get data from content script (may fail on PDF pages)
     try {
       pageData = await browserAPI.tabs.sendMessage(tab.id, {
         type: "collect-text"
@@ -233,7 +236,6 @@ async function analyzeAndIngest(tab) {
         result: { captured: true }
       });
     } catch (e) {
-      // Ignore if we can't send message (e.g., PDF page) - this is expected
       console.log("[VB] Could not show result overlay (expected on PDF pages):", e.message);
     }
 
@@ -272,7 +274,6 @@ async function analyzeAndIngest(tab) {
     } else {
       const ingestResult = await ingestRes.json().catch(() => null);
       console.log("[VB] ingest success:", ingestResult);
-      console.log("[VB] PDFs parsed:", ingestResult?.pdfs_parsed || 0);
     }
   } catch (e) {
     console.error("[VB] analyzeAndIngest exception:", e);
@@ -290,19 +291,13 @@ async function analyzeAndIngest(tab) {
 // Toolbar icon click = full-page capture
 const actionAPI = browserAPI.action || browserAPI.browserAction;
 
-if (actionAPI && actionAPI.onClicked) {
-  actionAPI.onClicked.addListener(async (tab) => {
-    console.log("[VB] Icon clicked on tab", tab.id);
-    console.log("[VB] Tab URL:", tab.url);
-    await analyzeAndIngest(tab);
-  });
-  console.log("[VB] Icon click listener registered");
-} else {
-  console.log("[VB] Icon click listener not available (popup may be defined)");
-}
+actionAPI.onClicked.addListener(async (tab) => {
+  console.log("[VB] Icon clicked on tab", tab.id);
+  await analyzeAndIngest(tab);
+});
 
 
-// ---------------- CONTEXT MENU: QUICK “SAVE SELECTION” ---------------- //
+// ---------------- CONTEXT MENU: QUICK "SAVE SELECTION" ---------------- //
 
 browserAPI.runtime.onInstalled.addListener(() => {
   try {
@@ -320,6 +315,16 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== "vb-save-selection" || !tab || !tab.id) return;
 
   try {
+    // Inject content script if needed (activeTab permission)
+    try {
+      await browserAPI.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content-script.js"]
+      });
+    } catch (e) {
+      console.log("[VB] Content script injection note:", e.message);
+    }
+
     // Ask content script in that tab for selection + page info
     const response = await browserAPI.tabs.sendMessage(tab.id, {
       type: "VB_GET_SELECTION_CONTEXT"
@@ -377,12 +382,7 @@ browserAPI.contextMenus.onClicked.addListener(async (info, tab) => {
 // ---------------- POPUP-DRIVEN NOTE + FULL PAGE CAPTURE ---------------- //
 
 browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("[VB] Message received:", message?.type);
-  
-  if (!message || !message.type) {
-    console.log("[VB] Invalid message, returning false");
-    return false;
-  }
+  if (!message || !message.type) return false;
 
   // Check connection status
   if (message.type === "VB_CHECK_CONNECTION") {
@@ -423,9 +423,41 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async response
   }
 
+  // Popup requesting selection from active tab
+  if (message.type === "VB_POPUP_GET_SELECTION") {
+    const tabId = message.tabId;
+    
+    (async () => {
+      try {
+        // Inject content script if needed (activeTab permission)
+        try {
+          await browserAPI.scripting.executeScript({
+            target: { tabId },
+            files: ["content-script.js"]
+          });
+          // Small delay to ensure content script is ready
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (e) {
+          console.log("[VB] Content script injection note:", e.message);
+        }
+
+        // Get selection from content script
+        const response = await browserAPI.tabs.sendMessage(tabId, {
+          type: "VB_GET_SELECTION_CONTEXT"
+        });
+        
+        sendResponse(response || {});
+      } catch (e) {
+        console.error("[VB] Error getting selection for popup:", e);
+        sendResponse({});
+      }
+    })();
+    
+    return true; // async response
+  }
+
   // Popup-triggered note capture
   if (message.type === "VB_CAPTURE_SNIPPET") {
-    console.log("[VB] Handling VB_CAPTURE_SNIPPET");
     const {
       mode,          // "note"
       url,
@@ -514,33 +546,16 @@ browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Popup-triggered full-page capture
   if (message.type === "VB_CAPTURE_FULL_PAGE") {
-    console.log("[VB] Handling VB_CAPTURE_FULL_PAGE");
-    try {
-      browserAPI.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-        try {
-          if (tabs && tabs[0]) {
-            console.log("[VB] Popup requested full-page capture for tab", tabs[0].id);
-            console.log("[VB] Tab URL:", tabs[0].url);
-            await analyzeAndIngest(tabs[0]);
-          } else {
-            console.error("[VB] No active tab found");
-          }
-          sendResponse({ ok: true });
-        } catch (e) {
-          console.error("[VB] Error in full-page capture:", e);
-          sendResponse({ ok: false, error: String(e) });
-        }
-      });
-    } catch (e) {
-      console.error("[VB] Error querying tabs:", e);
-      sendResponse({ ok: false, error: String(e) });
-    }
+    browserAPI.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      if (tabs && tabs[0]) {
+        console.log("[VB] Popup requested full-page capture for tab", tabs[0].id);
+        await analyzeAndIngest(tabs[0]);
+      }
+      sendResponse({ ok: true });
+    });
 
     return true; // async
   }
 
-  console.log("[VB] Unknown message type:", message.type);
   return false;
 });
-
-console.log("[VB] Message listener registered");

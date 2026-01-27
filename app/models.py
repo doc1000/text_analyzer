@@ -72,9 +72,10 @@ class ExtensionVerificationCode(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(Text, nullable=False, index=True)
     code = Column(String(6), nullable=False)
+    purpose = Column(Text, nullable=False, default="user")  # 'user' or 'reviewer'
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
-    used_at = Column(DateTime, nullable=True)  # Set when code is used
+    used_at = Column(DateTime, nullable=True)  # Set when code is used (not for reviewer codes)
 
 
 class Vault(Base):

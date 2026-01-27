@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import List
 import numpy as np
 from sqlalchemy.orm import Session
-from sqlalchemy import asc, func, text
+from sqlalchemy import asc, func, or_, text
 from sqlalchemy.exc import IntegrityError
 #Internal imports
 from .db import get_db, EMBED_TABLE, SENTENCE_TABLE, TOPIC_TABLE, DOCUMENT_TABLE
@@ -1561,12 +1561,19 @@ def extension_verify_code(
         raise HTTPException(status_code=400, detail="Email and code are required")
     
     # Find the verification code
+    # For 'user' codes: enforce single-use (used_at must be None)
+    # For 'reviewer' codes: allow multi-use (skip used_at check)
     verification = (
         db.query(models.ExtensionVerificationCode)
         .filter(models.ExtensionVerificationCode.email == email)
         .filter(models.ExtensionVerificationCode.code == code)
-        .filter(models.ExtensionVerificationCode.used_at == None)  # noqa: E711
         .filter(models.ExtensionVerificationCode.expires_at > datetime.utcnow())
+        .filter(
+            or_(
+                models.ExtensionVerificationCode.purpose == 'reviewer',  # Reviewer codes can be reused
+                models.ExtensionVerificationCode.used_at == None  # noqa: E711 - User codes must be unused
+            )
+        )
         .order_by(models.ExtensionVerificationCode.created_at.desc())
         .first()
     )
@@ -1577,8 +1584,9 @@ def extension_verify_code(
             detail="Invalid or expired verification code"
         )
     
-    # Mark code as used
-    verification.used_at = datetime.utcnow()
+    # Mark code as used (only for normal user codes, not reviewer codes)
+    if verification.purpose == 'user':
+        verification.used_at = datetime.utcnow()
     
     # Get or create user
     user = db.query(models.User).filter(models.User.email == email).first()

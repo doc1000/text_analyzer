@@ -1,3 +1,8 @@
+// VaultBubble content script (Firefox + Chrome compatible)
+const browserAPI = typeof browser !== "undefined" ? browser : chrome;
+
+console.log("[VB] content script loaded", location.href);
+
 function extractPageText() {
   let text = document.body ? (document.body.innerText || "") : "";
   
@@ -95,7 +100,7 @@ function extractPageText() {
 }
 
 // Handle analyzer-related messages + overlay
-browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browserAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[VB CS] message received:", message);
   
   if (message && message.type === "VB_GET_SELECTION_CONTEXT") {
@@ -259,7 +264,3 @@ function showErrorOverlay(overlay, errorText) {
 
   overlay.append(header, body);
 }
-
-
-
-

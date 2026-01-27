@@ -1,0 +1,34 @@
+Privacy Policy for VaultBubble
+
+Last Updated: January 2026
+
+VaultBubble is committed to protecting your privacy. This policy explains what data we collect and how it's used.
+
+Data Collection
+VaultBubble collects the following when you use the extension:
+- Website Content: Text from web pages you capture, including selected text, full page content, URLs, and page titles
+- User-Entered Data: Notes, headers, and tags you add when capturing content
+- Web History: URLs and page titles of pages you capture (only when you explicitly save content)
+- User Activity: Button clicks and context menu selections used to trigger captures
+
+How We Use Your Data
+Captured data is sent to your configured vault server—either our cloud service (vaultbubbles.com) or your local server. Data is processed to organize content into topics, enable search functionality, and generate visualizations of your knowledge base.
+
+Data Storage
+Cloud Service: Data is stored on our secure servers with encryption at rest and in transit.
+Local Server: All data remains on your computer and never leaves your device.
+You control where your data is stored and can delete captured content at any time.
+
+Data Sharing
+VaultBubble does not sell or share your data with third parties, use your data for advertising or marketing, or access your data for purposes other than providing the service.
+
+Security
+Cloud data is encrypted in transit (HTTPS) and at rest with secure authentication. Local data security depends on your device configuration.
+
+Your Rights
+You have full control over your data: capture only the content you choose, delete captured content at any time, export your data, switch between cloud and local storage, and disable the extension at any time.
+
+Changes to This Policy
+We may update this privacy policy. Changes will be posted here with an updated date.
+
+For questions about this privacy policy, please contact support@vaultbubbles.com.
