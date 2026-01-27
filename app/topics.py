@@ -1047,6 +1047,13 @@ def _incremental_topic_assignment(
     from .mmr import compute_centroid
     from collections import defaultdict
     
+    # Run deduplication for each vault before processing
+    if vault_ids:
+        for vault_id in vault_ids:
+            dedupe_result = deduplicate_vault_documents(db, vault_id)
+            if dedupe_result["documents_deleted"]:
+                print(f"[INCREMENTAL] Pre-processing: removed {len(dedupe_result['documents_deleted'])} duplicate documents from vault {vault_id}")
+    
     min_similarity = 1.0 - agglom_cfg.level_0_distance
     min_docs_for_clustering = clustering_cfg.min_docs_for_clustering
     
@@ -1595,6 +1602,184 @@ def dedupe_documents_semantic(
     return kept_docs
 
 
+# ---------- Document deduplication (with DB deletion) ----------
+
+def select_document_to_keep(group: List[Document]) -> Document:
+    """
+    Select the best document to keep from a group of duplicates.
+    
+    Priority:
+    1. Has assigned topic (user has curated/engaged with it)
+    2. Latest captured_at timestamp
+    
+    Args:
+        group: List of duplicate documents
+        
+    Returns:
+        The document to keep
+    """
+    if len(group) == 1:
+        return group[0]
+    
+    # Priority 1: Documents with assigned topics
+    with_topic = [d for d in group if d.assigned_topic_id is not None]
+    if with_topic:
+        # Among those with topics, keep the latest
+        return max(with_topic, key=lambda d: d.captured_at or datetime.min)
+    
+    # Priority 2: Latest by captured_at
+    return max(group, key=lambda d: d.captured_at or datetime.min)
+
+
+def deduplicate_vault_documents(
+    db: Session,
+    vault_id: UUID,
+    similarity_threshold: float = 0.92,
+) -> dict:
+    """
+    Find and remove duplicate documents within a single vault.
+    Called at the start of topic computation for each vault.
+    
+    Two-phase deduplication:
+    1. URL duplicates: Group by canonical URL, keep best per group
+    2. Semantic duplicates: Use embeddings to find similar content
+    
+    Args:
+        db: Database session
+        vault_id: The vault to deduplicate
+        similarity_threshold: Cosine similarity threshold for semantic duplicates (default 0.92)
+    
+    Returns:
+        {
+            "vault_id": str,
+            "url_duplicates_removed": int,
+            "semantic_duplicates_removed": int,
+            "documents_deleted": List[str]
+        }
+    """
+    result = {
+        "vault_id": str(vault_id),
+        "url_duplicates_removed": 0,
+        "semantic_duplicates_removed": 0,
+        "documents_deleted": [],
+    }
+    
+    # Fetch all documents in this vault
+    docs = (
+        db.query(Document)
+        .filter(Document.vault_id == vault_id)
+        .order_by(Document.captured_at.desc())
+        .all()
+    )
+    
+    if len(docs) <= 1:
+        return result
+    
+    # Only deduplicate full page captures (have extracted_text).
+    # Notes (no extracted_text) are intentionally excluded - users create multiple
+    # notes from the same page and expect them all to be kept.
+    # Full captures may be duplicated accidentally when users aren't sure if 
+    # they've already captured a page.
+    # NOTE: extracted_text is set by trafilatura during ingest for mode="page" captures.
+    full_captures = [d for d in docs if d.extracted_text]
+    notes = [d for d in docs if not d.extracted_text]
+    
+    if len(full_captures) <= 1:
+        return result  # Nothing to deduplicate
+    
+    print(f"[DEDUPE] Vault {vault_id}: checking {len(full_captures)} full captures for duplicates (skipping {len(notes)} notes)")
+    
+    # Phase 1: URL-based deduplication (full captures only)
+    canonical_groups: Dict[str, List[Document]] = {}
+    for d in full_captures:
+        cu = canonicalize_url(d.url or "")
+        canonical_groups.setdefault(cu, []).append(d)
+    
+    url_duplicates_to_delete: List[UUID] = []
+    docs_after_url_dedupe: List[Document] = []
+    
+    for cu, group in canonical_groups.items():
+        if len(group) > 1:
+            # Multiple docs with same canonical URL - keep the best one
+            keeper = select_document_to_keep(group)
+            docs_after_url_dedupe.append(keeper)
+            for d in group:
+                if d.id != keeper.id:
+                    url_duplicates_to_delete.append(d.id)
+                    print(f"[DEDUPE] URL duplicate: keeping {keeper.id} (topic={keeper.assigned_topic_id is not None}), deleting {d.id}")
+        else:
+            docs_after_url_dedupe.append(group[0])
+    
+    # Delete URL duplicates
+    if url_duplicates_to_delete:
+        db.query(Document).filter(Document.id.in_(url_duplicates_to_delete)).delete(synchronize_session=False)
+        result["url_duplicates_removed"] = len(url_duplicates_to_delete)
+        result["documents_deleted"].extend([str(uid) for uid in url_duplicates_to_delete])
+    
+    # Phase 2: Semantic deduplication (on remaining docs)
+    if len(docs_after_url_dedupe) <= 1:
+        db.commit()
+        return result
+    
+    # Get embeddings for remaining documents
+    doc_ids = [d.id for d in docs_after_url_dedupe]
+    doc_embeddings = get_document_embeddings_from_table(db, doc_ids)
+    
+    # Only process docs that have embeddings
+    docs_with_embeddings = [d for d in docs_after_url_dedupe if d.id in doc_embeddings]
+    
+    if len(docs_with_embeddings) <= 1:
+        db.commit()
+        return result
+    
+    # Find semantic duplicates using embedding similarity
+    # Sort by priority: topic assignment first, then by captured_at
+    def doc_priority(d: Document):
+        has_topic = 1 if d.assigned_topic_id is not None else 0
+        captured = d.captured_at or datetime.min
+        return (has_topic, captured)
+    
+    docs_sorted = sorted(docs_with_embeddings, key=doc_priority, reverse=True)
+    
+    kept_ids: List[UUID] = []
+    semantic_duplicates_to_delete: List[UUID] = []
+    cosine_similarity = get_cosine_similarity()
+    
+    for i, d_i in enumerate(docs_sorted):
+        if d_i.id in semantic_duplicates_to_delete:
+            continue
+        
+        kept_ids.append(d_i.id)
+        v_i = doc_embeddings[d_i.id].reshape(1, -1)
+        
+        # Compare to all later docs in the priority-sorted list
+        for j in range(i + 1, len(docs_sorted)):
+            d_j = docs_sorted[j]
+            if d_j.id in semantic_duplicates_to_delete:
+                continue
+            
+            v_j = doc_embeddings[d_j.id].reshape(1, -1)
+            sim = float(cosine_similarity(v_i, v_j)[0, 0])
+            
+            if sim >= similarity_threshold:
+                semantic_duplicates_to_delete.append(d_j.id)
+                print(f"[DEDUPE] Semantic duplicate (sim={sim:.3f}): keeping {d_i.id}, deleting {d_j.id}")
+    
+    # Delete semantic duplicates
+    if semantic_duplicates_to_delete:
+        db.query(Document).filter(Document.id.in_(semantic_duplicates_to_delete)).delete(synchronize_session=False)
+        result["semantic_duplicates_removed"] = len(semantic_duplicates_to_delete)
+        result["documents_deleted"].extend([str(uid) for uid in semantic_duplicates_to_delete])
+    
+    db.commit()
+    
+    total_removed = result["url_duplicates_removed"] + result["semantic_duplicates_removed"]
+    if total_removed > 0:
+        print(f"[DEDUPE] Vault {vault_id}: removed {total_removed} duplicates ({result['url_duplicates_removed']} URL, {result['semantic_duplicates_removed']} semantic)")
+    
+    return result
+
+
 # ---------- High-level topics computation ----------
 
 def compute_hierarchical_topics(
@@ -1627,6 +1812,13 @@ def compute_hierarchical_topics(
     
     cfg = PREFERENCES.clustering
     agglom_cfg = PREFERENCES.agglomerative
+    
+    # 0) Run deduplication for each vault before processing
+    if vault_ids:
+        for vault_id in vault_ids:
+            dedupe_result = deduplicate_vault_documents(db, vault_id)
+            if dedupe_result["documents_deleted"]:
+                print(f"[TOPICS] Pre-processing: removed {len(dedupe_result['documents_deleted'])} duplicate documents from vault {vault_id}")
     
     # 1) Select documents based on mode
     cutoff = datetime.utcnow() - timedelta(days=days)
