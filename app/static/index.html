@@ -106,6 +106,83 @@
       background: #1f2937;
     }
 
+    /* Add Documents Dropdown */
+    .add-docs-container {
+      position: relative;
+    }
+
+    .add-docs-btn {
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      border: none;
+      color: white;
+      font-weight: 500;
+      padding: 0.35rem 0.8rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .add-docs-btn:hover {
+      background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+
+    .add-docs-dropdown {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      min-width: 260px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      overflow: hidden;
+    }
+
+    .dropdown-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      text-decoration: none;
+      color: #e5e7eb;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .dropdown-item:hover:not(.disabled) {
+      background: #374151;
+    }
+
+    .dropdown-item.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .dropdown-icon {
+      font-size: 1.2rem;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .dropdown-item div {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .dropdown-item strong {
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .dropdown-hint {
+      font-size: 0.75rem;
+      color: #9ca3af;
+    }
+
     .hint {
       font-size: 0.75rem;
       color: #9ca3af;
@@ -519,6 +596,26 @@
     <div class="controls">
       <div class="tabs">
         <button id="tabTopics" class="tab-btn active">Topics Map</button>
+      </div>
+
+      <div class="add-docs-container">
+        <button id="addDocsBtn" class="add-docs-btn">+ Add Documents</button>
+        <div id="addDocsDropdown" class="add-docs-dropdown" style="display: none;">
+          <a href="/static/install-extension.html" class="dropdown-item">
+            <span class="dropdown-icon">🧩</span>
+            <div>
+              <strong>Install Browser Extension</strong>
+              <span class="dropdown-hint">Capture web pages as you browse</span>
+            </div>
+          </a>
+          <div class="dropdown-item disabled">
+            <span class="dropdown-icon">📁</span>
+            <div>
+              <strong>Upload Files</strong>
+              <span class="dropdown-hint">Coming soon</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <span>Days:</span>
@@ -1733,6 +1830,32 @@
 
     // Load settings on page load
     loadSettings();
+
+    // -------- ADD DOCUMENTS DROPDOWN --------
+    const addDocsBtn = document.getElementById("addDocsBtn");
+    const addDocsDropdown = document.getElementById("addDocsDropdown");
+
+    if (addDocsBtn && addDocsDropdown) {
+      addDocsBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = addDocsDropdown.style.display === "block";
+        addDocsDropdown.style.display = isOpen ? "none" : "block";
+      });
+
+      // Close dropdown when clicking outside
+      document.addEventListener("click", (e) => {
+        if (!addDocsBtn.contains(e.target) && !addDocsDropdown.contains(e.target)) {
+          addDocsDropdown.style.display = "none";
+        }
+      });
+
+      // Close dropdown when pressing Escape
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          addDocsDropdown.style.display = "none";
+        }
+      });
+    }
 
     // -------- LOGIN MODAL HANDLING --------
     const loginModal = document.getElementById("loginModal");

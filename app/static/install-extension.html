@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Install Browser Extension - VaultBubble</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      color: #e5e7eb;
+      min-height: 100vh;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    header h1 {
+      font-size: 1.3rem;
+      margin: 0;
+    }
+
+    header h1 a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    header h1 a:hover {
+      color: #60a5fa;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    .page-title {
+      font-size: 1.8rem;
+      margin: 0 0 0.5rem 0;
+      color: #f8fafc;
+    }
+
+    .page-subtitle {
+      color: #9ca3af;
+      font-size: 1rem;
+      margin: 0 0 2rem 0;
+    }
+
+    .notice-banner {
+      background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%);
+      border: 1px solid #3b82f6;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 2rem;
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+
+    .notice-icon {
+      font-size: 1.2rem;
+      flex-shrink: 0;
+    }
+
+    .notice-text {
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .notice-text strong {
+      color: #60a5fa;
+    }
+
+    /* Browser Tabs */
+    .browser-tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 0;
+    }
+
+    .browser-tab {
+      flex: 1;
+      padding: 0.75rem 1.5rem;
+      border: 1px solid #374151;
+      background: #111827;
+      color: #9ca3af;
+      font-size: 0.95rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+    }
+
+    .browser-tab:first-child {
+      border-radius: 8px 0 0 0;
+    }
+
+    .browser-tab:last-child {
+      border-radius: 0 8px 0 0;
+      border-left: none;
+    }
+
+    .browser-tab:hover:not(.active) {
+      background: #1f2937;
+      color: #e5e7eb;
+    }
+
+    .browser-tab.active {
+      background: #1f2937;
+      color: #f8fafc;
+      border-bottom-color: #1f2937;
+    }
+
+    .browser-tab-icon {
+      font-size: 1.1rem;
+    }
+
+    /* Tab Content */
+    .tab-content {
+      display: none;
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      padding: 1.5rem;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Download Button */
+    .download-section {
+      background: #111827;
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .download-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .download-title {
+      font-weight: 500;
+      color: #f8fafc;
+    }
+
+    .download-hint {
+      font-size: 0.8rem;
+      color: #9ca3af;
+    }
+
+    .download-btn {
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      border: none;
+      color: white;
+      font-weight: 500;
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+    }
+
+    .download-btn:hover {
+      background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+
+    /* Steps */
+    .steps-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #f8fafc;
+      margin: 0 0 1rem 0;
+    }
+
+    .step {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .step:last-child {
+      margin-bottom: 0;
+    }
+
+    .step-number {
+      width: 28px;
+      height: 28px;
+      background: #374151;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #60a5fa;
+      flex-shrink: 0;
+    }
+
+    .step-content {
+      flex: 1;
+      padding-top: 3px;
+    }
+
+    .step-title {
+      font-weight: 500;
+      color: #f8fafc;
+      margin: 0 0 0.3rem 0;
+    }
+
+    .step-desc {
+      font-size: 0.85rem;
+      color: #9ca3af;
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    .step-desc code {
+      background: #374151;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-family: "SF Mono", "Consolas", monospace;
+      font-size: 0.8rem;
+      color: #60a5fa;
+    }
+
+    /* Getting Started Section */
+    .section-divider {
+      height: 1px;
+      background: #374151;
+      margin: 2rem 0;
+    }
+
+    .getting-started {
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-top: 2rem;
+    }
+
+    .getting-started h3 {
+      font-size: 1.1rem;
+      margin: 0 0 1rem 0;
+      color: #f8fafc;
+    }
+
+    .tip {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      padding: 1rem;
+      background: #111827;
+      border-radius: 6px;
+    }
+
+    .tip:last-child {
+      margin-bottom: 0;
+    }
+
+    .tip-icon {
+      font-size: 1.2rem;
+      flex-shrink: 0;
+    }
+
+    .tip-content h4 {
+      font-size: 0.9rem;
+      font-weight: 500;
+      margin: 0 0 0.3rem 0;
+      color: #f8fafc;
+    }
+
+    .tip-content p {
+      font-size: 0.85rem;
+      color: #9ca3af;
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    /* Help Section */
+    .help-section {
+      margin-top: 2rem;
+      text-align: center;
+      padding: 1.5rem;
+      background: #111827;
+      border-radius: 8px;
+    }
+
+    .help-section p {
+      color: #9ca3af;
+      font-size: 0.9rem;
+      margin: 0;
+    }
+
+    .help-section a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+
+    .help-section a:hover {
+      text-decoration: underline;
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      .container {
+        padding: 1.5rem 1rem;
+      }
+
+      .download-section {
+        flex-direction: column;
+        align-items: stretch;
+        text-align: center;
+      }
+
+      .download-btn {
+        justify-content: center;
+      }
+
+      .browser-tab {
+        padding: 0.6rem 1rem;
+        font-size: 0.85rem;
+      }
+
+      .browser-tab span:last-child {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="/"><img src="/static/icon.svg" alt="V" style="height: 2.6rem; vertical-align: middle; margin-right: -0.3rem; margin-left: -0.2rem;">aultBubble</a></h1>
+  </header>
+
+  <div class="container">
+    <h1 class="page-title">Install Browser Extension</h1>
+    <p class="page-subtitle">Capture web pages, articles, and highlighted text directly to your vault.</p>
+
+    <div class="notice-banner">
+      <span class="notice-icon">ℹ️</span>
+      <div class="notice-text">
+        <strong>Temporary Installation</strong> — While we finalize our listing on the Chrome Web Store and Firefox Add-ons, you can install the extension manually using the steps below. No technical skills required!
+      </div>
+    </div>
+
+    <!-- Browser Tabs -->
+    <div class="browser-tabs">
+      <button class="browser-tab active" data-browser="chrome">
+        <span class="browser-tab-icon">🌐</span>
+        <span>Google Chrome</span>
+      </button>
+      <button class="browser-tab" data-browser="firefox">
+        <span class="browser-tab-icon">🦊</span>
+        <span>Firefox</span>
+      </button>
+    </div>
+
+    <!-- Chrome Instructions -->
+    <div class="tab-content active" id="chrome-content">
+      <div class="download-section">
+        <div class="download-info">
+          <span class="download-title">VaultBubble for Chrome</span>
+          <span class="download-hint">ZIP file — extract before installing</span>
+        </div>
+        <a href="/download/extension-chrome.zip" class="download-btn">
+          <span>⬇️</span>
+          Download Extension
+        </a>
+      </div>
+
+      <h4 class="steps-title">Installation Steps</h4>
+
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <p class="step-title">Download and extract the ZIP file</p>
+          <p class="step-desc">Click the download button above, then extract/unzip the downloaded file to a folder you'll remember.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <p class="step-title">Open Chrome Extensions page</p>
+          <p class="step-desc">Type <code>chrome://extensions</code> in your address bar and press Enter.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <p class="step-title">Enable Developer Mode</p>
+          <p class="step-desc">Find the "Developer mode" toggle in the top-right corner and turn it on.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <p class="step-title">Load the extension</p>
+          <p class="step-desc">Click "Load unpacked" and select the folder where you extracted the extension files.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+          <p class="step-title">Pin the extension (optional)</p>
+          <p class="step-desc">Click the puzzle piece icon in Chrome's toolbar, then click the pin icon next to VaultBubble for quick access.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Firefox Instructions -->
+    <div class="tab-content" id="firefox-content">
+      <div class="download-section">
+        <div class="download-info">
+          <span class="download-title">VaultBubble for Firefox</span>
+          <span class="download-hint">ZIP file — extract before installing</span>
+        </div>
+        <a href="/download/extension-firefox.zip" class="download-btn">
+          <span>⬇️</span>
+          Download Extension
+        </a>
+      </div>
+
+      <h4 class="steps-title">Installation Steps</h4>
+
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <p class="step-title">Download and extract the ZIP file</p>
+          <p class="step-desc">Click the download button above, then extract/unzip the downloaded file to a folder you'll remember.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <p class="step-title">Open Firefox Add-ons Debugging</p>
+          <p class="step-desc">Type <code>about:debugging</code> in your address bar and press Enter.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <p class="step-title">Go to "This Firefox"</p>
+          <p class="step-desc">Click "This Firefox" in the left sidebar.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <p class="step-title">Load the extension</p>
+          <p class="step-desc">Click "Load Temporary Add-on" and select any file inside the extracted extension folder (e.g., manifest.json).</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+          <p class="step-title">Note: Temporary add-on</p>
+          <p class="step-desc">Firefox will unload this extension when you restart the browser. You'll need to reload it using these steps. Permanent installation will be available once we're listed on Firefox Add-ons.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Getting Started -->
+    <div class="getting-started">
+      <h3>🚀 Getting Started</h3>
+
+      <div class="tip">
+        <span class="tip-icon">🔑</span>
+        <div class="tip-content">
+          <h4>Sign in to your account</h4>
+          <p>Click the VaultBubble icon in your browser toolbar, then click "Sign In." Enter your email to receive a verification code, and you're in!</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        <span class="tip-icon">📄</span>
+        <div class="tip-content">
+          <h4>Capture a full page</h4>
+          <p>While viewing any webpage, click the VaultBubble icon and choose "Capture Page" to save the entire article or page to your vault.</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        <span class="tip-icon">✨</span>
+        <div class="tip-content">
+          <h4>Capture selected text</h4>
+          <p>Highlight any text on a page, right-click, and select "Save to VaultBubble" to capture just that snippet with context.</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        <span class="tip-icon">🗂️</span>
+        <div class="tip-content">
+          <h4>View your captures</h4>
+          <p>All your captured content appears in the VaultBubble web interface, organized by topics and ready to search.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Help Section -->
+    <div class="help-section">
+      <p>Having trouble? Check back soon for permanent extension store links, or <a href="mailto:support@vaultbubbles.com">contact support</a>.</p>
+    </div>
+  </div>
+
+  <script>
+    // Browser tab switching
+    const tabs = document.querySelectorAll('.browser-tab');
+    const contents = document.querySelectorAll('.tab-content');
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const browser = tab.dataset.browser;
+
+        // Update active tab
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        // Update active content
+        contents.forEach(c => c.classList.remove('active'));
+        document.getElementById(`${browser}-content`).classList.add('active');
+      });
+    });
+
+    // Auto-detect browser (optional enhancement)
+    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+    if (isFirefox) {
+      document.querySelector('[data-browser="firefox"]').click();
+    }
+  </script>
+</body>
+</html>

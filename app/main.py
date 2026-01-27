@@ -664,11 +664,12 @@ def recluster_topics(
     days: int = 30,
     clear_assignments: bool = False,
     db: Session = Depends(get_db),
-    _: None = Depends(require_bootstrap_token),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
     """
     Recluster documents using hierarchical agglomerative clustering.
-    Requires admin bootstrap token.
+    Requires authenticated user - only reclusters documents in user's vaults.
     
     Creates topics at 3 levels:
     - Level 0: Fine-grained (cosine sim >= 0.85)
@@ -687,16 +688,19 @@ def recluster_topics(
     """
     from .topics import compute_hierarchical_topics, clear_topics_cache
     
+    # Get vault IDs the user can access
+    vault_ids = get_user_accessible_vault_ids(user, db)
+    
     # Optionally clear existing topic assignments (for full recluster)
+    # Only clear assignments for documents in user's vaults
     if clear_assignments:
-        updated = (
-            db.query(Document)
-            .filter(Document.assigned_topic_id != None)
-            .update({
-                Document.assigned_topic_id: None,
-                Document.assigned_topic_title: None
-            }, synchronize_session=False)
-        )
+        query = db.query(Document).filter(Document.assigned_topic_id != None)
+        if vault_ids:
+            query = query.filter(Document.vault_id.in_(vault_ids))
+        updated = query.update({
+            Document.assigned_topic_id: None,
+            Document.assigned_topic_title: None
+        }, synchronize_session=False)
         db.commit()
         print(f"Cleared topic assignments from {updated} documents")
     
@@ -704,7 +708,8 @@ def recluster_topics(
     clear_topics_cache()
     
     # Compute hierarchical topics (pass clear_assignments to control behavior)
-    result = compute_hierarchical_topics(db, days=days, full_recluster=clear_assignments)
+    # Pass vault_ids to scope reclustering to user's documents
+    result = compute_hierarchical_topics(db, days=days, full_recluster=clear_assignments, vault_ids=vault_ids)
     
     return result
 
@@ -1693,6 +1698,34 @@ def revoke_extension_token(
         db.commit()
     
     return {"status": "ok", "revoked_at": token.revoked_at}
+
+
+# -------- EXTENSION DOWNLOAD ENDPOINTS --------
+
+@app.get("/download/extension-chrome.zip")
+def download_chrome_extension():
+    """Serve Chrome extension ZIP for download."""
+    zip_path = os.path.join(os.path.dirname(__file__), "..", "extension-chrome.zip")
+    if os.path.exists(zip_path):
+        return FileResponse(
+            zip_path, 
+            filename="vaultbubble-chrome.zip",
+            media_type="application/zip"
+        )
+    raise HTTPException(status_code=404, detail="Chrome extension not found. Please contact support.")
+
+
+@app.get("/download/extension-firefox.zip")
+def download_firefox_extension():
+    """Serve Firefox extension ZIP for download."""
+    zip_path = os.path.join(os.path.dirname(__file__), "..", "extension-firefox.zip")
+    if os.path.exists(zip_path):
+        return FileResponse(
+            zip_path, 
+            filename="vaultbubble-firefox.zip",
+            media_type="application/zip"
+        )
+    raise HTTPException(status_code=404, detail="Firefox extension not found. Please contact support.")
 
 
 if __name__ == "__main__":

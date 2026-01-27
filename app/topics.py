@@ -1020,7 +1020,8 @@ def _cleanup_empty_topics(
 def _incremental_topic_assignment(
     db: Session,
     agglom_cfg,
-    clustering_cfg
+    clustering_cfg,
+    vault_ids: list = None,
 ) -> dict:
     """
     Incremental topic assignment using a three-phase approach:
@@ -1038,6 +1039,7 @@ def _incremental_topic_assignment(
         db: Database session
         agglom_cfg: AgglomerativeConfig with distance thresholds
         clustering_cfg: ClusteringConfig with min_docs_for_clustering
+        vault_ids: List of vault IDs to filter by. If None, processes all documents.
     
     Returns:
         Dict with assignment statistics
@@ -1073,12 +1075,11 @@ def _incremental_topic_assignment(
     # Count documents per Level 1 topic
     docs_per_level1 = defaultdict(list)
     
-    # Get all documents with topic assignments
-    assigned_docs = (
-        db.query(Document)
-        .filter(Document.assigned_topic_id != None)
-        .all()
-    )
+    # Get all documents with topic assignments (filtered by vault)
+    assigned_query = db.query(Document).filter(Document.assigned_topic_id != None)
+    if vault_ids is not None:
+        assigned_query = assigned_query.filter(Document.vault_id.in_(vault_ids))
+    assigned_docs = assigned_query.all()
     
     for doc in assigned_docs:
         level1_parent = level0_to_level1.get(doc.assigned_topic_id)
@@ -1098,12 +1099,12 @@ def _incremental_topic_assignment(
     
     # Also check for documents in Level 0 topics that have NO Level 1 parent (truly orphaned)
     level0_ids_with_parents = set(level0_to_level1.keys())
-    orphan_no_parent = (
-        db.query(Document)
-        .filter(Document.assigned_topic_id != None)
-        .filter(~Document.assigned_topic_id.in_(level0_ids_with_parents) if level0_ids_with_parents else True)
-        .all()
-    )
+    orphan_query = db.query(Document).filter(Document.assigned_topic_id != None)
+    if vault_ids is not None:
+        orphan_query = orphan_query.filter(Document.vault_id.in_(vault_ids))
+    if level0_ids_with_parents:
+        orphan_query = orphan_query.filter(~Document.assigned_topic_id.in_(level0_ids_with_parents))
+    orphan_no_parent = orphan_query.all()
     
     # Filter to only those actually in Level 0 topics (not some other assignment)
     level0_topic_ids = {t.id for t in level_0_topics}
@@ -1129,12 +1130,10 @@ def _incremental_topic_assignment(
         print("No orphan documents found")
     
     # Get all uncategorized documents (now includes the cleared orphans)
-    uncategorized_docs = (
-        db.query(Document)
-        .filter(Document.assigned_topic_id == None)
-        .order_by(Document.captured_at.desc())
-        .all()
-    )
+    uncategorized_query = db.query(Document).filter(Document.assigned_topic_id == None)
+    if vault_ids is not None:
+        uncategorized_query = uncategorized_query.filter(Document.vault_id.in_(vault_ids))
+    uncategorized_docs = uncategorized_query.order_by(Document.captured_at.desc()).all()
     
     new_uncategorized_count = len(uncategorized_docs) - orphan_count
     
@@ -1602,6 +1601,7 @@ def compute_hierarchical_topics(
     db: Session,
     days: int = 30,
     full_recluster: bool = False,
+    vault_ids: list = None,
 ) -> dict:
     """
     Compute and save topics at all hierarchy levels using agglomerative clustering.
@@ -1618,6 +1618,7 @@ def compute_hierarchical_topics(
         days: Number of days of documents to include
         full_recluster: If True, clear all topics and recluster everything.
                        If False, only process uncategorized documents.
+        vault_ids: List of vault IDs to filter by. If None, processes all documents.
     
     Returns:
         Dict with statistics and created topic info
@@ -1631,19 +1632,17 @@ def compute_hierarchical_topics(
     cutoff = datetime.utcnow() - timedelta(days=days)
     
     if full_recluster:
-        # Full recluster: get ALL documents in time range
-        docs = (
-            db.query(Document)
-            .filter(Document.captured_at >= cutoff)
-            .order_by(Document.captured_at.desc())
-            .all()
-        )
+        # Full recluster: get ALL documents in time range (filtered by vault)
+        query = db.query(Document).filter(Document.captured_at >= cutoff)
+        if vault_ids is not None:
+            query = query.filter(Document.vault_id.in_(vault_ids))
+        docs = query.order_by(Document.captured_at.desc()).all()
         mode_desc = "FULL RECLUSTER"
     else:
         # Incremental mode: two-phase approach
         # Phase 1: Try to assign each uncategorized doc to existing topics individually
         # Phase 2: Cluster any remaining unmatched docs if count >= min_docs_for_clustering
-        return _incremental_topic_assignment(db, agglom_cfg, cfg)
+        return _incremental_topic_assignment(db, agglom_cfg, cfg, vault_ids=vault_ids)
     
     if not docs:
         return {"status": "no_documents", "message": "No documents found"}
