@@ -799,6 +799,7 @@
     // Support both vb_ext_ (OAuth tokens) and vb_live_ (API keys) for backward compatibility
     let AUTH_TOKEN = localStorage.getItem('vb_auth_token') || localStorage.getItem('vb_api_key') || '';
     let currentUserEmail = null;
+    let currentVaultId = null;  // Track current vault for query scoping
 
     // Helper for authenticated fetch with retry logic for cold starts
     async function authFetch(url, options = {}, retries = 3, delay = 2000) {
@@ -837,9 +838,27 @@
     function signOut() {
       AUTH_TOKEN = '';
       currentUserEmail = null;
+      currentVaultId = null;
       localStorage.removeItem('vb_auth_token');
       localStorage.removeItem('vb_api_key');
       updateAuthUI();
+    }
+
+    // Fetch user's vaults and set the current (personal) vault
+    async function fetchCurrentVault() {
+      try {
+        const res = await authFetch(`${API_BASE}/vaults`);
+        if (res.ok) {
+          const data = await res.json();
+          // Use first vault (personal vault is sorted first)
+          if (data.vaults && data.vaults.length > 0) {
+            currentVaultId = data.vaults[0].id;
+            console.log('Current vault:', currentVaultId);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch vaults:', e);
+      }
     }
 
     // Check if user is authenticated and get their info
@@ -854,6 +873,8 @@
         if (res.ok) {
           const data = await res.json();
           currentUserEmail = data.email;
+          // Fetch vault info after successful auth
+          await fetchCurrentVault();
         } else {
           // Token invalid, clear it
           signOut();
@@ -1537,6 +1558,9 @@
 
       if (currentScope.docIds && currentScope.docIds.length > 0) {
         body.doc_ids = currentScope.docIds;
+      } else if (currentVaultId) {
+        // When not scoped to specific docs, limit to current vault
+        body.vault_id = currentVaultId;
       }
 
       try {

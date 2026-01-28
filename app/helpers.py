@@ -40,6 +40,7 @@ class QueryRequest(BaseModel):
     top_k: int = 15
     with_answer: bool = True
     doc_ids: Optional[List[str]] = None
+    vault_id: Optional[str] = None  # Scope query to a specific vault
 
 
 class ChunkHit(BaseModel):

@@ -464,7 +464,20 @@ def query_docs(
     # 2a) Filter by vault membership - only search documents user can access
     vault_ids = get_user_accessible_vault_ids(user, db)
     if user and vault_ids:
-        base_query = base_query.filter(Document.vault_id.in_(vault_ids))
+        # If specific vault_id provided, verify access and filter to just that vault
+        if payload.vault_id:
+            from uuid import UUID as PyUUID
+            try:
+                requested_vault_id = PyUUID(payload.vault_id)
+                if requested_vault_id not in vault_ids:
+                    # User doesn't have access to this vault
+                    raise HTTPException(status_code=403, detail="Access denied to this vault")
+                base_query = base_query.filter(Document.vault_id == requested_vault_id)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Invalid vault_id format")
+        else:
+            # No specific vault - search all accessible vaults
+            base_query = base_query.filter(Document.vault_id.in_(vault_ids))
     elif user:
         # User has no vaults - return empty results
         return QueryResponse(answer=None, hits=[])
