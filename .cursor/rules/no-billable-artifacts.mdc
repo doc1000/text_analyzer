@@ -1,0 +1,29 @@
+---
+description: Prevent creation of billable cloud/server resources without permission
+alwaysApply: true
+---
+
+# No Billable Artifacts Without Permission
+
+**Do NOT create cloud/server resources that could incur charges** without explicit user permission.
+
+## Examples of resources requiring permission:
+
+- Fly.io apps, machines, or Postgres databases (`fly apps create`, `fly postgres create`)
+- AWS resources (EC2, RDS, S3, Lambda, etc.)
+- GCP/Azure resources
+- Supabase projects
+- Any paid SaaS integrations or API keys
+
+## Before creating billable resources:
+
+1. Explain what resource would be created
+2. Estimate potential cost if possible
+3. Wait for explicit approval
+
+## Safe actions (no permission needed):
+
+- Local Docker containers
+- Local development servers
+- Reading/modifying code
+- Deploying to existing infrastructure

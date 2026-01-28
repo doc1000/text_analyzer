@@ -14,3 +14,9 @@ echo $null >> __init__.py
 
 info-density-analyzer/
 manifest.json background.js content-script.js
+
+
+to set up new reviewer:
+curl -X POST "https://vaultbubbles.fly.dev/admin/reviewer-code?email=reviewer@example.com&days=14" \
+  -H "X-Bootstrap-Token: YOUR_VB_BOOTSTRAP_TOKEN"
+  

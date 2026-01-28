@@ -1485,6 +1485,42 @@ def admin_test_extraction(
     }
 
 
+@app.post("/admin/reviewer-code")
+def admin_generate_reviewer_code(
+    email: str,
+    days: int = 14,
+    _: None = Depends(require_bootstrap_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a reviewer verification code for extension testing.
+    
+    - email: Email to associate with the code
+    - days: Expiration in days (default: 14)
+    
+    Requires bootstrap token via X-Bootstrap-Token header.
+    """
+    import random
+    from datetime import timedelta
+    
+    code = "".join([str(random.randint(0, 9)) for _ in range(6)])
+    expires_at = datetime.utcnow() + timedelta(days=days)
+    
+    db.execute(text("""
+        INSERT INTO extension_verification_codes 
+        (id, email, code, purpose, created_at, expires_at)
+        VALUES (gen_random_uuid(), :email, :code, 'reviewer', now(), :expires_at)
+    """), {"email": email.strip().lower(), "code": code, "expires_at": expires_at})
+    db.commit()
+    
+    return {
+        "email": email,
+        "code": code,
+        "expires_at": expires_at.isoformat(),
+        "days": days,
+    }
+
+
 # ---------- Extension OAuth Connect Flow ----------
 
 from .schemas import (
