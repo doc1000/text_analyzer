@@ -827,7 +827,8 @@ def _find_matching_topic(
     centroid: np.ndarray,
     min_similarity: float = 0.5,
     level_index: int = 0,
-    exclude_stale: bool = True
+    exclude_stale: bool = True,
+    vault_ids: List[UUID] = None
 ) -> Tuple[UUID, str, str] | None:
     """
     Find an existing topic with similar centroid.
@@ -840,6 +841,7 @@ def _find_matching_topic(
         exclude_stale: If True, only match topics that are "active":
                       - Level 0: has at least one document assigned
                       - Level 1/2: has at least one child topic
+        vault_ids: List of vault IDs to scope topic search (filters documents by vault)
     
     Returns:
         (topic_id, title, summary) if match found, else None
@@ -852,12 +854,14 @@ def _find_matching_topic(
     if exclude_stale:
         if level_index == 0:
             # Level 0: Only include topics that have at least one document assigned
-            topics_with_docs = (
+            doc_query = (
                 db.query(Document.assigned_topic_id)
                 .filter(Document.assigned_topic_id != None)
-                .distinct()
-                .subquery()
             )
+            # Filter by vault if vault_ids provided
+            if vault_ids:
+                doc_query = doc_query.filter(Document.vault_id.in_(vault_ids))
+            topics_with_docs = doc_query.distinct().subquery()
             query = query.filter(TOPIC_TABLE.id.in_(topics_with_docs))
         else:
             # Level 1/2: Only include topics that have at least one child topic
@@ -909,12 +913,16 @@ def _find_matching_topic(
 def _assign_single_document_to_topic(
     db: Session,
     doc: Document,
-    doc_embeddings: Dict[UUID, np.ndarray]
+    doc_embeddings: Dict[UUID, np.ndarray],
+    vault_ids: List[UUID] = None
 ) -> dict:
     """
     Assign a single uncategorized document to the best matching existing topic.
     
     Used in incremental mode when there's only one document to process.
+    
+    Args:
+        vault_ids: List of vault IDs to scope topic search (filters documents by vault)
     """
     from .mmr import compute_centroid
     
@@ -935,7 +943,8 @@ def _assign_single_document_to_topic(
         centroid, 
         min_similarity=min_similarity,
         level_index=0,
-        exclude_stale=True
+        exclude_stale=True,
+        vault_ids=vault_ids
     )
     
     if match:
@@ -969,7 +978,8 @@ def _assign_single_document_to_topic(
 def _cleanup_empty_topics(
     db: Session,
     level0_ids: list,
-    level1_ids: list
+    level1_ids: list,
+    vault_ids: List[UUID] = None
 ) -> int:
     """
     Clean up topics that have no documents assigned after orphan reassignment.
@@ -978,18 +988,22 @@ def _cleanup_empty_topics(
         db: Database session
         level0_ids: List of Level 0 topic IDs that may be empty
         level1_ids: List of Level 1 topic IDs that may be empty
+        vault_ids: List of vault IDs to scope document queries (filters documents by vault)
     
     Returns:
         Total number of topics deleted
     """
     topics_deleted = 0
     
-    # Delete Level 0 topics that now have no documents
+    # Delete Level 0 topics that now have no documents (in user's vaults)
     if level0_ids:
         # Find which ones are truly empty
         empty_level0 = []
         for tid in level0_ids:
-            has_docs = db.query(Document).filter(Document.assigned_topic_id == tid).first()
+            doc_query = db.query(Document).filter(Document.assigned_topic_id == tid)
+            if vault_ids:
+                doc_query = doc_query.filter(Document.vault_id.in_(vault_ids))
+            has_docs = doc_query.first()
             if not has_docs:
                 empty_level0.append(tid)
         
@@ -1146,7 +1160,7 @@ def _incremental_topic_assignment(
     
     if not uncategorized_docs:
         # Clean up empty topics
-        topics_deleted = _cleanup_empty_topics(db, orphan_level0_ids, orphan_level1_ids)
+        topics_deleted = _cleanup_empty_topics(db, orphan_level0_ids, orphan_level1_ids, vault_ids=vault_ids)
         
         return {
             "status": "ok",
@@ -1210,7 +1224,8 @@ def _incremental_topic_assignment(
             centroid,
             min_similarity=level_similarities[0],
             level_index=0,
-            exclude_stale=True
+            exclude_stale=True,
+            vault_ids=vault_ids
         )
         
         if match:
@@ -1229,7 +1244,8 @@ def _incremental_topic_assignment(
                 centroid,
                 min_similarity=level_similarities[1],
                 level_index=1,
-                exclude_stale=False  # Level 1 topics don't have direct doc assignments
+                exclude_stale=False,  # Level 1 topics don't have direct doc assignments
+                vault_ids=vault_ids
             )
             
             if match:
@@ -1259,7 +1275,8 @@ def _incremental_topic_assignment(
                 centroid,
                 min_similarity=level_similarities[2],
                 level_index=2,
-                exclude_stale=False  # Level 2 topics don't have direct doc assignments
+                exclude_stale=False,  # Level 2 topics don't have direct doc assignments
+                vault_ids=vault_ids
             )
             
             if match:
@@ -1380,7 +1397,7 @@ def _incremental_topic_assignment(
             print(f"\n--- Phase 2: Skipped (only {len(unmatched_docs)} unmatched docs, need {min_docs_for_clustering}) ---")
     
     # ========== CLEANUP: Remove empty topics from orphan processing ==========
-    topics_deleted = _cleanup_empty_topics(db, orphan_level0_ids, orphan_level1_ids)
+    topics_deleted = _cleanup_empty_topics(db, orphan_level0_ids, orphan_level1_ids, vault_ids=vault_ids)
     
     # Clear cache
     clear_topics_cache()
@@ -2249,8 +2266,9 @@ def compute_topics(
             if PREFERENCES.topic_persistence.persist_subtopics and sub_centroid is not None and parent_db_id:
                 existing_sub = _find_matching_topic(
                     db, sub_centroid,
-                    similarity_threshold=PREFERENCES.topic_persistence.similarity_threshold_subtopic,
-                    level_index=1
+                    min_similarity=PREFERENCES.topic_persistence.similarity_threshold_subtopic,
+                    level_index=1,
+                    vault_ids=vault_ids
                 )
                 
                 if existing_sub:
@@ -2313,8 +2331,9 @@ def compute_topics(
         if PREFERENCES.topic_persistence.persist_topics and centroid is not None:
             existing_match = _find_matching_topic(
                 db, centroid,
-                similarity_threshold=PREFERENCES.topic_persistence.similarity_threshold_topic,
-                level_index=0
+                min_similarity=PREFERENCES.topic_persistence.similarity_threshold_topic,
+                level_index=0,
+                vault_ids=vault_ids
             )
             
             if existing_match:

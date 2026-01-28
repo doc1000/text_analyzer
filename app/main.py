@@ -1047,6 +1047,9 @@ def get_topics_for_document(
     if doc.vault_id:
         require_vault_access(user, doc.vault_id, db, min_role="viewer")
     
+    # Get user's accessible vault IDs for filtering topics
+    vault_ids = get_user_accessible_vault_ids(user, db)
+    
     # Get table names for raw SQL
     embed_table_name = EMBED_TABLE.__tablename__
     topic_table_name = TOPIC_TABLE.__tablename__
@@ -1054,12 +1057,19 @@ def get_topics_for_document(
     # Use raw SQL for efficient pgvector operations:
     # 1. Compute average embedding for document's chunks
     # 2. Order topics by cosine distance (similarity = 1 - distance)
+    # 3. Filter topics to only those with documents in user's accessible vaults
     sql = text(f"""
         WITH doc_embedding AS (
             SELECT AVG(embedding) as avg_emb
             FROM embedding.{embed_table_name}
             WHERE document_id = :doc_id
             AND embedding IS NOT NULL
+        ),
+        accessible_topics AS (
+            SELECT DISTINCT d.assigned_topic_id
+            FROM documents d
+            WHERE d.vault_id = ANY(:vault_ids)
+            AND d.assigned_topic_id IS NOT NULL
         )
         SELECT 
             t.id,
@@ -1070,11 +1080,14 @@ def get_topics_for_document(
         CROSS JOIN doc_embedding de
         WHERE t.level_index = 0
         AND de.avg_emb IS NOT NULL
+        AND t.id IN (SELECT assigned_topic_id FROM accessible_topics)
         ORDER BY t.embedding <=> de.avg_emb ASC
         LIMIT 100
     """)
     
-    result = db.execute(sql, {"doc_id": document_id})
+    # Convert vault_ids to list of strings for PostgreSQL array
+    vault_id_strs = [str(v) for v in vault_ids] if vault_ids else []
+    result = db.execute(sql, {"doc_id": document_id, "vault_ids": vault_id_strs})
     rows = result.fetchall()
     
     if not rows:
