@@ -1061,12 +1061,8 @@ def _incremental_topic_assignment(
     from .mmr import compute_centroid
     from collections import defaultdict
     
-    # Run deduplication for each vault before processing
-    if vault_ids:
-        for vault_id in vault_ids:
-            dedupe_result = deduplicate_vault_documents(db, vault_id)
-            if dedupe_result["documents_deleted"]:
-                print(f"[INCREMENTAL] Pre-processing: removed {len(dedupe_result['documents_deleted'])} duplicate documents from vault {vault_id}")
+    # Note: Deduplication now happens at ingest time (see find_url_duplicate/find_semantic_duplicate)
+    # Removed batch dedupe call here to reduce latency
     
     min_similarity = 1.0 - agglom_cfg.level_0_distance
     min_docs_for_clustering = clustering_cfg.min_docs_for_clustering
@@ -1568,6 +1564,114 @@ def get_document_embeddings_from_table(
     return {r.document_id: normalize_embedding(r.embedding) for r in records}
 
 
+# ---------- Ingest-time dedupe (O(n) per document) ----------
+
+def find_url_duplicate(
+    db: Session,
+    vault_id: UUID,
+    url: str,
+    has_extracted_text: bool,
+) -> Optional[Document]:
+    """
+    Check if a document with the same canonical URL already exists in the vault.
+    Only checks against full page captures (with extracted_text).
+    
+    Called BEFORE creating a new document to prevent duplicates.
+    
+    Args:
+        db: Database session
+        vault_id: The vault to check in
+        url: The URL to check
+        has_extracted_text: Whether the new doc is a full capture (vs note)
+    
+    Returns:
+        The existing Document if duplicate found, None otherwise
+    """
+    # Notes are allowed to have duplicate URLs (user creates multiple notes from same page)
+    if not has_extracted_text:
+        return None
+    
+    canonical = canonicalize_url(url or "")
+    if not canonical:
+        return None
+    
+    # Check existing full captures in vault
+    existing_docs = (
+        db.query(Document)
+        .filter(Document.vault_id == vault_id)
+        .filter(Document.extracted_text != None)
+        .all()
+    )
+    
+    for doc in existing_docs:
+        if canonicalize_url(doc.url or "") == canonical:
+            print(f"[DEDUPE] URL duplicate found: {url} matches existing doc {doc.id}")
+            return doc
+    
+    return None
+
+
+def find_semantic_duplicate(
+    db: Session,
+    new_doc: Document,
+    similarity_threshold: float = 0.92,
+) -> Optional[Document]:
+    """
+    Check if a semantically similar document exists in the vault.
+    Compares new doc's embedding against all existing doc embeddings. O(n) complexity.
+    
+    Called AFTER embedding a new document to catch content duplicates with different URLs.
+    
+    Args:
+        db: Database session
+        new_doc: The newly created document (must have embeddings)
+        similarity_threshold: Cosine similarity threshold (default 0.92)
+    
+    Returns:
+        The existing Document if semantic duplicate found, None otherwise
+    """
+    if not new_doc.vault_id or not new_doc.extracted_text:
+        return None
+    
+    # Get new doc's embedding
+    new_embedding = get_document_embeddings_from_table(db, [new_doc.id])
+    if new_doc.id not in new_embedding:
+        return None
+    
+    # Get all other full captures in vault
+    other_docs = (
+        db.query(Document)
+        .filter(Document.vault_id == new_doc.vault_id)
+        .filter(Document.id != new_doc.id)
+        .filter(Document.extracted_text != None)
+        .all()
+    )
+    
+    if not other_docs:
+        return None
+    
+    other_ids = [d.id for d in other_docs]
+    other_embeddings = get_document_embeddings_from_table(db, other_ids)
+    
+    if not other_embeddings:
+        return None
+    
+    new_emb = new_embedding[new_doc.id].reshape(1, -1)
+    cosine_similarity = get_cosine_similarity()
+    
+    for doc in other_docs:
+        if doc.id not in other_embeddings:
+            continue
+        other_emb = other_embeddings[doc.id].reshape(1, -1)
+        sim = float(cosine_similarity(new_emb, other_emb)[0, 0])
+        
+        if sim >= similarity_threshold:
+            print(f"[DEDUPE] Semantic duplicate found (sim={sim:.3f}): new doc {new_doc.id} matches existing doc {doc.id}")
+            return doc
+    
+    return None
+
+
 # ---------- Semantic dedupe (keep latest) ----------
 
 def dedupe_documents_semantic(
@@ -1830,12 +1934,8 @@ def compute_hierarchical_topics(
     cfg = PREFERENCES.clustering
     agglom_cfg = PREFERENCES.agglomerative
     
-    # 0) Run deduplication for each vault before processing
-    if vault_ids:
-        for vault_id in vault_ids:
-            dedupe_result = deduplicate_vault_documents(db, vault_id)
-            if dedupe_result["documents_deleted"]:
-                print(f"[TOPICS] Pre-processing: removed {len(dedupe_result['documents_deleted'])} duplicate documents from vault {vault_id}")
+    # Note: Deduplication now happens at ingest time (see find_url_duplicate/find_semantic_duplicate)
+    # Removed batch dedupe call here to reduce latency
     
     # 1) Select documents based on mode
     cutoff = datetime.utcnow() - timedelta(days=days)

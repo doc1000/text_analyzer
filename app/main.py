@@ -374,6 +374,22 @@ def ingest(
         print(f"[ERROR] Ingest failed - no text content. URL: {payload.url}, pdf_to_parse: {pdf_to_parse}, pdf_parsed: {pdf_parsed}")
         raise HTTPException(status_code=400, detail=detail)
 
+    # 6b. URL duplicate check BEFORE creating document (only for full page captures)
+    has_extracted_text = (extracted_text is not None)
+    if has_extracted_text and vault:
+        from .topics import find_url_duplicate
+        existing_doc = find_url_duplicate(db, vault.id, payload.url, has_extracted_text)
+        if existing_doc:
+            return {
+                "status": "duplicate",
+                "document_id": str(existing_doc.id),
+                "message": "Document already exists (matching URL)",
+                "is_duplicate": True,
+                "duplicate_reason": "url",
+                "user_id": str(user.id) if user else None,
+                "vault_id": str(vault.id) if vault else None,
+            }
+
     # 7. Create document with separated text fields
     doc = models.Document(
         vault_id=vault.id if vault else None,
@@ -391,13 +407,31 @@ def ingest(
 
     chunk_len = embed_doc_chunks(doc)
 
+    # 7b. Semantic duplicate check AFTER embedding (only for full page captures)
+    if has_extracted_text and vault:
+        from .topics import find_semantic_duplicate
+        existing_doc = find_semantic_duplicate(db, doc)
+        if existing_doc:
+            # Delete the new doc we just created, return the existing one
+            db.delete(doc)
+            db.commit()
+            return {
+                "status": "duplicate",
+                "document_id": str(existing_doc.id),
+                "message": "Document already exists (semantically similar content)",
+                "is_duplicate": True,
+                "duplicate_reason": "semantic",
+                "user_id": str(user.id) if user else None,
+                "vault_id": str(vault.id) if vault else None,
+            }
+
     result = {
         "status": "ok",
         "document_id": str(doc.id),
         "num_chunks": int(chunk_len),
         "pdf_parsed": pdf_parsed,
         "linked_pdfs_count": len(linked_pdfs) if linked_pdfs else 0,
-        "has_extracted_text": extracted_text is not None,
+        "has_extracted_text": has_extracted_text,
     }
     
     # Include user_id and vault_id if auth is enabled and user is present
@@ -1481,6 +1515,39 @@ def admin_init_db(
         return {"status": "ok", "message": "Database initialized successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB init failed: {e}")
+
+
+@app.post("/admin/dedupe")
+def admin_dedupe_all_vaults(
+    _: None = Depends(require_bootstrap_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Run batch deduplication across all vaults.
+    
+    This is a fallback for manual cleanup - normally dedupe runs at ingest time.
+    Can be used for initial cleanup of existing data or periodic maintenance.
+    
+    Requires bootstrap token via X-Bootstrap-Token header.
+    """
+    from .topics import deduplicate_vault_documents
+    
+    vault_ids = db.query(Vault.id).all()
+    results = []
+    total_removed = 0
+    
+    for (vault_id,) in vault_ids:
+        result = deduplicate_vault_documents(db, vault_id)
+        if result["documents_deleted"]:
+            results.append(result)
+            total_removed += len(result["documents_deleted"])
+    
+    return {
+        "status": "ok",
+        "vaults_processed": len(vault_ids),
+        "total_duplicates_removed": total_removed,
+        "vaults_with_duplicates": results,
+    }
 
 
 @app.get("/admin/test-extraction")
