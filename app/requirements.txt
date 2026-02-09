@@ -13,3 +13,4 @@ umap-learn
 pdfplumber
 requests
 trafilatura
+apscheduler

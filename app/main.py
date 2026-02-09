@@ -64,7 +64,17 @@ async def lifespan(app: FastAPI):
     # - DB migrations run via run_migration.py at deploy time
     # - Embedding tables are lazy-initialized on first use (via __getattr__ in db.py)
     # - Background fill moved to /admin/backfill endpoint
+    
+    # Initialize scheduler for periodic tasks (deduplication)
+    from .scheduler import init_scheduler, shutdown_scheduler
+    if PREFERENCES.deduplication.enabled:
+        init_scheduler(schedule_times=PREFERENCES.deduplication.schedule_times)
+    
     yield
+    
+    # Shutdown scheduler gracefully
+    if PREFERENCES.deduplication.enabled:
+        shutdown_scheduler()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -1525,8 +1535,8 @@ def admin_dedupe_all_vaults(
     """
     Run batch deduplication across all vaults.
     
-    This is a fallback for manual cleanup - normally dedupe runs at ingest time.
-    Can be used for initial cleanup of existing data or periodic maintenance.
+    This is a fallback for manual cleanup - normally dedupe runs on schedule (midnight and noon).
+    Can be used for initial cleanup of existing data or on-demand maintenance.
     
     Requires bootstrap token via X-Bootstrap-Token header.
     """
@@ -1548,6 +1558,29 @@ def admin_dedupe_all_vaults(
         "total_duplicates_removed": total_removed,
         "vaults_with_duplicates": results,
     }
+
+
+@app.get("/admin/scheduler/status")
+def admin_scheduler_status(
+    _: None = Depends(require_bootstrap_token),
+):
+    """
+    Get the current status of the background scheduler.
+    
+    Shows whether the scheduler is running and when deduplication jobs are scheduled.
+    
+    Requires bootstrap token via X-Bootstrap-Token header.
+    """
+    from .scheduler import get_scheduler_status
+    
+    status = get_scheduler_status()
+    status["deduplication_config"] = {
+        "enabled": PREFERENCES.deduplication.enabled,
+        "schedule_times": PREFERENCES.deduplication.schedule_times,
+        "similarity_threshold": PREFERENCES.deduplication.similarity_threshold,
+    }
+    
+    return status
 
 
 @app.get("/admin/test-extraction")

@@ -54,10 +54,10 @@ LinkageMethod = Literal["average", "single", "complete"]  # for agglomerative cl
 
 @dataclass
 class ClusteringConfig:
-    dim_reducer: DimReducer = "none"  # "pca", "umap", or "none" - using "none" for consistent full embeddings
+    dim_reducer: DimReducer = "pca"  # "pca", "umap", or "none" - using "none" for consistent full embeddings
     use_reducer_for_clustering: bool = True  # was use_umap_for_clustering
     cluster_algo: ClusterAlgo = "kmeans"
-    min_docs_for_clustering: int = 3
+    min_docs_for_clustering: int = 1
     max_neighbors: int = 15          # still used if you pick UMAP
     max_components: int = 24
     random_state: int = 42
@@ -157,6 +157,14 @@ class SummaryConfig:
 
 
 @dataclass
+class DeduplicationConfig:
+    """Configuration for scheduled deduplication tasks."""
+    enabled: bool = field(default_factory=lambda: os.getenv("DEDUP_ENABLED", "true").lower() in ("1", "true", "yes"))
+    schedule_times: List[str] = field(default_factory=lambda: ["00:00", "12:00"])  # UTC times in HH:MM format
+    similarity_threshold: float = 0.92  # Cosine similarity threshold for semantic deduplication
+
+
+@dataclass
 class EmailConfig:
     """Configuration for email sending (verification codes)."""
     smtp_host: str = os.getenv("SMTP_HOST", "")
@@ -244,6 +252,7 @@ class Preferences:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     topic_persistence: TopicPersistenceConfig = field(default_factory=TopicPersistenceConfig)
     query: QueryConfig = field(default_factory=QueryConfig)
+    deduplication: DeduplicationConfig = field(default_factory=DeduplicationConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
 
 

@@ -2186,35 +2186,20 @@ def compute_topics(
     if not docs:
         return TopicsResponse(time_range_days=days, topics=[])
 
-    # 2) Deduplicate by canonical URL (keep latest for each canonical_url)
-    canonical_groups: Dict[str, List[Document]] = {}
-    for d in docs:
-        cu = canonicalize_url(d.url or "")
-        canonical_groups.setdefault(cu, []).append(d)
-
-    canonical_docs: List[Document] = []
-    for cu, group in canonical_groups.items():
-        # docs were already ordered desc by captured_at
-        group_sorted = sorted(group, key=lambda d: d.captured_at or datetime.min, reverse=True)
-        canonical_docs.append(group_sorted[0])  # keep latest
-
-    # 3) Compute document embeddings for canonical docs
-    doc_embeddings = compute_document_embeddings(db, canonical_docs)
+    # 2) Compute document embeddings
+    doc_embeddings = compute_document_embeddings(db, docs)
     
-    # 3b) Fetch document summaries for improved topic naming
-    doc_ids_for_summaries = [d.id for d in canonical_docs]
+    # 3) Fetch document summaries for improved topic naming
+    doc_ids_for_summaries = [d.id for d in docs]
     doc_summaries = get_document_summaries(db, doc_ids_for_summaries)
     print(f"[Topics] Fetched {len(doc_summaries)} document summaries")
 
-    # 4) Semantic dedupe (keeps latest among high-similarity docs)
-    deduped_docs = dedupe_documents_semantic(canonical_docs, doc_embeddings)
-
-    # 4b) Separate documents with existing topic assignments from unassigned
+    # 4) Separate documents with existing topic assignments from unassigned
     # Pre-assigned documents will be grouped by their existing topic
     pre_assigned_groups: Dict[UUID, List[Document]] = {}
     unassigned_docs: List[Document] = []
     
-    for d in deduped_docs:
+    for d in docs:
         if d.assigned_topic_id:
             pre_assigned_groups.setdefault(d.assigned_topic_id, []).append(d)
         else:
