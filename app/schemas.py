@@ -97,6 +97,7 @@ class TopicDoc(BaseModel):
     title: str | None
     url: str
     captured_at: datetime
+    topic_manually_assigned: bool | None = None
 
     class Config:
         from_attributes = True  # Pydantic v2
@@ -194,6 +195,7 @@ class DocumentDetailResponse(BaseModel):
     text: str
     assigned_topic_id: Optional[str] = None
     assigned_topic_title: Optional[str] = None
+    topic_manually_assigned: Optional[bool] = None
     created_by: Optional[str] = None
 
 class DocumentUpdateRequest(BaseModel):

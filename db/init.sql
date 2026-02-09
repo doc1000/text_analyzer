@@ -67,10 +67,12 @@ CREATE TABLE IF NOT EXISTS documents (
     full_text TEXT NOT NULL,
     captured_at TIMESTAMPTZ DEFAULT now(),
     assigned_topic_id UUID,
-    assigned_topic_title TEXT
+    assigned_topic_title TEXT,
+    topic_manually_assigned BOOLEAN DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS idx_documents_vault ON documents(vault_id);
 CREATE INDEX IF NOT EXISTS idx_documents_created_by ON documents(created_by);
+CREATE INDEX IF NOT EXISTS idx_documents_manual_topic ON documents(topic_manually_assigned) WHERE topic_manually_assigned = TRUE;
 
 -- ============================================================================
 -- EMBEDDING SCHEMA

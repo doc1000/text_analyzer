@@ -951,6 +951,7 @@ def _assign_single_document_to_topic(
         topic_id, topic_title, _ = match
         doc.assigned_topic_id = topic_id
         doc.assigned_topic_title = topic_title
+        doc.topic_manually_assigned = False  # Mark as auto-assigned
         db.commit()
         clear_topics_cache()
         
@@ -1093,7 +1094,11 @@ def _incremental_topic_assignment(
     docs_per_level1 = defaultdict(list)
     
     # Get all documents with topic assignments (filtered by vault)
-    assigned_query = db.query(Document).filter(Document.assigned_topic_id != None)
+    # EXCLUDE manually-assigned topics from orphan detection
+    assigned_query = db.query(Document).filter(
+        Document.assigned_topic_id != None,
+        Document.topic_manually_assigned != True  # Skip manual assignments
+    )
     if vault_ids is not None:
         assigned_query = assigned_query.filter(Document.vault_id.in_(vault_ids))
     assigned_docs = assigned_query.all()
@@ -1115,8 +1120,12 @@ def _incremental_topic_assignment(
             orphan_level0_ids.append(docs[0].assigned_topic_id)
     
     # Also check for documents in Level 0 topics that have NO Level 1 parent (truly orphaned)
+    # EXCLUDE manually-assigned topics from orphan detection
     level0_ids_with_parents = set(level0_to_level1.keys())
-    orphan_query = db.query(Document).filter(Document.assigned_topic_id != None)
+    orphan_query = db.query(Document).filter(
+        Document.assigned_topic_id != None,
+        Document.topic_manually_assigned != True  # Skip manual assignments
+    )
     if vault_ids is not None:
         orphan_query = orphan_query.filter(Document.vault_id.in_(vault_ids))
     if level0_ids_with_parents:
@@ -1228,6 +1237,7 @@ def _incremental_topic_assignment(
             topic_id, topic_title, _ = match
             doc.assigned_topic_id = topic_id
             doc.assigned_topic_title = topic_title
+            doc.topic_manually_assigned = False  # Mark as auto-assigned
             phase1_assigned += 1
             phase1_level0_matched += 1
             assigned = True
@@ -1259,6 +1269,7 @@ def _incremental_topic_assignment(
                 )
                 doc.assigned_topic_id = new_topic_id
                 doc.assigned_topic_title = doc_title_short
+                doc.topic_manually_assigned = False  # Mark as auto-assigned
                 phase1_assigned += 1
                 phase1_level1_matched += 1
                 assigned = True
@@ -1291,6 +1302,7 @@ def _incremental_topic_assignment(
                 )
                 doc.assigned_topic_id = new_topic_id
                 doc.assigned_topic_title = doc_title_short
+                doc.topic_manually_assigned = False  # Mark as auto-assigned
                 phase1_assigned += 1
                 phase1_level2_matched += 1
                 assigned = True
@@ -1382,6 +1394,7 @@ def _incremental_topic_assignment(
             for doc in docs_in_cluster:
                 doc.assigned_topic_id = topic_db_id
                 doc.assigned_topic_title = title
+                doc.topic_manually_assigned = False  # Mark as auto-assigned
                 phase2_assigned += 1
         
         db.commit()
@@ -1942,11 +1955,25 @@ def compute_hierarchical_topics(
     
     if full_recluster:
         # Full recluster: get ALL documents in time range (filtered by vault)
-        query = db.query(Document).filter(Document.captured_at >= cutoff)
+        # BUT exclude documents with manually-assigned topics
+        query = db.query(Document).filter(
+            Document.captured_at >= cutoff,
+            Document.topic_manually_assigned != True  # Exclude manual assignments
+        )
         if vault_ids is not None:
             query = query.filter(Document.vault_id.in_(vault_ids))
         docs = query.order_by(Document.captured_at.desc()).all()
-        mode_desc = "FULL RECLUSTER"
+        
+        # Count manually-assigned documents for logging
+        manual_count_query = db.query(Document).filter(
+            Document.captured_at >= cutoff,
+            Document.topic_manually_assigned == True
+        )
+        if vault_ids is not None:
+            manual_count_query = manual_count_query.filter(Document.vault_id.in_(vault_ids))
+        manual_count = manual_count_query.count()
+        
+        mode_desc = f"FULL RECLUSTER (excluding {manual_count} manually-assigned docs)"
     else:
         # Incremental mode: two-phase approach
         # Phase 1: Try to assign each uncategorized doc to existing topics individually
@@ -2018,10 +2045,32 @@ def compute_hierarchical_topics(
     # 8) Cache existing topic titles for reuse, then clear topics
     cached_topics_by_level = _cache_existing_topics(db)
     
+    # Only delete topics that don't have manually-assigned documents
+    # Get topic IDs that have manually-assigned documents
+    manually_assigned_topic_ids = (
+        db.query(Document.assigned_topic_id)
+        .filter(
+            Document.assigned_topic_id != None,
+            Document.topic_manually_assigned == True
+        )
+        .distinct()
+        .all()
+    )
+    protected_topic_ids = {row[0] for row in manually_assigned_topic_ids}
+    
     try:
-        deleted = db.query(TOPIC_TABLE).delete()
-        db.commit()
-        print(f"Cleared {deleted} existing topics")
+        if protected_topic_ids:
+            # Delete only topics that are not protected
+            deleted = db.query(TOPIC_TABLE).filter(
+                ~TOPIC_TABLE.id.in_(protected_topic_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+            print(f"Cleared {deleted} existing topics (preserved {len(protected_topic_ids)} topics with manual assignments)")
+        else:
+            # No protected topics, delete all
+            deleted = db.query(TOPIC_TABLE).delete()
+            db.commit()
+            print(f"Cleared {deleted} existing topics")
     except Exception as e:
         db.rollback()
         print(f"[WARN] Could not clear existing topics: {e}")
@@ -2115,8 +2164,14 @@ def compute_hierarchical_topics(
         for doc_id in doc_ids_in_cluster:
             doc = doc_by_id.get(doc_id)
             if doc:
+                # Skip if this document was manually assigned (should have been filtered out, but double-check)
+                if doc.topic_manually_assigned == True:
+                    print(f"  [SKIP] Document '{doc.title[:40]}...' has manual assignment, preserving")
+                    continue
+                    
                 doc.assigned_topic_id = topic_db_id
                 doc.assigned_topic_title = topic_title
+                doc.topic_manually_assigned = False  # Mark as auto-assigned
                 assignments += 1
     
     db.commit()
@@ -2451,6 +2506,7 @@ def compute_topics(
             for doc in docs_list:
                 doc.assigned_topic_id = topic_db_id
                 doc.assigned_topic_title = topic_title
+                doc.topic_manually_assigned = False  # Mark as auto-assigned
             try:
                 db.commit()
             except Exception as e:

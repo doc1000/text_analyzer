@@ -126,6 +126,8 @@ class Document(Base):
     assigned_topic_id = Column(UUID(as_uuid=True), nullable=True)
     # Denormalized topic title for quick access without joins
     assigned_topic_title = Column(Text, nullable=True)
+    # Flag indicating if topic was manually assigned by user (vs auto-assigned by clustering)
+    topic_manually_assigned = Column(Boolean, nullable=True, default=False)
 
 
 class EmbeddingModel(Base):

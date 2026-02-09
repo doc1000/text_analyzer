@@ -753,9 +753,13 @@ def recluster_topics(
     vault_ids = get_user_accessible_vault_ids(user, db)
     
     # Optionally clear existing topic assignments (for full recluster)
+    # Only clear AUTO-ASSIGNED topics, preserve manual assignments
     # Only clear assignments for documents in user's vaults
     if clear_assignments:
-        query = db.query(Document).filter(Document.assigned_topic_id != None)
+        query = db.query(Document).filter(
+            Document.assigned_topic_id != None,
+            Document.topic_manually_assigned != True  # Preserve manual assignments
+        )
         if vault_ids:
             query = query.filter(Document.vault_id.in_(vault_ids))
         updated = query.update({
@@ -763,7 +767,7 @@ def recluster_topics(
             Document.assigned_topic_title: None
         }, synchronize_session=False)
         db.commit()
-        print(f"Cleared topic assignments from {updated} documents")
+        print(f"Cleared topic assignments from {updated} auto-assigned documents (preserved manual assignments)")
     
     # Clear cache first
     clear_topics_cache()
@@ -1112,7 +1116,7 @@ def get_topics_for_document(
         accessible_topics AS (
             SELECT DISTINCT d.assigned_topic_id
             FROM documents d
-            WHERE d.vault_id = ANY(:vault_ids)
+            WHERE d.vault_id::text = ANY(:vault_ids)
             AND d.assigned_topic_id IS NOT NULL
         )
         SELECT 
@@ -1244,6 +1248,7 @@ def update_document_topic(
         
         doc.assigned_topic_id = topic.id
         doc.assigned_topic_title = topic.title_text
+        doc.topic_manually_assigned = True
         
         db.commit()
         clear_topics_cache()
@@ -1274,6 +1279,7 @@ def update_document_topic(
         
         doc.assigned_topic_id = topic_id
         doc.assigned_topic_title = payload.custom_title
+        doc.topic_manually_assigned = True
         
         db.commit()
         clear_topics_cache()
@@ -1307,6 +1313,7 @@ def update_document_topic(
         
         doc.assigned_topic_id = topic_id
         doc.assigned_topic_title = title
+        doc.topic_manually_assigned = True
         
         db.commit()
         clear_topics_cache()
@@ -1322,6 +1329,7 @@ def update_document_topic(
         # Clear topic assignment
         doc.assigned_topic_id = None
         doc.assigned_topic_title = None
+        doc.topic_manually_assigned = False
         
         db.commit()
         clear_topics_cache()
