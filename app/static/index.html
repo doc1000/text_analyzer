@@ -188,6 +188,108 @@
       color: #9ca3af;
     }
 
+    /* Recluster Dropdown */
+    .recluster-container {
+      position: relative;
+    }
+
+    .recluster-btn {
+      background: #111827;
+      border: 1px solid #4b5563;
+      color: #e5e7eb;
+      font-weight: 400;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.2s ease;
+    }
+
+    .recluster-btn:hover {
+      background: #1f2937;
+    }
+
+    .recluster-dropdown {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      min-width: 320px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      overflow: hidden;
+      padding: 1rem;
+    }
+
+    .recluster-dropdown h4 {
+      margin: 0 0 0.75rem 0;
+      font-size: 0.9rem;
+      color: #e5e7eb;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .recluster-dropdown p {
+      font-size: 0.8rem;
+      color: #9ca3af;
+      margin: 0 0 0.75rem 0;
+      line-height: 1.4;
+    }
+
+    .recluster-checkbox-container {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+      padding: 0.5rem;
+      background: #111827;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .recluster-checkbox-container:hover {
+      background: #020617;
+    }
+
+    .recluster-checkbox-container input[type="checkbox"] {
+      cursor: pointer;
+      width: 16px;
+      height: 16px;
+    }
+
+    .recluster-checkbox-container label {
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: #e5e7eb;
+      margin: 0;
+    }
+
+    .recluster-action-btn {
+      width: 100%;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      border: 1px solid #3b82f6;
+      background: #3b82f6;
+      color: white;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .recluster-action-btn:hover:not(:disabled) {
+      background: #2563eb;
+      border-color: #2563eb;
+    }
+
+    .recluster-action-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     main {
       padding: 0;
       margin: 0;
@@ -617,6 +719,19 @@
               <span class="dropdown-hint">Coming soon</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="recluster-container">
+        <button id="reclusterBtn" class="recluster-btn">🔄 Recluster</button>
+        <div id="reclusterDropdown" class="recluster-dropdown" style="display: none;">
+          <h4>🔄 Recluster Topics</h4>
+          <p>Update topic assignments for documents. Choose incremental (new docs only) or full recluster (all docs).</p>
+          <div class="recluster-checkbox-container">
+            <input type="checkbox" id="clearAssignmentsCheckbox" />
+            <label for="clearAssignmentsCheckbox">Clear existing assignments (full recluster)</label>
+          </div>
+          <button id="runReclusterBtn" class="recluster-action-btn">Recluster Topics</button>
         </div>
       </div>
 
@@ -1892,6 +2007,90 @@
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
           addDocsDropdown.style.display = "none";
+        }
+      });
+    }
+
+    // -------- RECLUSTER DROPDOWN --------
+    const reclusterBtn = document.getElementById("reclusterBtn");
+    const reclusterDropdown = document.getElementById("reclusterDropdown");
+    const runReclusterBtn = document.getElementById("runReclusterBtn");
+    const clearAssignmentsCheckbox = document.getElementById("clearAssignmentsCheckbox");
+
+    if (reclusterBtn && reclusterDropdown) {
+      // Toggle dropdown on button click
+      reclusterBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = reclusterDropdown.style.display === "block";
+        reclusterDropdown.style.display = isOpen ? "none" : "block";
+        // Close add docs dropdown if open
+        if (addDocsDropdown) {
+          addDocsDropdown.style.display = "none";
+        }
+      });
+
+      // Close dropdown when clicking outside
+      document.addEventListener("click", (e) => {
+        if (!reclusterBtn.contains(e.target) && !reclusterDropdown.contains(e.target)) {
+          reclusterDropdown.style.display = "none";
+        }
+      });
+
+      // Close dropdown when pressing Escape
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          reclusterDropdown.style.display = "none";
+        }
+      });
+    }
+
+    // Handle recluster action
+    if (runReclusterBtn) {
+      runReclusterBtn.addEventListener("click", async () => {
+        const days = parseInt(daysInput.value, 10) || 30;
+        const clearAssignments = clearAssignmentsCheckbox ? clearAssignmentsCheckbox.checked : false;
+        
+        // Disable button and show loading state
+        runReclusterBtn.disabled = true;
+        runReclusterBtn.textContent = clearAssignments ? "Reclustering all..." : "Reclustering new...";
+        
+        // Close dropdown
+        if (reclusterDropdown) {
+          reclusterDropdown.style.display = "none";
+        }
+        
+        try {
+          // Call recluster endpoint
+          const res = await authFetch(
+            `${API_BASE}/topics/recluster?days=${days}&clear_assignments=${clearAssignments}`,
+            { method: "POST" }
+          );
+          
+          if (!res.ok) {
+            const error = await res.json().catch(() => ({ detail: "Unknown error" }));
+            alert(`Reclustering failed: ${error.detail || "Unknown error"}`);
+            console.error("Recluster error:", error);
+          } else {
+            const result = await res.json();
+            console.log("Recluster result:", result);
+            
+            // Reload the bubble map after successful reclustering
+            await renderBubbleMap(days);
+            
+            // Show success message
+            const mode = clearAssignments ? "full" : "incremental";
+            const topicsCreated = result.total_topics_created || 0;
+            alert(`Reclustering complete (${mode} mode)!\nTopics created: ${topicsCreated}`);
+          }
+        } catch (error) {
+          console.error("Error during recluster:", error);
+          alert("Reclustering failed. Please check console for details.");
+          // Still try to reload the map
+          await renderBubbleMap(days);
+        } finally {
+          // Re-enable button
+          runReclusterBtn.disabled = false;
+          runReclusterBtn.textContent = "Recluster Topics";
         }
       });
     }
