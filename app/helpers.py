@@ -28,6 +28,9 @@ class DocumentOut(BaseModel):
     url: str
     title: str | None
     captured_at: datetime
+    assigned_topic_id: UUID | None = None
+    assigned_topic_title: str | None = None
+    topic_manually_assigned: bool | None = None
 
     class Config:
         #orm_mode = True

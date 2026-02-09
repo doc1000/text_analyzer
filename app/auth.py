@@ -13,6 +13,8 @@ from uuid import UUID
 
 from .db import SessionLocal, get_db
 from .models import ApiKey, Document, ExtensionToken, User, Vault, VaultMembership
+from .topics import compute_document_embeddings, _save_topic_to_db
+from .helpers import embed_doc_chunks
 
 
 API_KEY_PREFIX = "vb_live_"
@@ -377,8 +379,57 @@ def create_personal_vault(user: User, db: Session) -> Vault:
         full_text=GETTING_STARTED_CONTENT,
     )
     db.add(getting_started_doc)
-    
+    # Commit the document first so embed_doc_chunks can see it in its own session
     db.commit()
+    db.refresh(getting_started_doc)
+    
+    # Create embeddings for the document and assign to topic hierarchy
+    try:
+        # First, create chunks and embeddings for the document
+        chunk_count = embed_doc_chunks(getting_started_doc)
+        
+        # Now compute the document-level embedding
+        doc_embeddings = compute_document_embeddings(db, [getting_started_doc])
+        
+        if getting_started_doc.id in doc_embeddings:
+            centroid = doc_embeddings[getting_started_doc.id]
+            
+            # Create Level 1 topic (Documentation)
+            level1_topic_id = _save_topic_to_db(
+                db=db,
+                title="Documentation",
+                centroid=centroid,
+                document_count=1,
+                summary=None,
+                level_index=1,
+                parent_id=None
+            )
+            
+            # Create Level 0 topic (Getting Started Guides)
+            level0_topic_id = _save_topic_to_db(
+                db=db,
+                title="Getting Started Guides",
+                centroid=centroid,
+                document_count=1,
+                summary=None,
+                level_index=0,
+                parent_id=level1_topic_id
+            )
+            
+            # Assign document to Level 0 topic
+            getting_started_doc.assigned_topic_id = level0_topic_id
+            getting_started_doc.assigned_topic_title = "Getting Started Guides"
+            getting_started_doc.topic_manually_assigned = True
+            
+            # Commit the topic assignments
+            db.commit()
+    except Exception as e:
+        # If topic creation fails, still create the vault with the document
+        # (topic assignment is optional, not critical for vault creation)
+        print(f"Warning: Failed to create topics for Getting Started document: {e}")
+        import traceback
+        traceback.print_exc()
+    
     db.refresh(vault)
     return vault
 
