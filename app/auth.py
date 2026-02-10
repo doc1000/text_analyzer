@@ -348,10 +348,207 @@ def role_level(role: str) -> int:
     return ROLE_LEVELS.get(role, 0)
 
 
+def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault: Vault, db: Session) -> bool:
+    """
+    Copy all documents, chunks, topics, and embeddings from template vault to new user's vault.
+    
+    Returns True if successful, False if failed (caller should fall back to old behavior).
+    """
+    try:
+        from .config import PREFERENCES
+        from .models import get_or_create_embedding_class
+        import uuid
+        
+        # Get embedding model config
+        embed_config = PREFERENCES.embedding
+        model_config = PREFERENCES.models
+        embed_model = model_config.embedding_model
+        embed_dim = model_config.embedding_dim
+        
+        # Map model aliases to actual names and versions
+        if embed_model == "all-minilm":
+            model_name = "all-minilm"
+            version = "v1"
+            dim = 384
+        elif embed_model == "bge-m3":
+            model_name = "bge-m3"
+            version = "v1"
+            dim = 1024
+        else:
+            # Use provided dimensions or defaults
+            model_name = embed_model
+            version = "v1"
+            dim = embed_dim if embed_dim else 384
+        
+        # Get embedding table classes
+        ChunkEmbedding = get_or_create_embedding_class(model_name, version, dim, db, chunk_type="chunk")
+        DocEmbedding = get_or_create_embedding_class(model_name, version, dim, db, chunk_type="doc")
+        TopicEmbedding = get_or_create_embedding_class(model_name, version, dim, db, chunk_type="topic")
+        
+        # 1. Copy documents from template vault
+        template_docs = (
+            db.query(Document)
+            .filter(Document.vault_id == template_vault.id)
+            .all()
+        )
+        
+        if not template_docs:
+            print("Warning: Template vault has no documents")
+            return False
+        
+        # Map old document IDs to new document IDs
+        doc_id_map = {}
+        new_docs = []
+        
+        for old_doc in template_docs:
+            new_doc = Document(
+                vault_id=new_vault.id,
+                created_by=new_user.id,
+                url=old_doc.url,
+                title=old_doc.title,
+                captured_text=old_doc.captured_text,
+                extracted_text=old_doc.extracted_text,
+                full_text=old_doc.full_text,
+                captured_at=old_doc.captured_at,
+                # Topic assignments will be updated after we copy topics
+                assigned_topic_id=None,
+                assigned_topic_title=None,
+                topic_manually_assigned=old_doc.topic_manually_assigned,
+            )
+            db.add(new_doc)
+            db.flush()  # Get new_doc.id
+            doc_id_map[old_doc.id] = new_doc.id
+            new_docs.append(new_doc)
+        
+        print(f"Copied {len(new_docs)} documents from template vault")
+        
+        # 2. Copy chunk embeddings
+        for old_doc_id, new_doc_id in doc_id_map.items():
+            old_chunks = (
+                db.query(ChunkEmbedding)
+                .filter(ChunkEmbedding.document_id == old_doc_id)
+                .all()
+            )
+            
+            for old_chunk in old_chunks:
+                new_chunk = ChunkEmbedding(
+                    id=uuid.uuid4(),
+                    document_id=new_doc_id,
+                    chunk_index=old_chunk.chunk_index,
+                    chunk_text=old_chunk.chunk_text,
+                    summary_text=old_chunk.summary_text,
+                    embedding=old_chunk.embedding,
+                    created_at=old_chunk.created_at,
+                )
+                db.add(new_chunk)
+        
+        print(f"Copied chunk embeddings for {len(doc_id_map)} documents")
+        
+        # 3. Copy document-level embeddings
+        for old_doc_id, new_doc_id in doc_id_map.items():
+            old_doc_emb = (
+                db.query(DocEmbedding)
+                .filter(DocEmbedding.document_id == old_doc_id)
+                .first()
+            )
+            
+            if old_doc_emb:
+                new_doc_emb = DocEmbedding(
+                    id=uuid.uuid4(),
+                    document_id=new_doc_id,
+                    summary_text=old_doc_emb.summary_text,
+                    embedding=old_doc_emb.embedding,
+                    created_at=old_doc_emb.created_at,
+                )
+                db.add(new_doc_emb)
+        
+        print(f"Copied document embeddings for {len(doc_id_map)} documents")
+        
+        # 4. Copy topics (maintaining hierarchy)
+        # Get all topics from template vault's documents
+        template_doc_ids = [doc.id for doc in template_docs]
+        
+        # Find all topics that have documents from template vault
+        template_topic_ids = set()
+        for doc in template_docs:
+            if doc.assigned_topic_id:
+                template_topic_ids.add(doc.assigned_topic_id)
+        
+        if template_topic_ids:
+            # Get all topics and their parents (to preserve hierarchy)
+            topics_to_copy = []
+            topics_seen = set()
+            
+            def get_topic_with_parents(topic_id):
+                """Recursively get topic and all its parents."""
+                if topic_id in topics_seen:
+                    return
+                topics_seen.add(topic_id)
+                
+                topic = db.query(TopicEmbedding).filter(TopicEmbedding.id == topic_id).first()
+                if topic:
+                    topics_to_copy.append(topic)
+                    if topic.parent_id:
+                        get_topic_with_parents(topic.parent_id)
+            
+            for topic_id in template_topic_ids:
+                get_topic_with_parents(topic_id)
+            
+            # Sort topics by level (highest first) to maintain parent-child order
+            topics_to_copy.sort(key=lambda t: t.level_index, reverse=True)
+            
+            # Map old topic IDs to new topic IDs
+            topic_id_map = {}
+            
+            for old_topic in topics_to_copy:
+                new_parent_id = topic_id_map.get(old_topic.parent_id) if old_topic.parent_id else None
+                
+                new_topic = TopicEmbedding(
+                    id=uuid.uuid4(),
+                    vault_id=new_vault.id,  # Set new vault_id for isolation
+                    parent_id=new_parent_id,
+                    level_index=old_topic.level_index,
+                    title_text=old_topic.title_text,
+                    summary_text=old_topic.summary_text,
+                    document_count=old_topic.document_count,
+                    embedding=old_topic.embedding,
+                    last_matched_at=old_topic.last_matched_at,
+                    match_count=old_topic.match_count,
+                    created_at=old_topic.created_at,
+                )
+                db.add(new_topic)
+                db.flush()  # Get new_topic.id
+                topic_id_map[old_topic.id] = new_topic.id
+            
+            print(f"Copied {len(topic_id_map)} topics from template vault")
+            
+            # 5. Update document topic assignments
+            for new_doc in new_docs:
+                # Find corresponding old document
+                old_doc = next((d for d in template_docs if doc_id_map[d.id] == new_doc.id), None)
+                if old_doc and old_doc.assigned_topic_id:
+                    new_topic_id = topic_id_map.get(old_doc.assigned_topic_id)
+                    if new_topic_id:
+                        new_doc.assigned_topic_id = new_topic_id
+                        new_doc.assigned_topic_title = old_doc.assigned_topic_title
+        
+        db.commit()
+        print(f"Successfully copied template vault to user {new_user.email}")
+        return True
+        
+    except Exception as e:
+        print(f"Error copying template vault: {e}")
+        import traceback
+        traceback.print_exc()
+        db.rollback()
+        return False
+
+
 def create_personal_vault(user: User, db: Session) -> Vault:
     """Create a personal vault for a user with owner membership.
     
-    Also adds a "Getting Started" document to help new users.
+    Copies documents and embeddings from newuser@example.com template vault if available,
+    otherwise falls back to creating a single "Getting Started" document.
     """
     vault = Vault(
         name="Personal Vault",
@@ -367,8 +564,37 @@ def create_personal_vault(user: User, db: Session) -> Vault:
         role="owner",
     )
     db.add(membership)
+    db.commit()  # Commit vault and membership first
     
-    # Add Getting Started document to help new users
+    # Try to copy from template user's vault
+    template_user = db.query(User).filter(User.email == "newuser@example.com").first()
+    
+    if template_user:
+        # Find template user's personal vault
+        template_vault = (
+            db.query(Vault)
+            .join(VaultMembership, VaultMembership.vault_id == Vault.id)
+            .filter(VaultMembership.user_id == template_user.id)
+            .filter(Vault.is_personal == True)  # noqa: E712
+            .filter(Vault.archived_at == None)  # noqa: E711
+            .first()
+        )
+        
+        if template_vault:
+            print(f"Found template vault for newuser@example.com, copying to {user.email}")
+            success = copy_template_vault_to_user(template_vault, user, vault, db)
+            
+            if success:
+                db.refresh(vault)
+                return vault
+            else:
+                print("Template copy failed, falling back to old behavior")
+        else:
+            print("Template user exists but has no vault, falling back to old behavior")
+    else:
+        print("Template user newuser@example.com not found, falling back to old behavior")
+    
+    # Fallback: Create single Getting Started document (old behavior)
     getting_started_doc = Document(
         vault_id=vault.id,
         created_by=user.id,
@@ -379,7 +605,6 @@ def create_personal_vault(user: User, db: Session) -> Vault:
         full_text=GETTING_STARTED_CONTENT,
     )
     db.add(getting_started_doc)
-    # Commit the document first so embed_doc_chunks can see it in its own session
     db.commit()
     db.refresh(getting_started_doc)
     
@@ -394,12 +619,13 @@ def create_personal_vault(user: User, db: Session) -> Vault:
         if getting_started_doc.id in doc_embeddings:
             centroid = doc_embeddings[getting_started_doc.id]
             
-            # Create Level 1 topic (Documentation)
+            # Create Level 1 topic (Getting Started With VaultBubbles)
             level1_topic_id = _save_topic_to_db(
                 db=db,
-                title="Documentation",
+                title="Getting Started With VaultBubbles",
                 centroid=centroid,
                 document_count=1,
+                vault_id=vault.id,  # Associate with vault for isolation
                 summary=None,
                 level_index=1,
                 parent_id=None
@@ -411,6 +637,7 @@ def create_personal_vault(user: User, db: Session) -> Vault:
                 title="Getting Started Guides",
                 centroid=centroid,
                 document_count=1,
+                vault_id=vault.id,  # Associate with vault for isolation
                 summary=None,
                 level_index=0,
                 parent_id=level1_topic_id

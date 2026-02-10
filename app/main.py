@@ -50,6 +50,7 @@ from .auth import (
     API_KEY_PREFIX,
     EXTENSION_TOKEN_PREFIX,
     get_user_vault,
+    create_personal_vault,
     check_vault_access,
     get_user_accessible_vault_ids,
     require_vault_access,
@@ -149,6 +150,9 @@ def bootstrap_create_api_key(
         db.add(user)
         db.commit()
         db.refresh(user)
+        
+        # Create personal vault with template content for new user
+        create_personal_vault(user, db)
 
     # Generate + store hashed key (retry in the extremely unlikely case of hash collision)
     for _attempt in range(3):
@@ -834,15 +838,15 @@ def get_clustering_stats(
     docs_with_topics = topics_query.scalar()
     
     # Count topics at each level (0=fine, 1=topics, 2=categories)
-    # Note: Topic counts are global, not per-user, as topics can be shared
+    # Filter topics by user's vaults for proper isolation
     topic_counts = {}
     level_names = {0: "fine_topics", 1: "topics", 2: "categories"}
     for level in range(3):
-        count = (
-            db.query(func.count(TOPIC_TABLE.id))
-            .filter(TOPIC_TABLE.level_index == level)
-            .scalar()
-        )
+        query = db.query(func.count(TOPIC_TABLE.id)).filter(TOPIC_TABLE.level_index == level)
+        # Filter by user's vaults
+        if user and vault_ids:
+            query = query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
+        count = query.scalar()
         topic_counts[level_names.get(level, f"level_{level}")] = count
     
     return {
@@ -1105,7 +1109,7 @@ def get_topics_for_document(
     # Use raw SQL for efficient pgvector operations:
     # 1. Compute average embedding for document's chunks
     # 2. Order topics by cosine distance (similarity = 1 - distance)
-    # 3. Filter topics to only those with documents in user's accessible vaults
+    # 3. Filter topics to only those with documents in user's accessible vaults AND topics in user's vaults
     sql = text(f"""
         WITH doc_embedding AS (
             SELECT AVG(embedding) as avg_emb
@@ -1129,6 +1133,7 @@ def get_topics_for_document(
         WHERE t.level_index = 0
         AND de.avg_emb IS NOT NULL
         AND t.id IN (SELECT assigned_topic_id FROM accessible_topics)
+        AND t.vault_id::text = ANY(:vault_ids)
         ORDER BY t.embedding <=> de.avg_emb ASC
         LIMIT 100
     """)
@@ -1774,6 +1779,9 @@ def extension_verify_code(
         db.add(user)
         db.commit()
         db.refresh(user)
+        
+        # Create personal vault with template content for new user
+        create_personal_vault(user, db)
     
     # Generate extension token
     raw_token = generate_extension_token()

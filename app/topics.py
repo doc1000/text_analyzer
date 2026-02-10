@@ -720,16 +720,25 @@ def _generate_title_and_summary(
 
 # ---------- Topic Title Caching & Reuse ----------
 
-def _cache_existing_topics(db: Session) -> Dict[int, List[Tuple[np.ndarray, str, str]]]:
+def _cache_existing_topics(db: Session, vault_ids: List[UUID] = None) -> Dict[int, List[Tuple[np.ndarray, str, str]]]:
     """
     Cache existing topic embeddings and titles before reclustering.
+    
+    Args:
+        db: Database session
+        vault_ids: List of vault IDs to filter topics (for data isolation)
     
     Returns:
         Dict mapping level_index -> list of (embedding, title, summary) tuples
     """
     from collections import defaultdict
     
-    existing = db.query(TOPIC_TABLE).all()
+    # Query topics with vault filter
+    query = db.query(TOPIC_TABLE)
+    if vault_ids is not None and len(vault_ids) > 0:
+        query = query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
+    
+    existing = query.all()
     
     cached_by_level: Dict[int, List[Tuple[np.ndarray, str, str]]] = defaultdict(list)
     
@@ -786,6 +795,7 @@ def _save_topic_to_db(
     title: str,
     centroid: np.ndarray,
     document_count: int,
+    vault_id: UUID,
     summary: str = None,
     parent_id: UUID = None,
     level_index: int = 0
@@ -798,6 +808,7 @@ def _save_topic_to_db(
         title: Topic title
         centroid: Cluster centroid embedding
         document_count: Number of documents in cluster
+        vault_id: Vault ID this topic belongs to (required for data isolation)
         summary: Optional summary text
         parent_id: Parent topic ID (for subtopics)
         level_index: 0 for top-level, 1 for subtopics
@@ -806,6 +817,7 @@ def _save_topic_to_db(
         UUID of created topic
     """
     topic_record = TOPIC_TABLE(
+        vault_id=vault_id,
         parent_id=parent_id,
         level_index=level_index,
         title_text=title,
@@ -841,7 +853,7 @@ def _find_matching_topic(
         exclude_stale: If True, only match topics that are "active":
                       - Level 0: has at least one document assigned
                       - Level 1/2: has at least one child topic
-        vault_ids: List of vault IDs to scope topic search (filters documents by vault)
+        vault_ids: List of vault IDs to scope topic search (filters topics by vault)
     
     Returns:
         (topic_id, title, summary) if match found, else None
@@ -850,6 +862,13 @@ def _find_matching_topic(
     
     # Build query for topics at the same level
     query = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.level_index == level_index)
+    
+    # Filter by vault_ids (CRITICAL for data isolation)
+    if vault_ids is not None and len(vault_ids) > 0:
+        query = query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
+    elif vault_ids is not None and len(vault_ids) == 0:
+        # User has no vault access - return no matches
+        return None
     
     if exclude_stale:
         if level_index == 0:
@@ -865,12 +884,11 @@ def _find_matching_topic(
             query = query.filter(TOPIC_TABLE.id.in_(topics_with_docs))
         else:
             # Level 1/2: Only include topics that have at least one child topic
-            topics_with_children = (
-                db.query(TOPIC_TABLE.parent_id)
-                .filter(TOPIC_TABLE.parent_id != None)
-                .distinct()
-                .subquery()
-            )
+            # Also need to filter child topics by vault
+            child_query = db.query(TOPIC_TABLE.parent_id).filter(TOPIC_TABLE.parent_id != None)
+            if vault_ids:
+                child_query = child_query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
+            topics_with_children = child_query.distinct().subquery()
             query = query.filter(TOPIC_TABLE.id.in_(topics_with_children))
     
     existing_topics = (
@@ -2043,7 +2061,7 @@ def compute_hierarchical_topics(
         print(f"  Level {level}: {level_stats['n_clusters']} clusters, avg size: {level_stats['avg_size']:.1f}")
     
     # 8) Cache existing topic titles for reuse, then clear topics
-    cached_topics_by_level = _cache_existing_topics(db)
+    cached_topics_by_level = _cache_existing_topics(db, vault_ids=vault_ids)
     
     # Only delete topics that don't have manually-assigned documents
     # Get topic IDs that have manually-assigned documents
@@ -2061,14 +2079,21 @@ def compute_hierarchical_topics(
     try:
         if protected_topic_ids:
             # Delete only topics that are not protected
-            deleted = db.query(TOPIC_TABLE).filter(
+            delete_query = db.query(TOPIC_TABLE).filter(
                 ~TOPIC_TABLE.id.in_(protected_topic_ids)
-            ).delete(synchronize_session=False)
+            )
+            # Also filter by vault_ids to only delete topics in user's vaults
+            if vault_ids:
+                delete_query = delete_query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
+            deleted = delete_query.delete(synchronize_session=False)
             db.commit()
             print(f"Cleared {deleted} existing topics (preserved {len(protected_topic_ids)} topics with manual assignments)")
         else:
-            # No protected topics, delete all
-            deleted = db.query(TOPIC_TABLE).delete()
+            # No protected topics, delete all topics in user's vaults
+            delete_query = db.query(TOPIC_TABLE)
+            if vault_ids:
+                delete_query = delete_query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
+            deleted = delete_query.delete()
             db.commit()
             print(f"Cleared {deleted} existing topics")
     except Exception as e:
@@ -2098,6 +2123,16 @@ def compute_hierarchical_topics(
             
             if not docs_in_cluster:
                 continue
+            
+            # Determine vault_id for this topic from documents in the cluster
+            # Use the vault of the first document (all docs should be from user's accessible vaults)
+            cluster_vault_id = docs_in_cluster[0].vault_id
+            
+            # Sanity check: All documents should have the same vault_id in single-vault mode
+            # (If multi-vault clustering is needed in the future, this logic would change)
+            vault_ids_in_cluster = {d.vault_id for d in docs_in_cluster}
+            if len(vault_ids_in_cluster) > 1:
+                print(f"  [WARN] Cluster has documents from {len(vault_ids_in_cluster)} vaults, using first vault")
             
             # Compute centroid
             cluster_embeddings = [doc_embeddings[d.id] for d in docs_in_cluster]
@@ -2131,12 +2166,13 @@ def compute_hierarchical_topics(
                 )
                 print(f"  [{level_prefix}] [NEW] {title[:50]}... ({len(docs_in_cluster)} docs)")
             
-            # Save topic to database
+            # Save topic to database with vault_id
             topic_db_id = _save_topic_to_db(
                 db=db,
                 title=title,
                 centroid=centroid,
                 document_count=len(docs_in_cluster),
+                vault_id=cluster_vault_id,
                 summary=summary,
                 parent_id=parent_id,
                 level_index=level
@@ -2677,12 +2713,12 @@ def build_hierarchical_topics_for_d3(
         children_by_parent = {}
         level_2_topics = []
     else:
-        # Get all topics to build lookup tables
-        all_topics = (
-            db.query(TOPIC_TABLE)
-            .order_by(TOPIC_TABLE.level_index.desc())
-            .all()
-        )
+        # Get all topics to build lookup tables - filter by vault
+        query = db.query(TOPIC_TABLE).order_by(TOPIC_TABLE.level_index.desc())
+        if vault_ids is not None and len(vault_ids) > 0:
+            query = query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
+        
+        all_topics = query.all()
         
         # Build topic lookup by ID
         topic_by_id = {t.id: t for t in all_topics}

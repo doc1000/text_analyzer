@@ -340,13 +340,16 @@ def get_or_create_embedding_class(model_name: str, version: str,
         }
 
     if chunk_type == "topic":
-        # Topic table: parent_id, level_index, title_text, summary_text, document_count, embedding
+        # Topic table: vault_id, parent_id, level_index, title_text, summary_text, document_count, embedding
         attrs = {
             "__tablename__": table_name,
             "__table_args__": (
                 {"schema": "embedding"},
             ),
             "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            "vault_id": Column(UUID(as_uuid=True),
+                              ForeignKey("vaults.id", ondelete="CASCADE"),
+                              nullable=False, index=True),
             "parent_id": Column(UUID(as_uuid=True), nullable=True),
             "level_index": Column(Integer, nullable=False),
             "title_text": Column(Text, nullable=False),
@@ -391,6 +394,14 @@ def get_or_create_embedding_class(model_name: str, version: str,
         postgresql_ops={"embedding": "vector_cosine_ops"},
         postgresql_with={"lists": "100"},
     )
+    
+    # Add composite index for topic tables to optimize vault + level queries
+    if chunk_type == "topic":
+        Index(
+            f"{table_name}_vault_level_idx",
+            cls.__table__.c.vault_id,
+            cls.__table__.c.level_index,
+        )
 
  # 3) Insert a row into embedding.embedding_model if not present
     #db_gen = db
