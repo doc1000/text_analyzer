@@ -382,6 +382,7 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
         
         # Get embedding table classes
         ChunkEmbedding = get_or_create_embedding_class(model_name, version, dim, db, chunk_type="chunk")
+        SentenceEmbedding = get_or_create_embedding_class(model_name, version, dim, db, chunk_type="sent")
         DocEmbedding = get_or_create_embedding_class(model_name, version, dim, db, chunk_type="doc")
         TopicEmbedding = get_or_create_embedding_class(model_name, version, dim, db, chunk_type="topic")
         
@@ -422,7 +423,8 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
         
         print(f"Copied {len(new_docs)} documents from template vault")
         
-        # 2. Copy chunk embeddings
+        # 2. Copy chunk embeddings (track chunk ID mapping for sentences)
+        chunk_id_map = {}  # Map old chunk ID to new chunk ID
         for old_doc_id, new_doc_id in doc_id_map.items():
             old_chunks = (
                 db.query(ChunkEmbedding)
@@ -431,8 +433,9 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
             )
             
             for old_chunk in old_chunks:
+                new_chunk_id = uuid.uuid4()
                 new_chunk = ChunkEmbedding(
-                    id=uuid.uuid4(),
+                    id=new_chunk_id,
                     document_id=new_doc_id,
                     chunk_index=old_chunk.chunk_index,
                     chunk_text=old_chunk.chunk_text,
@@ -441,8 +444,32 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
                     created_at=old_chunk.created_at,
                 )
                 db.add(new_chunk)
+                chunk_id_map[old_chunk.id] = new_chunk_id  # Track mapping
         
         print(f"Copied chunk embeddings for {len(doc_id_map)} documents")
+        
+        # 2b. Copy sentence embeddings (critical for query functionality)
+        sentence_count = 0
+        for old_chunk_id, new_chunk_id in chunk_id_map.items():
+            old_sentences = (
+                db.query(SentenceEmbedding)
+                .filter(SentenceEmbedding.chunk_id == old_chunk_id)
+                .all()
+            )
+            
+            for old_sentence in old_sentences:
+                new_sentence = SentenceEmbedding(
+                    id=uuid.uuid4(),
+                    chunk_id=new_chunk_id,
+                    sent_index=old_sentence.sent_index,
+                    sent_text=old_sentence.sent_text,
+                    embedding=old_sentence.embedding,
+                    created_at=old_sentence.created_at,
+                )
+                db.add(new_sentence)
+                sentence_count += 1
+        
+        print(f"Copied {sentence_count} sentence embeddings for {len(chunk_id_map)} chunks")
         
         # 3. Copy document-level embeddings
         for old_doc_id, new_doc_id in doc_id_map.items():

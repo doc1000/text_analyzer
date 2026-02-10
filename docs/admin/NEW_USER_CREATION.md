@@ -72,18 +72,37 @@ This function performs a complete copy of all content from the template vault to
 **Process**:
 1. Get embedding model configuration from `PREFERENCES.models`
 2. Determine model name, version, and dimensions (e.g., "all-minilm", "v1", 384)
-3. Get dynamic embedding table class: `get_or_create_embedding_class(model_name, version, dim, db, chunk_type="chunk")`
+3. Get dynamic embedding table classes:
+   - `get_or_create_embedding_class(model_name, version, dim, db, chunk_type="chunk")`
+   - `get_or_create_embedding_class(model_name, version, dim, db, chunk_type="sent")`
 4. For each copied document:
    - Query chunks from template: `db.query(ChunkEmbedding).filter(ChunkEmbedding.document_id == old_doc_id).all()`
    - Create new chunk records with:
-     - New UUID
+     - New UUID (tracked in `chunk_id_map`)
      - Updated `document_id` (using `doc_id_map`)
      - Copied `chunk_text`, `summary_text`, and `embedding` vector
      - Preserved `chunk_index` and `created_at`
+   - Maintain mapping: `chunk_id_map[old_chunk_id] = new_chunk_id`
 
-**Result**: All pre-calculated chunk embeddings are copied, avoiding expensive re-computation.
+**Result**: All pre-calculated chunk embeddings are copied with ID mapping for sentence references.
 
-#### C. Document Embedding Copying
+#### C. Sentence Embedding Copying
+
+**Process**:
+1. For each copied chunk (using `chunk_id_map`):
+   - Query sentences from template: `db.query(SentenceEmbedding).filter(SentenceEmbedding.chunk_id == old_chunk_id).all()`
+   - Create new sentence records with:
+     - New UUID
+     - Updated `chunk_id` (using `chunk_id_map`)
+     - Copied `sent_text`, `embedding` vector
+     - Preserved `sent_index` and `created_at`
+2. Track total sentence count for logging
+
+**Result**: All sentence embeddings are copied, enabling query functionality.
+
+**Critical**: Sentence embeddings are used by the query endpoint (`/query`). Without them, users would get "no matching chunks found" even though documents and chunks exist. The query joins `SENTENCE_TABLE → EMBED_TABLE → Document` and filters by `SENTENCE_TABLE.embedding != None`.
+
+#### D. Document Embedding Copying
 
 **Process**:
 1. Get document embedding table class: `get_or_create_embedding_class(model_name, version, dim, db, chunk_type="doc")`
@@ -94,7 +113,7 @@ This function performs a complete copy of all content from the template vault to
 
 **Result**: Document-level summaries and embeddings are preserved.
 
-#### D. Topic Hierarchy Copying
+#### E. Topic Hierarchy Copying
 
 **Process**:
 1. Identify all topics assigned to template documents: `template_topic_ids = {doc.assigned_topic_id for doc in template_docs}`
@@ -112,7 +131,7 @@ This function performs a complete copy of all content from the template vault to
 
 **Result**: Complete topic hierarchy is copied with vault-scoped IDs.
 
-#### E. Document-Topic Assignment
+#### F. Document-Topic Assignment
 
 **Process**:
 1. For each copied document:
@@ -228,9 +247,10 @@ If database operations succeed but topics are empty:
 - No blank canvas or empty state
 
 ### 2. Pre-Calculated Embeddings
-- All chunk, document, and topic embeddings are copied
+- All chunk, sentence, document, and topic embeddings are copied
 - No expensive embedding computation at user creation time
 - Fast vault creation (sub-second instead of several seconds)
+- Query functionality works immediately (sentence embeddings enable search)
 
 ### 3. Consistent Onboarding
 - All users start with same high-quality template content
@@ -256,8 +276,9 @@ Check logs for:
 Found template vault for newuser@example.com, copying to user@example.com
 Copied N documents from template vault
 Copied chunk embeddings for N documents
+Copied M sentence embeddings for N chunks
 Copied document embeddings for N documents
-Copied M topics from template vault
+Copied X topics from template vault
 Successfully copied template vault to user user@example.com
 ```
 
@@ -304,6 +325,7 @@ Error copying template vault: ...
 - **`vault_memberships`** - User-vault permissions
 - **`documents`** - Documents with vault_id foreign key
 - **`embedding.{model}_v{version}_{dim}`** - Chunk embeddings with document_id foreign key
+- **`embedding.sent_{model}_v{version}_{dim}`** - Sentence embeddings with chunk_id foreign key (critical for query)
 - **`embedding.doc_{model}_v{version}_{dim}`** - Document embeddings with document_id foreign key
 - **`embedding.topic_{model}_v{version}_{dim}`** - Topic embeddings with vault_id and parent_id foreign keys
 
@@ -333,3 +355,20 @@ Hardcoded in `create_personal_vault()` as `"newuser@example.com"`. Change this c
 - **Topic Vault Segregation**: `docs/admin/TOPIC_VAULT_SEGREGATION.md` - Details on vault-scoped topics
 - **Topic Persistence**: `docs/admin/TOPIC_PERSISTENCE_IMPLEMENTATION.md` - How topics are matched and persisted
 - **Migration 006**: `migrations/006_add_vault_to_topics.sql` - Database migration adding vault_id to topics
+
+## Recent Changes
+
+### February 10, 2026 - Added Sentence Embedding Copy
+
+**Issue**: New users were getting "no matching chunks found" when querying, even though they had documents and chunk embeddings copied to their vaults.
+
+**Root Cause**: The query endpoint (`/query` in `app/main.py`) searches sentence embeddings, not chunk embeddings. The query joins `SENTENCE_TABLE → EMBED_TABLE → Document` and filters by `SENTENCE_TABLE.embedding != None`. The template copy process was copying documents, chunk embeddings, document embeddings, and topics, but NOT sentence embeddings.
+
+**Fix**: Modified `copy_template_vault_to_user()` in `app/auth.py` (lines 426-472) to:
+1. Track chunk ID mappings during chunk copy (`chunk_id_map`)
+2. Copy all sentence embeddings using the chunk ID mappings
+3. Log sentence count for verification
+
+**Impact**: New users now get full query functionality immediately upon account creation.
+
+**Testing**: Delete and recreate test users to verify sentence embeddings are copied. Use `verify_sentence_copy.sql` to check counts.
