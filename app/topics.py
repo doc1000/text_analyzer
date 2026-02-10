@@ -1281,6 +1281,7 @@ def _incremental_topic_assignment(
                     title=doc_title_short,
                     centroid=centroid,
                     document_count=1,
+                    vault_id=doc.vault_id,
                     summary=None,
                     parent_id=parent_topic_id,
                     level_index=0
@@ -1314,6 +1315,7 @@ def _incremental_topic_assignment(
                     title=doc_title_short,
                     centroid=centroid,
                     document_count=1,
+                    vault_id=doc.vault_id,
                     summary=None,
                     parent_id=parent_topic_id,  # Directly under Level 2
                     level_index=0
@@ -1402,6 +1404,7 @@ def _incremental_topic_assignment(
                 title=title,
                 centroid=centroid,
                 document_count=len(docs_in_cluster),
+                vault_id=docs_in_cluster[0].vault_id,
                 summary=summary,
                 parent_id=None,
                 level_index=0
@@ -2458,6 +2461,7 @@ def compute_topics(
                         title=title,
                         centroid=sub_centroid,
                         document_count=len(docs_list),
+                        vault_id=docs_list[0].vault_id,
                         summary=summary,
                         parent_id=parent_db_id,
                         level_index=1
@@ -2526,6 +2530,7 @@ def compute_topics(
                     title=topic_title,
                     centroid=centroid,
                     document_count=len(docs_list),
+                    vault_id=docs_list[0].vault_id,
                     summary=topic_summary,
                     level_index=0
                 )

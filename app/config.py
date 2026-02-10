@@ -57,7 +57,7 @@ class ClusteringConfig:
     dim_reducer: DimReducer = "none"  # "pca", "umap", or "none" - using "none" for consistent full embeddings
     use_reducer_for_clustering: bool = True  # was use_umap_for_clustering
     cluster_algo: ClusterAlgo = "kmeans"
-    min_docs_for_clustering: int = 2
+    min_docs_for_clustering: int = 1
     max_neighbors: int = 15          # still used if you pick UMAP
     max_components: int = 32
     random_state: int = 42

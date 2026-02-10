@@ -3,8 +3,8 @@ import uuid
 from sqlalchemy import (
     Column, Text, Float, DateTime,
     ForeignKey, Integer, Index, BigInteger,
-    String, text, Boolean, UniqueConstraint
-)
+    String, text, Boolean, UniqueConstraint,
+    )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import UserDefinedType
@@ -415,3 +415,4 @@ def get_or_create_embedding_class(model_name: str, version: str,
     )
 
     return cls
+

@@ -2,7 +2,7 @@
 import os
 #import time
 #from typing import Optional, Tuple
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, event, DDL
 from sqlalchemy.orm import sessionmaker #, Session
 from .models import Base, get_or_create_embedding_class
 from .config import PREFERENCES
@@ -27,7 +27,12 @@ def ensure_schemas():
             print("✓ pgvector extension enabled")
         except Exception as e:
             print(f"⚠ Could not enable pgvector extension: {e}")
-        
+        # enable pgcrypto extension (required for uuid columns)
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            print("✓ pgcrypto extension enabled")
+        except Exception as e:
+            print(f"⚠ Could not enable pgcrypto extension: {e}")        
         # Schema for dynamic embedding tables + metadata
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS embedding"))
 
@@ -249,3 +254,51 @@ def __getattr__(name):
     elif name == "DOCUMENT_TABLE":
         return initialize_embedding_tables()[5]
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
+# Define the raw SQL for your PostgreSQL function
+generate_verification_code_sql = DDL("""
+CREATE OR REPLACE FUNCTION generate_verification_code(
+    p_email TEXT,
+    p_purpose TEXT
+)
+RETURNS TEXT AS $$
+DECLARE
+    v_code TEXT;
+    v_interval INTERVAL;
+BEGIN
+    IF p_purpose NOT IN ('reviewer', 'user') THEN
+        RAISE EXCEPTION 'Invalid purpose: %, must be "reviewer" or "user"', p_purpose;
+    END IF;
+
+    IF p_purpose = 'reviewer' THEN
+        v_interval := INTERVAL '14 days';
+    ELSIF p_purpose = 'user' THEN
+        v_interval := INTERVAL '15 minutes';
+    END IF;
+
+    v_code := LPAD((TRUNC(random() * 1000000))::TEXT, 6, '0');
+
+    DELETE FROM extension_verification_codes
+    WHERE email = p_email AND purpose = p_purpose;
+
+    INSERT INTO extension_verification_codes (
+        id, email, code, purpose, created_at, expires_at
+    )
+    VALUES (
+        gen_random_uuid(),
+        p_email,
+        v_code,
+        p_purpose,
+        NOW(),
+        NOW() + v_interval
+    );
+
+    RETURN v_code;
+END;
+$$ LANGUAGE plpgsql;
+""")
+
+# Attach the DDL to run after tables are created
+event.listen(Base.metadata, 'after_create', generate_verification_code_sql)
+
