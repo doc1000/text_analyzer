@@ -297,11 +297,11 @@ def ingest(
     captured_at = payload.captured_at or datetime.utcnow()
     
     # Get user's vault (creates personal vault if doesn't exist)
-    vault = get_user_accessible_vault_ids(user, db, min_role = "owner")
+    vault_ids = get_user_accessible_vault_ids(user, db, min_role = "owner")
     if len(vault) == 0:
         vault = create_personal_vault(user, db)
     else:
-        vault = vault[0]
+        vault = get_vault(vault_ids[0], db)
 
     # 1. Start with extension text as captured_text
     captured_text = payload.text or ""

@@ -671,6 +671,14 @@ def check_vault_access(
     
     return role_level(membership.role) >= role_level(min_role)
 
+def get_vault(vault_id: UUID, db: Session) -> Vault:
+    """
+    Get vault specified by vault_id.
+    """
+    vault = db.query(Vault).filter(Vault.id == vault_id).first()
+    if not vault:
+        raise HTTPException(status_code=404, detail="Vault not found")
+    return vault
 
 def get_user_accessible_vault_ids(user: User, db: Session, min_role: str = "viewer") -> list[UUID]:
     """
