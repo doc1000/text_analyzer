@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 # You can extend these later or load them from JSON if you want.
 # For now: one central place to tweak your internal tools.
-Provider = Literal["openai", "ollama", "huggingface"]
-
+PROVIDERS = ("openai", "ollama", "huggingface")
+Provider = Literal[*PROVIDERS]
 # Model alias mapping: internal name -> provider-specific model IDs
 # This ensures the same underlying model is used regardless of provider
 EMBEDDING_MODEL_ALIASES = {

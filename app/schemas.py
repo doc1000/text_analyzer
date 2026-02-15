@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 from datetime import datetime
 from uuid import UUID
-
+from .config import PROVIDERS
 # ---------- Auth / API keys ----------
 
 class CreateApiKeyRequest(BaseModel):
@@ -213,7 +213,7 @@ class SettingsResponse(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     chat_provider: Optional[Literal["openai", "ollama"]] = None
-    embedding_provider: Optional[Literal["openai", "ollama"]] = None
+    embedding_provider: Optional[Literal[PROVIDERS]] = None
     topic_provider: Optional[Literal["openai", "ollama"]] = None
     chat_model: Optional[str] = None  # Model name for chat (Ollama or OpenAI)
     topic_model: Optional[str] = None  # Model name for topic generation (Ollama)

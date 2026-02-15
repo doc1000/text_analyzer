@@ -38,7 +38,7 @@ from .topics import (
     get_topics_with_cache,
     clear_topics_cache,
 )
-from .config import PREFERENCES
+from .config import PREFERENCES, PROVIDERS
 from .helpers import update_openai_client
 from .auth import (
     ApiKeyAuthMiddleware,
@@ -298,7 +298,7 @@ def ingest(
     
     # Get user's vault (creates personal vault if doesn't exist)
     vault_ids = get_user_accessible_vault_ids(user, db, min_role = "owner")
-    if len(vault) == 0:
+    if len(vault_ids) == 0:
         vault = create_personal_vault(user, db)
     else:
         vault = get_vault(vault_ids[0], db)
@@ -1031,8 +1031,8 @@ def update_settings(
     
     # Update embedding provider if provided
     if payload.embedding_provider is not None:
-        if payload.embedding_provider not in ["openai", "ollama"]:
-            raise HTTPException(status_code=400, detail="Invalid embedding_provider. Must be 'openai' or 'ollama'")
+        if payload.embedding_provider not in PROVIDERS:#["openai", "ollama"]:
+            raise HTTPException(status_code=400, detail="Invalid embedding_provider. Must be 'openai' or 'ollama' or 'huggingface'")
         PREFERENCES.models.embedding_provider = payload.embedding_provider
     
     # Update topic provider if provided
