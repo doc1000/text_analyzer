@@ -755,7 +755,7 @@ def recluster_topics(
     
     # Get vault IDs the user can access
     vault_ids = get_user_accessible_vault_ids(user, db)
-    
+    print(f"topic vault ideas: {vault_ids}")
     # Optionally clear existing topic assignments (for full recluster)
     # Only clear AUTO-ASSIGNED topics, preserve manual assignments
     # Only clear assignments for documents in user's vaults
@@ -778,6 +778,7 @@ def recluster_topics(
     
     # Compute hierarchical topics (pass clear_assignments to control behavior)
     # Pass vault_ids to scope reclustering to user's documents
+    
     result = compute_hierarchical_topics(db, days=days, full_recluster=clear_assignments, vault_ids=vault_ids)
     
     return result
@@ -1279,7 +1280,8 @@ def update_document_topic(
             centroid=centroid,
             document_count=1,
             summary=None,
-            level_index=0
+            level_index=0,
+            vault_id=doc.vault_id
         )
         
         doc.assigned_topic_id = topic_id

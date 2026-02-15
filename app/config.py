@@ -54,12 +54,12 @@ LinkageMethod = Literal["average", "single", "complete"]  # for agglomerative cl
 
 @dataclass
 class ClusteringConfig:
-    dim_reducer: DimReducer = "none"  # "pca", "umap", or "none" - using "none" for consistent full embeddings
+    dim_reducer: DimReducer = "pca"  # "pca", "umap", or "none" - using "none" for consistent full embeddings
     use_reducer_for_clustering: bool = True  # was use_umap_for_clustering
     cluster_algo: ClusterAlgo = "kmeans"
     min_docs_for_clustering: int = 1
     max_neighbors: int = 15          # still used if you pick UMAP
-    max_components: int = 32
+    max_components: int = 24
     random_state: int = 42
     k_topics_min: int = 2
     k_topics_max: int = 10

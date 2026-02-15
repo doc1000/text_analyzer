@@ -2005,6 +2005,7 @@ def compute_hierarchical_topics(
         return {"status": "no_documents", "message": "No documents found"}
     
     print(f"\n{'='*60}")
+    print(f"topic vault ids: {vault_ids}")
     print(f"Computing hierarchical topics - {mode_desc}")
     print(f"Processing {len(docs)} documents")
     print(f"Thresholds: {agglom_cfg.level_thresholds}")

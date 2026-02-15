@@ -593,99 +593,54 @@ def create_personal_vault(user: User, db: Session) -> Vault:
     db.add(membership)
     db.commit()  # Commit vault and membership first
     
-    # Try to copy from template user's vault
-    template_user = db.query(User).filter(User.email == "newuser@example.com").first()
-    
-    if template_user:
-        # Find template user's personal vault
-        template_vault = (
-            db.query(Vault)
-            .join(VaultMembership, VaultMembership.vault_id == Vault.id)
-            .filter(VaultMembership.user_id == template_user.id)
-            .filter(Vault.is_personal == True)  # noqa: E712
-            .filter(Vault.archived_at == None)  # noqa: E711
-            .first()
-        )
-        
-        if template_vault:
-            print(f"Found template vault for newuser@example.com, copying to {user.email}")
-            success = copy_template_vault_to_user(template_vault, user, vault, db)
-            
-            if success:
-                db.refresh(vault)
-                return vault
-            else:
-                print("Template copy failed, falling back to old behavior")
+    # give new users view access to the newuser@example.com vault.
+    if not newuser_vault_access(user, db):  
+        print("Failed to give new users view access to the newuser@example.com vault")
+        # try to copy the newuser@example.com vault to the new user's vault.
+        if not newuser_vault_copy(user, db):
+            print("Failed to copy the newuser@example.com vault to the new user's vault")
         else:
-            print("Template user exists but has no vault, falling back to old behavior")
+            print("Successfully copied the newuser@example.com vault to the new user's vault")
     else:
-        print("Template user newuser@example.com not found, falling back to old behavior")
-    
-    # Fallback: Create single Getting Started document (old behavior)
-    getting_started_doc = Document(
-        vault_id=vault.id,
-        created_by=user.id,
-        url="internal://getting-started",
-        title="Getting Started with VaultBubbles",
-        captured_text=GETTING_STARTED_CONTENT,
-        extracted_text=GETTING_STARTED_CONTENT,
-        full_text=GETTING_STARTED_CONTENT,
-    )
-    db.add(getting_started_doc)
-    db.commit()
-    db.refresh(getting_started_doc)
-    
-    # Create embeddings for the document and assign to topic hierarchy
-    try:
-        # First, create chunks and embeddings for the document
-        chunk_count = embed_doc_chunks(getting_started_doc)
-        
-        # Now compute the document-level embedding
-        doc_embeddings = compute_document_embeddings(db, [getting_started_doc])
-        
-        if getting_started_doc.id in doc_embeddings:
-            centroid = doc_embeddings[getting_started_doc.id]
-            
-            # Create Level 1 topic (Getting Started With VaultBubbles)
-            level1_topic_id = _save_topic_to_db(
-                db=db,
-                title="Getting Started With VaultBubbles",
-                centroid=centroid,
-                document_count=1,
-                vault_id=vault.id,  # Associate with vault for isolation
-                summary=None,
-                level_index=1,
-                parent_id=None
-            )
-            
-            # Create Level 0 topic (Getting Started Guides)
-            level0_topic_id = _save_topic_to_db(
-                db=db,
-                title="Getting Started Guides",
-                centroid=centroid,
-                document_count=1,
-                vault_id=vault.id,  # Associate with vault for isolation
-                summary=None,
-                level_index=0,
-                parent_id=level1_topic_id
-            )
-            
-            # Assign document to Level 0 topic
-            getting_started_doc.assigned_topic_id = level0_topic_id
-            getting_started_doc.assigned_topic_title = "Getting Started Guides"
-            getting_started_doc.topic_manually_assigned = True
-            
-            # Commit the topic assignments
-            db.commit()
-    except Exception as e:
-        # If topic creation fails, still create the vault with the document
-        # (topic assignment is optional, not critical for vault creation)
-        print(f"Warning: Failed to create topics for Getting Started document: {e}")
-        import traceback
-        traceback.print_exc()
+        print("Successfully gave new users view access to the newuser@example.com vault"
+
     
     db.refresh(vault)
     return vault
+
+def newuser_vault_access(user: User, db: Session) -> bool:
+    """
+    give new users view access to the newuser@example.com vault.
+    """
+    newuser_vault = db.query(Vault).filter(Vault.owner_id == "newuser@example.com").first()
+    current_access = False
+    if newuser_vault:
+        current_access = check_vault_access(user, newuser_vault.id, db, "viewer")
+        if not current_access:
+            grant_vault_access(user, newuser_vault.id, "viewer", db)
+    return current_access
+
+def newuser_vault_copy(user: User, db: Session) -> bool:
+    """
+    copy the newuser@example.com vault to the new user's vault.
+    """
+    newuser_vault = db.query(Vault).filter(Vault.owner_id == "newuser@example.com").first()
+    if newuser_vault:
+        copy_template_vault_to_user(newuser_vault, user, vault, db)
+    return False
+
+def grant_vault_access(user: User, vault_id: UUID, role: str, db: Session) -> bool:
+    """
+    grant access to specific vault to a specific user.
+    """
+    membership = VaultMembership(
+        vault_id=vault_id,
+        user_id=user.id,
+        role=role,
+    )
+    db.add(membership)
+    db.commit()
+
 
 
 def get_user_vault(user: User, db: Session) -> Optional[Vault]:
