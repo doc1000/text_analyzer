@@ -22,6 +22,7 @@ from .schemas import (
     IngestPayload, DocumentDetailResponse, DocumentUpdateRequest, 
     SettingsResponse, SettingsUpdateRequest, TopicOption, TopicsListResponse,
     TopicAssignmentRequest,
+    ClusteringSettingsResponse,
     CreateApiKeyRequest, CreateApiKeyResponse, WhoAmIResponse,
     ListApiKeysResponse, ApiKeyInfo,
     VaultResponse, VaultCreate, VaultListResponse,
@@ -1004,6 +1005,21 @@ def get_settings():
     topic_model = PREFERENCES.models.ollama.topic_model if PREFERENCES.models.topic_provider == "ollama" else PREFERENCES.models.llm_model
     
     has_openai_key = bool(os.getenv("OPENAI_API_KEY"))
+
+    clustering = ClusteringSettingsResponse(
+        dim_reducer=PREFERENCES.clustering.dim_reducer,
+        min_docs_for_clustering=PREFERENCES.clustering.min_docs_for_clustering,
+        max_components=PREFERENCES.clustering.max_components,
+        agglomerative_enabled=PREFERENCES.agglomerative.enabled,
+        linkage_method=PREFERENCES.agglomerative.linkage_method,
+        level_0_distance=PREFERENCES.agglomerative.level_0_distance,
+        level_1_distance=PREFERENCES.agglomerative.level_1_distance,
+        level_2_distance=PREFERENCES.agglomerative.level_2_distance,
+        min_cluster_size=PREFERENCES.agglomerative.min_cluster_size,
+        use_document_summaries=PREFERENCES.agglomerative.use_document_summaries,
+        similarity_threshold_topic=PREFERENCES.topic_persistence.similarity_threshold_topic,
+        similarity_threshold_subtopic=PREFERENCES.topic_persistence.similarity_threshold_subtopic,
+    )
     
     return SettingsResponse(
         chat_model=chat_model,
@@ -1012,7 +1028,8 @@ def get_settings():
         chat_provider=PREFERENCES.models.chat_provider,
         embedding_provider=PREFERENCES.models.embedding_provider,
         topic_provider=PREFERENCES.models.topic_provider,
-        has_openai_key=has_openai_key
+        has_openai_key=has_openai_key,
+        clustering=clustering,
     )
 
 @app.put("/settings", response_model=SettingsResponse)
@@ -1069,7 +1086,55 @@ def update_settings(
             os.environ.pop("OPENAI_API_KEY", None)
             import app.helpers as helpers_module
             helpers_module._client_instance = None
-    
+
+    # Update clustering settings if provided (consolidated: clustering + agglomerative + topic_persistence)
+    if payload.clustering is not None:
+        c = payload.clustering
+        if c.dim_reducer is not None:
+            if c.dim_reducer not in ("pca", "umap", "none"):
+                raise HTTPException(status_code=400, detail="Invalid dim_reducer. Must be 'pca', 'umap', or 'none'")
+            PREFERENCES.clustering.dim_reducer = c.dim_reducer
+        if c.min_docs_for_clustering is not None:
+            if c.min_docs_for_clustering < 1:
+                raise HTTPException(status_code=400, detail="min_docs_for_clustering must be >= 1")
+            PREFERENCES.clustering.min_docs_for_clustering = c.min_docs_for_clustering
+        if c.max_components is not None:
+            if c.max_components < 1:
+                raise HTTPException(status_code=400, detail="max_components must be >= 1")
+            PREFERENCES.clustering.max_components = c.max_components
+        if c.agglomerative_enabled is not None:
+            PREFERENCES.agglomerative.enabled = c.agglomerative_enabled
+        if c.linkage_method is not None:
+            if c.linkage_method not in ("average", "single", "complete"):
+                raise HTTPException(status_code=400, detail="Invalid linkage_method. Must be 'average', 'single', or 'complete'")
+            PREFERENCES.agglomerative.linkage_method = c.linkage_method
+        if c.level_0_distance is not None:
+            if not 0 <= c.level_0_distance <= 1:
+                raise HTTPException(status_code=400, detail="level_0_distance must be between 0 and 1")
+            PREFERENCES.agglomerative.level_0_distance = c.level_0_distance
+        if c.level_1_distance is not None:
+            if not 0 <= c.level_1_distance <= 1:
+                raise HTTPException(status_code=400, detail="level_1_distance must be between 0 and 1")
+            PREFERENCES.agglomerative.level_1_distance = c.level_1_distance
+        if c.level_2_distance is not None:
+            if not 0 <= c.level_2_distance <= 1:
+                raise HTTPException(status_code=400, detail="level_2_distance must be between 0 and 1")
+            PREFERENCES.agglomerative.level_2_distance = c.level_2_distance
+        if c.min_cluster_size is not None:
+            if c.min_cluster_size < 1:
+                raise HTTPException(status_code=400, detail="min_cluster_size must be >= 1")
+            PREFERENCES.agglomerative.min_cluster_size = c.min_cluster_size
+        if c.use_document_summaries is not None:
+            PREFERENCES.agglomerative.use_document_summaries = c.use_document_summaries
+        if c.similarity_threshold_topic is not None:
+            if not 0 <= c.similarity_threshold_topic <= 1:
+                raise HTTPException(status_code=400, detail="similarity_threshold_topic must be between 0 and 1")
+            PREFERENCES.topic_persistence.similarity_threshold_topic = c.similarity_threshold_topic
+        if c.similarity_threshold_subtopic is not None:
+            if not 0 <= c.similarity_threshold_subtopic <= 1:
+                raise HTTPException(status_code=400, detail="similarity_threshold_subtopic must be between 0 and 1")
+            PREFERENCES.topic_persistence.similarity_threshold_subtopic = c.similarity_threshold_subtopic
+
     # Persist settings to file
     from .config import save_settings_to_file
     save_settings_to_file(PREFERENCES)

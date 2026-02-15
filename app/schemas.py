@@ -202,6 +202,44 @@ class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None
     text: Optional[str] = None
 
+
+# ---------- Clustering Settings (consolidated) ----------
+
+class ClusteringSettingsResponse(BaseModel):
+    """Consolidated clustering, agglomerative, and topic persistence settings."""
+    dim_reducer: str = "pca"
+    min_docs_for_clustering: int = 1
+    max_components: int = 24
+    # Agglomerative
+    agglomerative_enabled: bool = True
+    linkage_method: str = "average"
+    level_0_distance: float = 0.6
+    level_1_distance: float = 0.7
+    level_2_distance: float = 0.85
+    min_cluster_size: int = 1
+    use_document_summaries: bool = True
+    # Topic persistence
+    similarity_threshold_topic: float = 0.85
+    similarity_threshold_subtopic: float = 0.85
+
+
+class ClusteringUpdateRequest(BaseModel):
+    dim_reducer: Optional[Literal["pca", "umap", "none"]] = None
+    min_docs_for_clustering: Optional[int] = None
+    max_components: Optional[int] = None
+    # Agglomerative
+    agglomerative_enabled: Optional[bool] = None
+    linkage_method: Optional[Literal["average", "single", "complete"]] = None
+    level_0_distance: Optional[float] = None
+    level_1_distance: Optional[float] = None
+    level_2_distance: Optional[float] = None
+    min_cluster_size: Optional[int] = None
+    use_document_summaries: Optional[bool] = None
+    # Topic persistence
+    similarity_threshold_topic: Optional[float] = None
+    similarity_threshold_subtopic: Optional[float] = None
+
+
 class SettingsResponse(BaseModel):
     chat_model: str
     topic_model: str
@@ -210,6 +248,8 @@ class SettingsResponse(BaseModel):
     embedding_provider: str
     topic_provider: str
     has_openai_key: bool  # Whether API key is set (without revealing it)
+    clustering: Optional[ClusteringSettingsResponse] = None
+
 
 class SettingsUpdateRequest(BaseModel):
     chat_provider: Optional[Literal["openai", "ollama"]] = None
@@ -221,6 +261,7 @@ class SettingsUpdateRequest(BaseModel):
     llm_model: Optional[str] = None  # OpenAI model name (when chat_provider is "openai")
     embedding_model: Optional[str] = None  # OpenAI embedding model name (when embedding_provider is "openai")
     openai_api_key: Optional[str] = None  # If provided, will update the API key
+    clustering: Optional[ClusteringUpdateRequest] = None
 
 
 class TopicOption(BaseModel):

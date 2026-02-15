@@ -276,7 +276,21 @@ def save_settings_to_file(prefs: Preferences):
                 "embed_model": prefs.models.ollama.embed_model,
                 "base_url": prefs.models.ollama.base_url,
             }
-        }
+        },
+        "clustering": {
+            "dim_reducer": prefs.clustering.dim_reducer,
+            "min_docs_for_clustering": prefs.clustering.min_docs_for_clustering,
+            "max_components": prefs.clustering.max_components,
+            "agglomerative_enabled": prefs.agglomerative.enabled,
+            "linkage_method": prefs.agglomerative.linkage_method,
+            "level_0_distance": prefs.agglomerative.level_0_distance,
+            "level_1_distance": prefs.agglomerative.level_1_distance,
+            "level_2_distance": prefs.agglomerative.level_2_distance,
+            "min_cluster_size": prefs.agglomerative.min_cluster_size,
+            "use_document_summaries": prefs.agglomerative.use_document_summaries,
+            "similarity_threshold_topic": prefs.topic_persistence.similarity_threshold_topic,
+            "similarity_threshold_subtopic": prefs.topic_persistence.similarity_threshold_subtopic,
+        },
     }
     
     try:
@@ -322,7 +336,53 @@ def load_settings_from_file(prefs: Preferences):
                     prefs.models.ollama.embed_model = ollama_data["embed_model"]
                 if "base_url" in ollama_data:
                     prefs.models.ollama.base_url = ollama_data["base_url"]
-                    
+
+        # Load clustering settings if present (consolidated: clustering + agglomerative + topic_persistence)
+        if "clustering" in settings_data:
+            c = settings_data["clustering"]
+            if "dim_reducer" in c:
+                prefs.clustering.dim_reducer = c["dim_reducer"]
+            if "min_docs_for_clustering" in c:
+                prefs.clustering.min_docs_for_clustering = int(c["min_docs_for_clustering"])
+            if "max_components" in c:
+                prefs.clustering.max_components = int(c["max_components"])
+            if "agglomerative_enabled" in c:
+                prefs.agglomerative.enabled = bool(c["agglomerative_enabled"])
+            if "linkage_method" in c:
+                prefs.agglomerative.linkage_method = c["linkage_method"]
+            if "level_0_distance" in c:
+                prefs.agglomerative.level_0_distance = float(c["level_0_distance"])
+            if "level_1_distance" in c:
+                prefs.agglomerative.level_1_distance = float(c["level_1_distance"])
+            if "level_2_distance" in c:
+                prefs.agglomerative.level_2_distance = float(c["level_2_distance"])
+            if "min_cluster_size" in c:
+                prefs.agglomerative.min_cluster_size = int(c["min_cluster_size"])
+            if "use_document_summaries" in c:
+                prefs.agglomerative.use_document_summaries = bool(c["use_document_summaries"])
+            if "similarity_threshold_topic" in c:
+                prefs.topic_persistence.similarity_threshold_topic = float(c["similarity_threshold_topic"])
+            if "similarity_threshold_subtopic" in c:
+                prefs.topic_persistence.similarity_threshold_subtopic = float(c["similarity_threshold_subtopic"])
+
+        # Legacy: load from separate agglomerative section if present (for backward compatibility)
+        if "agglomerative" in settings_data:
+            a = settings_data["agglomerative"]
+            if "enabled" in a:
+                prefs.agglomerative.enabled = bool(a["enabled"])
+            if "linkage_method" in a:
+                prefs.agglomerative.linkage_method = a["linkage_method"]
+            if "level_0_distance" in a:
+                prefs.agglomerative.level_0_distance = float(a["level_0_distance"])
+            if "level_1_distance" in a:
+                prefs.agglomerative.level_1_distance = float(a["level_1_distance"])
+            if "level_2_distance" in a:
+                prefs.agglomerative.level_2_distance = float(a["level_2_distance"])
+            if "min_cluster_size" in a:
+                prefs.agglomerative.min_cluster_size = int(a["min_cluster_size"])
+            if "use_document_summaries" in a:
+                prefs.agglomerative.use_document_summaries = bool(a["use_document_summaries"])
+
     except Exception as e:
         # Log error but don't fail - use defaults if file is corrupted
         import logging

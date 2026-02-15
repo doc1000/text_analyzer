@@ -2151,7 +2151,7 @@ def compute_hierarchical_topics(
             
             # Try to reuse existing topic title if centroid matches (90% similarity)
             cached = cached_topics_by_level.get(level, [])
-            existing_match = _find_matching_title(centroid, cached, min_similarity=0.90)
+            existing_match = _find_matching_title(centroid, cached, min_similarity=PREFERENCES.topic_persistence.similarity_threshold_topic)
             
             level_names = {0: "Fine", 1: "Topic", 2: "Category"}
             level_prefix = level_names.get(level, f"L{level}")

@@ -598,6 +598,7 @@
 
     .settings-section input[type="password"],
     .settings-section input[type="text"],
+    .settings-section input[type="number"],
     .settings-section select {
       width: 100%;
       padding: 0.5rem;
@@ -611,6 +612,7 @@
 
     .settings-section input[type="password"]:focus,
     .settings-section input[type="text"]:focus,
+    .settings-section input[type="number"]:focus,
     .settings-section select:focus {
       outline: none;
       border-color: #3b82f6;
@@ -748,9 +750,9 @@
         <button id="closeSettingsBtn" class="close-btn">&times;</button>
       </div>
       <div class="modal-body">
-        <div class="settings-section">
-          <h3>Current Models</h3>
-          <div class="model-info">
+        <details class="settings-section">
+          <summary style="cursor: pointer; font-weight: 600;">Current Models</summary>
+          <div class="model-info" style="margin-top: 1rem;">
             <div class="model-row">
               <span class="model-label">Chat Model:</span>
               <span class="model-value" id="currentChatModel">-</span>
@@ -764,10 +766,10 @@
               <span class="model-value" id="currentEmbeddingModel">-</span>
             </div>
           </div>
-        </div>
+        </details>
 
-        <div class="settings-section">
-          <h3>Providers</h3>
+        <details class="settings-section" style="margin-top: 1rem;">
+          <summary style="cursor: pointer; font-weight: 600;">Providers</summary>
           <label for="chatProviderSelect">Chat Provider (for queries):</label>
           <select id="chatProviderSelect">
             <option value="openai">OpenAI (default)</option>
@@ -786,47 +788,94 @@
             <option value="ollama">Ollama (local)</option>
           </select>
           
-          <p class="hint">OpenAI is recommended for chat/topics. HuggingFace handles embeddings.</p>
-        </div>
+          <p class="hint" style="margin-top: 1rem;">OpenAI is recommended for chat/topics. HuggingFace handles embeddings.</p>
+        </details>
 
-        <div class="settings-section" id="authSection">
-          <h3>Account</h3>
-          <!-- Logged out state -->
-          <div id="loggedOutState">
-            <p class="hint">Sign in to sync your documents across devices.</p>
-            <button id="openLoginBtn" class="save-btn">Sign In with Email</button>
-          </div>
-          <!-- Logged in state -->
-          <div id="loggedInState" style="display: none;">
-            <div class="model-info" style="margin-bottom: 1rem;">
-              <div class="model-row">
-                <span class="model-label">Signed in as:</span>
-                <span class="model-value" id="userEmail">-</span>
-              </div>
-            </div>
-            <button id="signOutBtn" class="cancel-btn">Sign Out</button>
-          </div>
-          <!-- Legacy API key input (collapsed) -->
-          <details style="margin-top: 1rem;">
-            <summary style="cursor: pointer; font-size: 0.85rem; color: #9ca3af;">Advanced: Manual API Key</summary>
-            <div style="margin-top: 0.5rem;">
-              <label for="vbApiKeyInput">API Key:</label>
-              <input type="password" id="vbApiKeyInput" placeholder="vb_live_..." />
-              <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
-                <button id="saveVbKeyBtn" class="save-btn">Save Key</button>
-                <button id="clearVbKeyBtn" class="cancel-btn">Clear Key</button>
-              </div>
-            </div>
-          </details>
-        </div>
+        <details class="settings-section" style="margin-top: 1rem;">
+          <summary style="cursor: pointer; font-weight: 600;">Clustering</summary>
+          <div style="margin-top: 1rem;">
+            <h4 style="margin-bottom: 0.5rem; font-size: 0.9rem;">General</h4>
+            <label for="dimReducerSelect">Dim Reducer:</label>
+            <select id="dimReducerSelect">
+              <option value="pca">PCA</option>
+              <option value="umap">UMAP</option>
+              <option value="none">None</option>
+            </select>
+            <label for="minDocsForClustering" style="margin-top: 1rem; display: block;">Min Docs for Clustering:</label>
+            <input type="number" id="minDocsForClustering" min="1" step="1" />
+            <label for="maxComponents" style="margin-top: 1rem; display: block;">Max Components:</label>
+            <input type="number" id="maxComponents" min="1" step="1" />
 
-        <div class="settings-section">
-          <h3>OpenAI API Key</h3>
-          <label for="openaiKeyInput">API Key (for chat/topics):</label>
-          <input type="password" id="openaiKeyInput" placeholder="sk-..." />
-          <p class="hint" id="keyStatus">No API key set</p>
-          <button id="saveKeyBtn" class="save-btn">Save API Key</button>
-        </div>
+            <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 0.9rem;">Agglomerative</h4>
+            <label style="display: flex; align-items: center; gap: 0.5rem;">
+              <input type="checkbox" id="agglomerativeEnabled" />
+              Enabled
+            </label>
+            <label for="linkageMethodSelect" style="margin-top: 1rem; display: block;">Linkage Method:</label>
+            <select id="linkageMethodSelect">
+              <option value="average">Average</option>
+              <option value="single">Single</option>
+              <option value="complete">Complete</option>
+            </select>
+            <label for="level0Distance" style="margin-top: 1rem; display: block;">Level 0 Distance (0-1):</label>
+            <input type="number" id="level0Distance" min="0" max="1" step="0.05" />
+            <label for="level1Distance" style="margin-top: 1rem; display: block;">Level 1 Distance (0-1):</label>
+            <input type="number" id="level1Distance" min="0" max="1" step="0.05" />
+            <label for="level2Distance" style="margin-top: 1rem; display: block;">Level 2 Distance (0-1):</label>
+            <input type="number" id="level2Distance" min="0" max="1" step="0.05" />
+            <label for="minClusterSize" style="margin-top: 1rem; display: block;">Min Cluster Size:</label>
+            <input type="number" id="minClusterSize" min="1" step="1" />
+            <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1rem;">
+              <input type="checkbox" id="useDocumentSummaries" />
+              Use Document Summaries
+            </label>
+
+            <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 0.9rem;">Topic Persistence</h4>
+            <label for="similarityThresholdTopic" style="display: block;">Similarity Threshold Topic (0-1):</label>
+            <input type="number" id="similarityThresholdTopic" min="0" max="1" step="0.05" />
+            <label for="similarityThresholdSubtopic" style="margin-top: 1rem; display: block;">Similarity Threshold Subtopic (0-1):</label>
+            <input type="number" id="similarityThresholdSubtopic" min="0" max="1" step="0.05" />
+          </div>
+        </details>
+
+        <details class="settings-section" id="authSection" style="margin-top: 1rem;">
+          <summary style="cursor: pointer; font-weight: 600;">Account</summary>
+          <div style="margin-top: 1rem;">
+            <!-- Logged out state -->
+            <div id="loggedOutState">
+              <p class="hint">Sign in to sync your documents across devices.</p>
+              <button id="openLoginBtn" class="save-btn">Sign In with Email</button>
+            </div>
+            <!-- Logged in state -->
+            <div id="loggedInState" style="display: none;">
+              <div class="model-info" style="margin-bottom: 1rem;">
+                <div class="model-row">
+                  <span class="model-label">Signed in as:</span>
+                  <span class="model-value" id="userEmail">-</span>
+                </div>
+              </div>
+              <button id="signOutBtn" class="cancel-btn">Sign Out</button>
+            </div>
+            <!-- Legacy API key input (collapsed) -->
+            <details style="margin-top: 1rem;">
+              <summary style="cursor: pointer; font-size: 0.85rem; color: #9ca3af;">Advanced: Manual API Key</summary>
+              <div style="margin-top: 0.5rem;">
+                <label for="vbApiKeyInput">API Key:</label>
+                <input type="password" id="vbApiKeyInput" placeholder="vb_live_..." />
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+                  <button id="saveVbKeyBtn" class="save-btn">Save Key</button>
+                  <button id="clearVbKeyBtn" class="cancel-btn">Clear Key</button>
+                </div>
+              </div>
+            </details>
+
+            <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">OpenAI API Key</h4>
+            <label for="openaiKeyInput">API Key (for chat/topics):</label>
+            <input type="password" id="openaiKeyInput" placeholder="sk-..." />
+            <p class="hint" id="keyStatus">No API key set</p>
+            <button id="saveKeyBtn" class="save-btn">Save API Key</button>
+          </div>
+        </details>
 
         <div class="settings-actions">
           <button id="saveSettingsBtn" class="save-btn">Save Settings</button>
@@ -1823,6 +1872,18 @@
     const currentChatModel = document.getElementById("currentChatModel");
     const currentTopicModel = document.getElementById("currentTopicModel");
     const currentEmbeddingModel = document.getElementById("currentEmbeddingModel");
+    const dimReducerSelect = document.getElementById("dimReducerSelect");
+    const minDocsForClustering = document.getElementById("minDocsForClustering");
+    const maxComponents = document.getElementById("maxComponents");
+    const agglomerativeEnabled = document.getElementById("agglomerativeEnabled");
+    const linkageMethodSelect = document.getElementById("linkageMethodSelect");
+    const level0Distance = document.getElementById("level0Distance");
+    const level1Distance = document.getElementById("level1Distance");
+    const level2Distance = document.getElementById("level2Distance");
+    const minClusterSize = document.getElementById("minClusterSize");
+    const useDocumentSummaries = document.getElementById("useDocumentSummaries");
+    const similarityThresholdTopic = document.getElementById("similarityThresholdTopic");
+    const similarityThresholdSubtopic = document.getElementById("similarityThresholdSubtopic");
 
     let currentSettings = null;
 
@@ -1846,6 +1907,23 @@
         }
         if (embeddingProviderSelect) {
           embeddingProviderSelect.value = currentSettings.embedding_provider || "ollama";
+        }
+
+        // Update clustering settings (consolidated)
+        if (currentSettings.clustering) {
+          const c = currentSettings.clustering;
+          if (dimReducerSelect) dimReducerSelect.value = c.dim_reducer || "pca";
+          if (minDocsForClustering) minDocsForClustering.value = c.min_docs_for_clustering ?? 1;
+          if (maxComponents) maxComponents.value = c.max_components ?? 24;
+          if (agglomerativeEnabled) agglomerativeEnabled.checked = c.agglomerative_enabled ?? true;
+          if (linkageMethodSelect) linkageMethodSelect.value = c.linkage_method || "average";
+          if (level0Distance) level0Distance.value = c.level_0_distance ?? 0.6;
+          if (level1Distance) level1Distance.value = c.level_1_distance ?? 0.7;
+          if (level2Distance) level2Distance.value = c.level_2_distance ?? 0.85;
+          if (minClusterSize) minClusterSize.value = c.min_cluster_size ?? 1;
+          if (useDocumentSummaries) useDocumentSummaries.checked = c.use_document_summaries ?? true;
+          if (similarityThresholdTopic) similarityThresholdTopic.value = c.similarity_threshold_topic ?? 0.85;
+          if (similarityThresholdSubtopic) similarityThresholdSubtopic.value = c.similarity_threshold_subtopic ?? 0.85;
         }
         
         // Update API key status
@@ -1882,6 +1960,57 @@
       // Check if embedding provider changed
       if (embeddingProviderSelect && embeddingProviderSelect.value !== (currentSettings.embedding_provider || "ollama")) {
         updates.embedding_provider = embeddingProviderSelect.value;
+      }
+
+      // Check if clustering settings changed (consolidated)
+      const clustering = currentSettings.clustering || {};
+      if (dimReducerSelect && dimReducerSelect.value !== (clustering.dim_reducer || "pca")) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.dim_reducer = dimReducerSelect.value;
+      }
+      if (minDocsForClustering && parseInt(minDocsForClustering.value, 10) !== (clustering.min_docs_for_clustering ?? 1)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.min_docs_for_clustering = parseInt(minDocsForClustering.value, 10);
+      }
+      if (maxComponents && parseInt(maxComponents.value, 10) !== (clustering.max_components ?? 24)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.max_components = parseInt(maxComponents.value, 10);
+      }
+      if (agglomerativeEnabled && agglomerativeEnabled.checked !== (clustering.agglomerative_enabled ?? true)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.agglomerative_enabled = agglomerativeEnabled.checked;
+      }
+      if (linkageMethodSelect && linkageMethodSelect.value !== (clustering.linkage_method || "average")) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.linkage_method = linkageMethodSelect.value;
+      }
+      if (level0Distance && parseFloat(level0Distance.value) !== (clustering.level_0_distance ?? 0.6)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.level_0_distance = parseFloat(level0Distance.value);
+      }
+      if (level1Distance && parseFloat(level1Distance.value) !== (clustering.level_1_distance ?? 0.7)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.level_1_distance = parseFloat(level1Distance.value);
+      }
+      if (level2Distance && parseFloat(level2Distance.value) !== (clustering.level_2_distance ?? 0.85)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.level_2_distance = parseFloat(level2Distance.value);
+      }
+      if (minClusterSize && parseInt(minClusterSize.value, 10) !== (clustering.min_cluster_size ?? 1)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.min_cluster_size = parseInt(minClusterSize.value, 10);
+      }
+      if (useDocumentSummaries && useDocumentSummaries.checked !== (clustering.use_document_summaries ?? true)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.use_document_summaries = useDocumentSummaries.checked;
+      }
+      if (similarityThresholdTopic && parseFloat(similarityThresholdTopic.value) !== (clustering.similarity_threshold_topic ?? 0.85)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.similarity_threshold_topic = parseFloat(similarityThresholdTopic.value);
+      }
+      if (similarityThresholdSubtopic && parseFloat(similarityThresholdSubtopic.value) !== (clustering.similarity_threshold_subtopic ?? 0.85)) {
+        updates.clustering = updates.clustering || {};
+        updates.clustering.similarity_threshold_subtopic = parseFloat(similarityThresholdSubtopic.value);
       }
       
       // Check if API key was entered
