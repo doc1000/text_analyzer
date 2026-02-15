@@ -602,7 +602,7 @@ def create_personal_vault(user: User, db: Session) -> Vault:
         else:
             print("Successfully copied the newuser@example.com vault to the new user's vault")
     else:
-        print("Successfully gave new users view access to the newuser@example.com vault"
+        print("Successfully gave new users view access to the newuser@example.com vault")
 
     
     db.refresh(vault)
@@ -612,21 +612,21 @@ def newuser_vault_access(user: User, db: Session) -> bool:
     """
     give new users view access to the newuser@example.com vault.
     """
-    newuser_vault = db.query(Vault).filter(Vault.owner_id == "newuser@example.com").first()
-    current_access = False
+    newuser_vault = db.query(Vault).join(User,Vault.owner_id==User.id).filter(User.email == "newuser@example.com").first()
+
     if newuser_vault:
         current_access = check_vault_access(user, newuser_vault.id, db, "viewer")
         if not current_access:
-            grant_vault_access(user, newuser_vault.id, "viewer", db)
+            current_access = grant_vault_access(user, newuser_vault.id, "viewer", db)
     return current_access
 
 def newuser_vault_copy(user: User, db: Session) -> bool:
     """
     copy the newuser@example.com vault to the new user's vault.
     """
-    newuser_vault = db.query(Vault).filter(Vault.owner_id == "newuser@example.com").first()
+    newuser_vault = db.query(Vault).join(User,Vault.owner_id==User.id).filter(User.email == "newuser@example.com").first()
     if newuser_vault:
-        copy_template_vault_to_user(newuser_vault, user, vault, db)
+        return copy_template_vault_to_user(newuser_vault, user, vault, db)
     return False
 
 def grant_vault_access(user: User, vault_id: UUID, role: str, db: Session) -> bool:
@@ -641,31 +641,7 @@ def grant_vault_access(user: User, vault_id: UUID, role: str, db: Session) -> bo
     db.add(membership)
     db.commit()
 
-
-
-def get_user_vault(user: User, db: Session) -> Optional[Vault]:
-    """
-    Get the user's personal vault (create if doesn't exist).
-    
-    Returns None if user is None (auth disabled mode).
-    """
-    if user is None:
-        return None
-    
-    # Look for user's personal vault through membership
-    vault = (
-        db.query(Vault)
-        .join(VaultMembership, VaultMembership.vault_id == Vault.id)
-        .filter(VaultMembership.user_id == user.id)
-        .filter(Vault.is_personal == True)  # noqa: E712
-        .filter(Vault.archived_at == None)  # noqa: E711
-        .first()
-    )
-    
-    if not vault:
-        vault = create_personal_vault(user, db)
-    
-    return vault
+    return check_vault_access(user, vault_id, db, role)
 
 
 def check_vault_access(

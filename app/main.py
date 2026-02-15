@@ -49,7 +49,6 @@ from .auth import (
     hash_api_key,
     API_KEY_PREFIX,
     EXTENSION_TOKEN_PREFIX,
-    get_user_vault,
     create_personal_vault,
     check_vault_access,
     get_user_accessible_vault_ids,
@@ -90,10 +89,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# API key auth (protects all endpoints except explicit allowlist in middleware)
 app.add_middleware(ApiKeyAuthMiddleware)
 
+# API key auth (protects all get("/")
 @app.get("/")
 def root():
     """Serve the bubble map visualization at root."""
@@ -299,7 +297,11 @@ def ingest(
     captured_at = payload.captured_at or datetime.utcnow()
     
     # Get user's vault (creates personal vault if doesn't exist)
-    vault = get_user_vault(user, db)
+    vault = get_user_accessible_vault_ids(user, db, min_role = "owner")
+    if len(vault) == 0:
+        vault = create_personal_vault(user, db)
+    else:
+        vault = vault[0]
 
     # 1. Start with extension text as captured_text
     captured_text = payload.text or ""

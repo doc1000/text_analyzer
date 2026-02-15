@@ -166,15 +166,10 @@
       document.getElementById('success-state').style.display = 'none';
       document.getElementById('error-state').classList.add('show');
     } else {
-      // Token is present - the extension's background script should capture it
-      // and close this tab automatically. If it doesn't (e.g., extension not installed),
-      // show the manual close button.
-      
-      // Give the extension 2 seconds to capture and close, then show manual close more prominently
-      setTimeout(() => {
-        document.querySelector('.closing-note p').textContent = 
-          'If this tab doesn\'t close automatically, click the button below.';
-      }, 2000);
+      // Save token for the web app so user is logged in when they visit the main page
+      localStorage.setItem('vb_auth_token', token);
+      // Redirect to main app
+      window.location.href = '/';
     }
   </script>
 </body>

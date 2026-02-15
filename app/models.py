@@ -13,12 +13,11 @@ import re
 from datetime import datetime
 from typing import Literal
 from pgvector.sqlalchemy import Vector as pgVector # pip install pgvector
-#from .config import PREFERENCES
 
 class UUIDPrimaryKey:
     @declared_attr
-    """Primary key column for all tables. has to be called BEFORE Base is defined."""
     def id(cls):
+        """Primary key column for all tables. has to be called BEFORE Base is defined."""
         return Column(
             UUID(as_uuid=True),
             primary_key=True,
@@ -28,7 +27,11 @@ class UUIDPrimaryKey:
 
 Base = declarative_base()
 
-class User(UUIDPrimaryKey,Base):
+class BaseModel(UUIDPrimaryKey, Base):
+    """Base model for all tables. includes the UUID primary key.  will inherit from Base"""
+    __abstract__ = True
+
+class User(BaseModel):
     __tablename__ = "users"
 
     #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -36,7 +39,7 @@ class User(UUIDPrimaryKey,Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class ApiKey(UUIDPrimaryKey,Base):
+class ApiKey(BaseModel):
     __tablename__ = "api_keys"
 
     #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -55,7 +58,7 @@ class ApiKey(UUIDPrimaryKey,Base):
     revoked_at = Column(DateTime, nullable=True)
 
 
-class ExtensionToken(UUIDPrimaryKey,Base):
+class ExtensionToken(BaseModel):
     """OAuth-style tokens for browser extension authentication."""
     __tablename__ = "extension_tokens"
 
@@ -76,7 +79,7 @@ class ExtensionToken(UUIDPrimaryKey,Base):
     revoked_at = Column(DateTime, nullable=True)
 
 
-class ExtensionVerificationCode(UUIDPrimaryKey,Base):
+class ExtensionVerificationCode(BaseModel):
     """Temporary verification codes for extension OAuth flow."""
     __tablename__ = "extension_verification_codes"
 
@@ -89,7 +92,7 @@ class ExtensionVerificationCode(UUIDPrimaryKey,Base):
     used_at = Column(DateTime, nullable=True)  # Set when code is used (not for reviewer codes)
 
 
-class Vault(UUIDPrimaryKey,Base):
+class Vault(BaseModel):
     """Knowledge container - the unit of sharing, permissions, and billing."""
     __tablename__ = "vaults"
 
@@ -101,7 +104,7 @@ class Vault(UUIDPrimaryKey,Base):
     archived_at = Column(DateTime, nullable=True)
 
 
-class VaultMembership(UUIDPrimaryKey,Base):
+class VaultMembership(BaseModel):
     """Permission control plane - all access checks flow through this table."""
     __tablename__ = "vault_memberships"
     __table_args__ = (
@@ -117,7 +120,7 @@ class VaultMembership(UUIDPrimaryKey,Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class Document(UUIDPrimaryKey,Base):
+class Document(BaseModel):
     __tablename__ = "documents"
 
     #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -141,7 +144,7 @@ class Document(UUIDPrimaryKey,Base):
     topic_manually_assigned = Column(Boolean, nullable=True, default=False)
 
 
-class EmbeddingModel(UUIDPrimaryKey,Base):
+class EmbeddingModel(BaseModel):
     __tablename__ = "embedding_model"
     __table_args__ = {"schema": "embedding"}
 
@@ -160,8 +163,6 @@ class EmbeddingModel(UUIDPrimaryKey,Base):
         "eager_defaults": True,
     }
 
-from sqlalchemy.types import UserDefinedType
-from pgvector.sqlalchemy import Vector as PgVector  # name it PgVector to avoid clash
 
 
 class VectorComparator(UserDefinedType.Comparator):
@@ -187,7 +188,7 @@ class Vector(UserDefinedType):
     def __init__(self, dim: int):
         self.dim = dim
         # use the pgvector type internally
-        self._inner = PgVector(dim)
+        self._inner = pgVector(dim)
 
     def get_col_spec(self, **kw):
         # delegate to pgvector’s type, which emits "vector(<dim>)"
@@ -202,10 +203,10 @@ class Vector(UserDefinedType):
 
 
 def make_safe_table_name(model_name: str, version: str, dim: int) -> str:
-    base = f"{model_name}_{version}_{dim}"
-    base = base.lower()
-    base = re.sub(r"[^a-z0-9]+", "_", base).strip("_")
-    return base
+    base_name  = f"{model_name}_{version}_{dim}"
+    base_name = base_name.lower()
+    base_name = re.sub(r"[^a-z0-9]+", "_", base_name).strip("_")
+    return base_name    
 
 def register_embedding_model(
     session: Session,
@@ -298,7 +299,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
         # Otherwise, define a new ORM class bound to the existing Table
         cls = type(
             f"Embedding_{table_name}",
-            (Base,),
+            (BaseModel,),
             {"__table__": table_obj},
         )
         return full_key, cls
@@ -316,7 +317,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
         "__table_args__": (
             {"schema": "embedding"},
         ),
-        "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
+        #"id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
         "document_id": Column(UUID(as_uuid=True),
                          ForeignKey("documents.id", ondelete="CASCADE"),
                          nullable=False),
@@ -336,7 +337,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
             "__table_args__": (
                 {"schema": "embedding"},
             ),
-            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
+            #"id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
             "chunk_id": Column(UUID(as_uuid=True),
                             ForeignKey(f"embedding.{chunk_table}.id", ondelete="CASCADE"),
                             nullable=False),
@@ -357,7 +358,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
             "__table_args__": (
                 {"schema": "embedding"},
             ),
-            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
+            #"id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
             "vault_id": Column(UUID(as_uuid=True),
                               ForeignKey("vaults.id", ondelete="CASCADE"),
                               nullable=False, index=True),
@@ -384,7 +385,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
             "__table_args__": (
                 {"schema": "embedding"},
             ),
-            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")  ,nullable=False),
+            #"id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")  ,nullable=False),
             "document_id": Column(UUID(as_uuid=True),
                             ForeignKey("documents.id", ondelete="CASCADE"),
                             nullable=False, unique=True),  # One doc embedding per document
@@ -396,7 +397,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
                 nullable=False,
             ),
         }
-    cls = type(class_name, (Base,), attrs)
+    cls = type(class_name, (BaseModel,), attrs)
 
     Index(
         f"{table_name}_embedding_ivfflat_idx",
