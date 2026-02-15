@@ -1650,7 +1650,7 @@ def admin_generate_reviewer_code(
     db.execute(text("""
         INSERT INTO extension_verification_codes 
         (id, email, code, purpose, created_at, expires_at)
-        VALUES (gen_random_uuid(), :email, :code, 'reviewer', now(), :expires_at)
+        VALUES (:email, :code, 'reviewer', now(), :expires_at)
     """), {"email": email.strip().lower(), "code": code, "expires_at": expires_at})
     db.commit()
     

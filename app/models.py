@@ -8,27 +8,38 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import UserDefinedType
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, declared_attr
 import re
 from datetime import datetime
 from typing import Literal
 from pgvector.sqlalchemy import Vector as pgVector # pip install pgvector
 #from .config import PREFERENCES
 
+class UUIDPrimaryKey:
+    @declared_attr
+    """Primary key column for all tables. has to be called BEFORE Base is defined."""
+    def id(cls):
+        return Column(
+            UUID(as_uuid=True),
+            primary_key=True,
+            default=uuid.uuid4,  # Python-side generation
+            server_default=text("gen_random_uuid()"),  # Postgres-side safety
+        )
+
 Base = declarative_base()
 
-class User(Base):
+class User(UUIDPrimaryKey,Base):
     __tablename__ = "users"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(Text, nullable=False, unique=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class ApiKey(Base):
+class ApiKey(UUIDPrimaryKey,Base):
     __tablename__ = "api_keys"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # SHA256 hash of (pepper + raw_key). Never store raw keys.
@@ -44,11 +55,11 @@ class ApiKey(Base):
     revoked_at = Column(DateTime, nullable=True)
 
 
-class ExtensionToken(Base):
+class ExtensionToken(UUIDPrimaryKey,Base):
     """OAuth-style tokens for browser extension authentication."""
     __tablename__ = "extension_tokens"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # SHA256 hash of (pepper + raw_token). Never store raw tokens.
@@ -65,11 +76,11 @@ class ExtensionToken(Base):
     revoked_at = Column(DateTime, nullable=True)
 
 
-class ExtensionVerificationCode(Base):
+class ExtensionVerificationCode(UUIDPrimaryKey,Base):
     """Temporary verification codes for extension OAuth flow."""
     __tablename__ = "extension_verification_codes"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(Text, nullable=False, index=True)
     code = Column(String(6), nullable=False)
     purpose = Column(Text, nullable=False, default="user")  # 'user' or 'reviewer'
@@ -78,19 +89,19 @@ class ExtensionVerificationCode(Base):
     used_at = Column(DateTime, nullable=True)  # Set when code is used (not for reviewer codes)
 
 
-class Vault(Base):
+class Vault(UUIDPrimaryKey,Base):
     """Knowledge container - the unit of sharing, permissions, and billing."""
     __tablename__ = "vaults"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(Text, nullable=False)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text  , nullable=False)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     is_personal = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     archived_at = Column(DateTime, nullable=True)
 
 
-class VaultMembership(Base):
+class VaultMembership(UUIDPrimaryKey,Base):
     """Permission control plane - all access checks flow through this table."""
     __tablename__ = "vault_memberships"
     __table_args__ = (
@@ -99,17 +110,17 @@ class VaultMembership(Base):
         Index('idx_vault_memberships_vault', 'vault_id'),
     )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     vault_id = Column(UUID(as_uuid=True), ForeignKey("vaults.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     role = Column(Text, nullable=False, default="owner")  # owner, admin, editor, viewer
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class Document(Base):
+class Document(UUIDPrimaryKey,Base):
     __tablename__ = "documents"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     vault_id = Column(UUID(as_uuid=True), ForeignKey("vaults.id", ondelete="CASCADE"), nullable=True, index=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     url = Column(Text, nullable=False)
@@ -130,11 +141,11 @@ class Document(Base):
     topic_manually_assigned = Column(Boolean, nullable=True, default=False)
 
 
-class EmbeddingModel(Base):
+class EmbeddingModel(UUIDPrimaryKey,Base):
     __tablename__ = "embedding_model"
     __table_args__ = {"schema": "embedding"}
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     model_name = Column(String, nullable=False)
     version = Column(String, nullable=False)
     dimensions = Column(Integer, nullable=False)
@@ -305,7 +316,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
         "__table_args__": (
             {"schema": "embedding"},
         ),
-        "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+        "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
         "document_id": Column(UUID(as_uuid=True),
                          ForeignKey("documents.id", ondelete="CASCADE"),
                          nullable=False),
@@ -325,7 +336,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
             "__table_args__": (
                 {"schema": "embedding"},
             ),
-            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
             "chunk_id": Column(UUID(as_uuid=True),
                             ForeignKey(f"embedding.{chunk_table}.id", ondelete="CASCADE"),
                             nullable=False),
@@ -346,7 +357,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
             "__table_args__": (
                 {"schema": "embedding"},
             ),
-            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")),
             "vault_id": Column(UUID(as_uuid=True),
                               ForeignKey("vaults.id", ondelete="CASCADE"),
                               nullable=False, index=True),
@@ -373,7 +384,7 @@ def get_or_create_embedding_class(model_name: str, version: str,
             "__table_args__": (
                 {"schema": "embedding"},
             ),
-            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            "id": Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,server_default=text("gen_random_uuid()")  ,nullable=False),
             "document_id": Column(UUID(as_uuid=True),
                             ForeignKey("documents.id", ondelete="CASCADE"),
                             nullable=False, unique=True),  # One doc embedding per document

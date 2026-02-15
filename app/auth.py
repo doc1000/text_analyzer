@@ -357,7 +357,7 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
     try:
         from .config import PREFERENCES
         from .models import get_or_create_embedding_class
-        import uuid
+        #import uuid
         
         # Get embedding model config
         embed_config = PREFERENCES.embedding
@@ -433,9 +433,9 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
             )
             
             for old_chunk in old_chunks:
-                new_chunk_id = uuid.uuid4()
+                #new_chunk_id = uuid.uuid4()
                 new_chunk = ChunkEmbedding(
-                    id=new_chunk_id,
+                    #id=new_chunk_id,
                     document_id=new_doc_id,
                     chunk_index=old_chunk.chunk_index,
                     chunk_text=old_chunk.chunk_text,
@@ -459,7 +459,7 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
             
             for old_sentence in old_sentences:
                 new_sentence = SentenceEmbedding(
-                    id=uuid.uuid4(),
+                    #id=uuid.uuid4(),
                     chunk_id=new_chunk_id,
                     sent_index=old_sentence.sent_index,
                     sent_text=old_sentence.sent_text,
@@ -481,7 +481,7 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
             
             if old_doc_emb:
                 new_doc_emb = DocEmbedding(
-                    id=uuid.uuid4(),
+                    #id=uuid.uuid4(),
                     document_id=new_doc_id,
                     summary_text=old_doc_emb.summary_text,
                     embedding=old_doc_emb.embedding,
@@ -531,7 +531,7 @@ def copy_template_vault_to_user(template_vault: Vault, new_user: User, new_vault
                 new_parent_id = topic_id_map.get(old_topic.parent_id) if old_topic.parent_id else None
                 
                 new_topic = TopicEmbedding(
-                    id=uuid.uuid4(),
+                    #id=uuid.uuid4(),
                     vault_id=new_vault.id,  # Set new vault_id for isolation
                     parent_id=new_parent_id,
                     level_index=old_topic.level_index,
