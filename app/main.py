@@ -1516,7 +1516,8 @@ def get_vault(
     from uuid import UUID as PyUUID
     
     try:
-        vault_uuid = PyUUID(vault_id)
+        #vault_uuid = PyUUID(vault_id)
+        vault_uuid = vault_id
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid vault_id format")
     
