@@ -671,7 +671,7 @@ def check_vault_access(
     
     return role_level(membership.role) >= role_level(min_role)
 
-def get_vault(vault_id: UUID, db: Session) -> Vault:
+def fetch_vault_by_id(vault_id: UUID, db: Session) -> Vault:
     """
     Get vault specified by vault_id.
     """
@@ -701,6 +701,24 @@ def get_user_accessible_vault_ids(user: User, db: Session, min_role: str = "view
     ]
 
 
+def resolve_target_vault(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    vault_id_override: Optional[str] = Header(None, alias="X-Vault-Id"),
+) -> Vault:
+    """Resolve vault: override if valid, else user's default (create if needed)."""
+    if user is None:
+        raise HTTPException(401, "Authentication required")
+    vault_ids = get_user_accessible_vault_ids(user, db, min_role="owner")
+    if vault_id_override:
+        requested = UUID(vault_id_override)
+        if requested not in vault_ids:
+            raise HTTPException(403, "Access denied to this vault")
+        return fetch_vault_by_id(requested, db)
+    if not vault_ids:
+        return create_personal_vault(user, db)
+    return fetch_vault_by_id(vault_ids[0], db)
+    
 def require_vault_access(
     user: User, 
     vault_id: UUID, 

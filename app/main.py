@@ -53,6 +53,7 @@ from .auth import (
     create_personal_vault,
     check_vault_access,
     get_user_accessible_vault_ids,
+    resolve_target_vault,
     require_vault_access,
 )
 from .email_service import send_verification_email
@@ -298,12 +299,8 @@ def ingest(
     captured_at = payload.captured_at or datetime.utcnow()
     
     # Get user's vault (creates personal vault if doesn't exist)
-    vault_ids = get_user_accessible_vault_ids(user, db, min_role = "owner")
-    if len(vault_ids) == 0:
-        vault = create_personal_vault(user, db)
-    else:
-        vault = get_vault(vault_ids[0], db)
-
+    vault = resolve_target_vault(user, db)
+    
     # 1. Start with extension text as captured_text
     captured_text = payload.text or ""
     title = payload.title
