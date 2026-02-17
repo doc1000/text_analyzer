@@ -169,7 +169,7 @@
       // Save token for the web app so user is logged in when they visit the main page
       localStorage.setItem('vb_auth_token', token);
       // Redirect to main app
-      window.location.href = '/';
+      setTimeout(() => { window.location.href = '/'; }, 2000);
     }
   </script>
 </body>
