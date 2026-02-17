@@ -1,0 +1,9 @@
+{
+    "version": "1.0",
+    "HF_WARMING": "Embedding service is warming up. This usually takes a few seconds.",
+    "HF_TIMEOUT": "Embedding request timed out. Retrying...",
+    "INTERNAL_COLD": "Service is starting up. Please wait a moment.",
+    "TRANSIENT_TIMEOUT": "Temporary delay. Please retry.",
+    "UNEXPECTED_ERROR": "An unexpected error occurred."
+  }
+  
