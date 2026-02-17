@@ -15,3 +15,14 @@ services:
       - --host=0.0.0.0
       - --port=8000
       - --reload
+  
+  jupyter:
+    build:
+      context: .
+      target: dev
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''
+    volumes:
+      - .:/app
+      - .:/code  # Mount project root so test scripts are accessible
+    ports:
+      - "8888:8888"

@@ -120,9 +120,9 @@ class AgglomerativeConfig:
     # Level 0 (finest): very similar content, tightly related
     level_0_distance: float = 0.6                 # distance <= 0.5 means similarity >= 0.5
     # Level 1: topics - related content
-    level_1_distance: float = 0.7                # distance <= 0.75 means similarity >= 0.25
+    level_1_distance: float = 0.8              # distance <= 0.75 means similarity >= 0.25
     # Level 2 (coarsest): super-topics - broad categories
-    level_2_distance: float = 0.85                # distance <= 0.95 means similarity >= 0.05
+    level_2_distance: float = 0.9                # distance <= 0.95 means similarity >= 0.05
     
     min_cluster_size: int = 1                     # Minimum docs per cluster
     use_document_summaries: bool = True           # Use document summaries for clustering input
