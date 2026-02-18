@@ -293,13 +293,11 @@ def ingest(
     payload: IngestPayload,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
+    vault: Vault = Depends(resolve_target_vault),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
     # Use captured_at from payload if provided, else now
     captured_at = payload.captured_at or datetime.utcnow()
-    
-    # Get user's vault (creates personal vault if doesn't exist)
-    vault = resolve_target_vault(user, db)
     
     # 1. Start with extension text as captured_text
     captured_text = payload.text or ""
