@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import (
     Column, Text, Float, DateTime,
     ForeignKey, Integer, Index, BigInteger,
-    String, text, Boolean, UniqueConstraint,
+    String, text, Boolean, UniqueConstraint, PrimaryKeyConstraint,
     )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
@@ -120,6 +120,47 @@ class VaultMembership(BaseModel):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class VectorComparator(UserDefinedType.Comparator):
+    """Comparator that exposes pgvector distance methods."""
+
+    def cosine_distance(self, other):
+        """Cosine distance: 1 - cosine_similarity. Range [0, 2]."""
+        return self.op('<=>', return_type=Float)(other)
+
+    def l2_distance(self, other):
+        """Euclidean (L2) distance."""
+        return self.op('<->', return_type=Float)(other)
+
+    def max_inner_product(self, other):
+        """Negative inner product (for ordering by max inner product)."""
+        return self.op('<#>', return_type=Float)(other)
+
+
+class Vector(UserDefinedType):
+    cache_ok = True
+    comparator_factory = VectorComparator
+
+    def __init__(self, dim: int):
+        self.dim = dim
+        # use the pgvector type internally
+        self._inner = pgVector(dim)
+
+    def get_col_spec(self, **kw):
+        # delegate to pgvector's type, which emits "vector(<dim>)"
+        return self._inner.compile(kw.get("dialect")) if kw.get("dialect") else f"vector({self.dim})"
+
+    # Optional: bind/column expression passthrough if you need them
+    def bind_processor(self, dialect):
+        return self._inner.bind_processor(dialect)
+
+    def result_processor(self, dialect, coltype):
+        return self._inner.result_processor(dialect, coltype)
+
+
+# Fixed dimension for tree infrastructure (reduced embeddings). Zero-pad if shorter.
+REDUCED_EMBED_DIM = 30
+
+
 class Document(BaseModel):
     __tablename__ = "documents"
 
@@ -143,6 +184,33 @@ class Document(BaseModel):
     # Flag indicating if topic was manually assigned by user (vs auto-assigned by clustering)
     topic_manually_assigned = Column(Boolean, nullable=True, default=False)
 
+    # Reduced embedding for tree-based topic modelling (PCA/UMAP). Zero-pad to REDUCED_EMBED_DIM if shorter.
+    reduced_embedding = Column(Vector(REDUCED_EMBED_DIM), nullable=True)
+
+
+class TreeNode(BaseModel):
+    """Tree node (cluster) for SQL-driven topic modelling. Scoped by vault."""
+    __tablename__ = "tree_nodes"
+
+    vault_id = Column(UUID(as_uuid=True), ForeignKey("vaults.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("tree_nodes.id", ondelete="CASCADE"), nullable=True, index=True)
+    name = Column(Text, nullable=True)
+    node_type = Column(Text, nullable=False, default="cluster")
+    distance = Column(Float, nullable=True)
+    size = Column(Integer, nullable=False, default=0)
+    centroid = Column(Vector(REDUCED_EMBED_DIM), nullable=True)
+    locked = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class NodeDocument(Base):
+    """Junction table: documents assigned to tree nodes. Composite PK, no id."""
+    __tablename__ = "node_documents"
+    __table_args__ = (PrimaryKeyConstraint("node_id", "document_id"),)
+
+    node_id = Column(UUID(as_uuid=True), ForeignKey("tree_nodes.id", ondelete="CASCADE"), nullable=False)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+
 
 class EmbeddingModel(BaseModel):
     __tablename__ = "embedding_model"
@@ -162,23 +230,6 @@ class EmbeddingModel(BaseModel):
     __mapper_args__ = {
         "eager_defaults": True,
     }
-
-
-
-class VectorComparator(UserDefinedType.Comparator):
-    """Comparator that exposes pgvector distance methods."""
-
-    def cosine_distance(self, other):
-        """Cosine distance: 1 - cosine_similarity. Range [0, 2]."""
-        return self.op('<=>', return_type=Float)(other)
-
-    def l2_distance(self, other):
-        """Euclidean (L2) distance."""
-        return self.op('<->', return_type=Float)(other)
-
-    def max_inner_product(self, other):
-        """Negative inner product (for ordering by max inner product)."""
-        return self.op('<#>', return_type=Float)(other)
 
 
 class Vector(UserDefinedType):
