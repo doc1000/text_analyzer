@@ -5,7 +5,7 @@ from sqlalchemy import (
     ForeignKey, Integer, Index, BigInteger,
     String, text, Boolean, UniqueConstraint,
     )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import Session, declared_attr
@@ -142,6 +142,20 @@ class Document(BaseModel):
     assigned_topic_title = Column(Text, nullable=True)
     # Flag indicating if topic was manually assigned by user (vs auto-assigned by clustering)
     topic_manually_assigned = Column(Boolean, nullable=True, default=False)
+
+
+class IngestQueue(BaseModel):
+    """Holding table for async ingest - captures payload immediately, processes in background."""
+    __tablename__ = "ingest_queue"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    vault_id = Column(UUID(as_uuid=True), ForeignKey("vaults.id", ondelete="SET NULL"), nullable=True, index=True)
+    payload_json = Column(JSONB, nullable=False)  # IngestPayload as dict
+    status = Column(Text, nullable=False, default="pending", index=True)  # pending, processing, completed, failed
+    document_id = Column(UUID(as_uuid=True), nullable=True)  # Set when Document created
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processing_started_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
 
 
 class EmbeddingModel(BaseModel):

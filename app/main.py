@@ -1,6 +1,6 @@
 # save as app/main.py
 ## IMPORTS
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -57,6 +57,8 @@ from .auth import (
     require_vault_access,
 )
 from .email_service import send_verification_email
+from .ingest_worker import process_ingest_item
+from .models import IngestQueue
 
 
 
@@ -67,10 +69,9 @@ async def lifespan(app: FastAPI):
     # - Embedding tables are lazy-initialized on first use (via __getattr__ in db.py)
     # - Background fill moved to /admin/backfill endpoint
     
-    # Initialize scheduler for periodic tasks (deduplication)
+    # Initialize scheduler (ingest queue always; deduplication when enabled)
     from .scheduler import init_scheduler, shutdown_scheduler
-    if PREFERENCES.deduplication.enabled:
-        init_scheduler(schedule_times=PREFERENCES.deduplication.schedule_times)
+    init_scheduler(schedule_times=PREFERENCES.deduplication.schedule_times)
     
     yield
     
@@ -231,51 +232,6 @@ def revoke_api_key(api_key_id: str, user: models.User = Depends(get_current_user
     return {"status": "ok", "revoked_at": row.revoked_at}
 
 
-def format_linked_pdfs_as_markdown(pdf_urls: list, exclude: str = None) -> str:
-    """Format PDF URLs as markdown links for reference."""
-    if not pdf_urls:
-        return ""
-    refs = []
-    for url in pdf_urls:
-        if url == exclude:
-            continue
-        # Extract filename from URL or use truncated URL
-        if '/' in url:
-            filename = url.split('/')[-1]
-            # Clean up query params
-            if '?' in filename:
-                filename = filename.split('?')[0]
-        else:
-            filename = url[:50] + "..." if len(url) > 50 else url
-        refs.append(f"- [{filename}]({url})")
-    return "\n".join(refs)
-
-
-def extract_arxiv_id(url: str) -> str:
-    """Extract arXiv paper ID from URL (works for both /abs/ and /pdf/ URLs)."""
-    import re
-    # Match both /abs/ID and /pdf/ID patterns
-    # Paper IDs can contain dots (e.g., 2601.15299) so don't exclude them
-    # But stop at .pdf extension if present
-    match = re.search(r'arxiv\.org/(?:abs|pdf)/([^/?#]+?)(?:\.pdf)?$', url)
-    return match.group(1) if match else None
-
-
-def normalize_pdf_url(url: str) -> str:
-    """Normalize PDF URL to ensure it's properly formatted for extraction."""
-    if not url:
-        return url
-    
-    # Special handling for arxiv.org/pdf/ URLs - ensure they have .pdf extension
-    # arxiv.org/pdf/2601.15299 -> arxiv.org/pdf/2601.15299.pdf
-    if 'arxiv.org/pdf/' in url and not url.endswith('.pdf'):
-        paper_id = extract_arxiv_id(url)
-        if paper_id:
-            return f"https://arxiv.org/pdf/{paper_id}.pdf"
-    
-    return url
-
-
 def is_pdf_url(url: str) -> bool:
     """Check if URL is a direct PDF."""
     if not url:
@@ -291,167 +247,55 @@ def is_pdf_url(url: str) -> bool:
 @app.post("/ingest")
 def ingest(
     payload: IngestPayload,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
     vault: Vault = Depends(resolve_target_vault),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
-    # Use captured_at from payload if provided, else now
-    captured_at = payload.captured_at or datetime.utcnow()
-    
-    # 1. Start with extension text as captured_text
-    captured_text = payload.text or ""
-    title = payload.title
-    extracted_text = None
-    pdf_parsed = False
-    
-    # 2. Determine if we should parse a PDF (URL is PDF or arXiv)
-    pdf_to_parse = payload.pdf_to_parse  # New field from extension
-    
-    # Check URL patterns if pdf_to_parse not explicitly set
-    if not pdf_to_parse and payload.url:
-        if is_pdf_url(payload.url):
-            pdf_to_parse = payload.url
-        elif 'arxiv.org/abs/' in payload.url:
-            # arXiv abstract page - the PDF IS the content
-            paper_id = extract_arxiv_id(payload.url)
-            if paper_id:
-                pdf_to_parse = f"https://arxiv.org/pdf/{paper_id}.pdf"
-    
-    # Legacy support: if old pdf_urls field used, check if any should be parsed
-    if not pdf_to_parse and payload.pdf_urls and len(payload.pdf_urls) > 0:
-        # Only parse if URL itself is a PDF (old behavior for direct PDF pages)
-        if is_pdf_url(payload.url):
-            pdf_to_parse = payload.url
-    
-    # 3. Parse the PDF if needed (PDF IS the captured content)
-    if pdf_to_parse:
-        # Normalize URL (e.g., add .pdf to arxiv URLs)
-        pdf_to_parse = normalize_pdf_url(pdf_to_parse)
-        print(f"[INFO] Parsing PDF as primary content: {pdf_to_parse}")
-        try:
-            from .extraction import extract_from_pdf_urls
-            pdf_text = extract_from_pdf_urls([pdf_to_parse], max_pages_per_pdf=50)
-            if pdf_text:
-                captured_text = pdf_text  # PDF content IS the captured content
-                pdf_parsed = True
-                print(f"[INFO] PDF parsed successfully: {len(pdf_text)} chars")
-            else:
-                print(f"[WARN] No text extracted from PDF: {pdf_to_parse}")
-        except Exception as e:
-            print(f"[ERROR] Failed to parse PDF {pdf_to_parse}: {e}")
-            import traceback
-            traceback.print_exc()
-            # Keep extension text as fallback
-    
-    # 4. Format linked PDFs as markdown references (don't parse them)
-    linked_pdfs = payload.linked_pdf_urls or []
-    # Legacy support: use old pdf_urls as linked refs if new field not provided
-    if not linked_pdfs and payload.pdf_urls:
-        linked_pdfs = payload.pdf_urls
-    
-    if linked_pdfs:
-        refs = format_linked_pdfs_as_markdown(linked_pdfs, exclude=pdf_to_parse)
-        if refs:
-            captured_text += f"\n\n---\n\n**Linked Documents:**\n{refs}"
-            print(f"[INFO] Added {len(linked_pdfs)} linked PDF references")
-    
-    # 5. Run trafilatura for NLP (optional, don't overwrite captured)
-    if payload.mode == "page" and not pdf_parsed and payload.url and not payload.url.startswith("note://"):
-        try:
-            from .extraction import extract_from_url
-            extraction_result = extract_from_url(payload.url)
-            if extraction_result and extraction_result.get("text"):
-                extracted_text = extraction_result["text"]
-                print(f"[INFO] Trafilatura extraction for NLP: {len(extracted_text)} chars")
-                # Only use extracted title if user didn't provide one
-                if not payload.title and extraction_result.get("title"):
-                    title = extraction_result.get("title")
-            else:
-                print(f"[INFO] Trafilatura extraction returned no text")
-        except Exception as e:
-            print(f"[WARN] Trafilatura extraction error (non-fatal): {e}")
-            # Trafilatura failure is fine - we still have captured_text
-    
-    # 6. Ensure we have some text
-    if not captured_text or not captured_text.strip():
-        # Build a helpful error message
-        if pdf_to_parse and not pdf_parsed:
-            detail = f"PDF extraction failed for: {pdf_to_parse}. The PDF may be inaccessible, password-protected, or contain only images."
-        elif is_pdf_url(payload.url):
-            detail = f"Could not extract text from PDF URL: {payload.url}. Try accessing the PDF directly."
-        else:
-            detail = "No text content found. Please ensure the page has text content."
-        
-        print(f"[ERROR] Ingest failed - no text content. URL: {payload.url}, pdf_to_parse: {pdf_to_parse}, pdf_parsed: {pdf_parsed}")
-        raise HTTPException(status_code=400, detail=detail)
+    """
+    Ingest a document asynchronously. Accepts payload immediately, persists to queue,
+    returns fast 200 with response mask. Processing (PDF, trafilatura, embedding) runs in background.
+    """
+    # Basic validation: must have content to process
+    has_text = payload.text and payload.text.strip()
+    has_pdf = payload.pdf_to_parse or (payload.url and is_pdf_url(payload.url)) or (payload.pdf_urls and len(payload.pdf_urls) > 0)
+    has_url_for_trafilatura = payload.url and payload.mode == "page" and not payload.url.startswith("note://")
+    if not has_text and not has_pdf and not has_url_for_trafilatura:
+        raise HTTPException(
+            status_code=400,
+            detail="No text content, PDF to parse, or URL for extraction. Please provide text, pdf_to_parse, or a page URL.",
+        )
 
-    # 6b. URL duplicate check BEFORE creating document (only for full page captures)
-    has_extracted_text = (extracted_text is not None)
-    if has_extracted_text and vault:
-        from .topics import find_url_duplicate
-        existing_doc = find_url_duplicate(db, vault.id, payload.url, has_extracted_text)
-        if existing_doc:
-            return {
-                "status": "duplicate",
-                "document_id": str(existing_doc.id),
-                "message": "Document already exists (matching URL)",
-                "is_duplicate": True,
-                "duplicate_reason": "url",
-                "user_id": str(user.id) if user else None,
-                "vault_id": str(vault.id) if vault else None,
-            }
-
-    # 7. Create document with separated text fields
-    doc = models.Document(
+    # Store payload in queue immediately
+    payload_dict = payload.model_dump(mode="json")
+    queue_row = IngestQueue(
+        user_id=user.id if user else None,
         vault_id=vault.id if vault else None,
-        created_by=user.id if user else None,
-        url=payload.url,
-        title=title,
-        captured_text=captured_text,
-        extracted_text=extracted_text,
-        full_text=captured_text,  # Deprecated field - keep for backward compat
-        captured_at=captured_at,
+        payload_json=payload_dict,
+        status="pending",
     )
-
-    db.add(doc)
+    db.add(queue_row)
     db.commit()
+    db.refresh(queue_row)
 
-    chunk_len = embed_doc_chunks(doc)
+    # Process in background
+    background_tasks.add_task(process_ingest_item, str(queue_row.id))
 
-    # 7b. Semantic duplicate check AFTER embedding (only for full page captures)
-    if has_extracted_text and vault:
-        from .topics import find_semantic_duplicate
-        existing_doc = find_semantic_duplicate(db, doc)
-        if existing_doc:
-            # Delete the new doc we just created, return the existing one
-            db.delete(doc)
-            db.commit()
-            return {
-                "status": "duplicate",
-                "document_id": str(existing_doc.id),
-                "message": "Document already exists (semantically similar content)",
-                "is_duplicate": True,
-                "duplicate_reason": "semantic",
-                "user_id": str(user.id) if user else None,
-                "vault_id": str(vault.id) if vault else None,
-            }
-
+    # Response mask: same shape as sync response for extension compatibility (no extension changes)
+    linked_pdfs = payload.linked_pdf_urls or payload.pdf_urls or []
     result = {
         "status": "ok",
-        "document_id": str(doc.id),
-        "num_chunks": int(chunk_len),
-        "pdf_parsed": pdf_parsed,
-        "linked_pdfs_count": len(linked_pdfs) if linked_pdfs else 0,
-        "has_extracted_text": has_extracted_text,
+        "document_id": str(queue_row.id),
+        "num_chunks": 0,
+        "pdf_parsed": False,
+        "linked_pdfs_count": len(linked_pdfs),
+        "has_extracted_text": False,
     }
-    
-    # Include user_id and vault_id if auth is enabled and user is present
     if user:
         result["user_id"] = str(user.id)
     if vault:
         result["vault_id"] = str(vault.id)
-    
     return result
 
 @app.get("/documents", response_model=List[DocumentOut])

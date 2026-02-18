@@ -11,10 +11,12 @@ from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
 from .topics import deduplicate_vault_documents
+from .ingest_worker import process_pending_ingest_queue
 from . import models
 
 logger = logging.getLogger(__name__)
@@ -81,13 +83,25 @@ def run_scheduled_deduplication():
         db.close()
 
 
+def run_pending_ingest_queue():
+    """Process pending items in the ingest queue. Catches failed/stale items."""
+    try:
+        stats = process_pending_ingest_queue()
+        if stats.get("processed") or stats.get("reset_stuck"):
+            logger.info(f"Ingest queue: processed={stats.get('processed')}, reset_stuck={stats.get('reset_stuck')}")
+    except Exception as e:
+        logger.error(f"Error in ingest queue processing: {e}", exc_info=True)
+
+
 def init_scheduler(schedule_times: list[str] = None):
     """
     Initialize and start the background scheduler.
     
+    Always adds the ingest queue job (every 2 min). Adds deduplication jobs only when enabled.
+    
     Args:
         schedule_times: List of time strings in HH:MM format (e.g., ["00:00", "12:00"])
-                       If None, defaults to midnight and noon.
+                       If None, defaults to midnight and noon. Used for deduplication only.
     """
     global _scheduler, _executor
     
@@ -98,7 +112,7 @@ def init_scheduler(schedule_times: list[str] = None):
     if schedule_times is None:
         schedule_times = ["00:00", "12:00"]
     
-    logger.info("Initializing background scheduler for deduplication")
+    logger.info("Initializing background scheduler")
     
     # Create thread pool executor for running blocking DB operations
     _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scheduler")
@@ -112,22 +126,34 @@ def init_scheduler(schedule_times: list[str] = None):
         }
     )
     
-    # Schedule deduplication jobs
-    for time_str in schedule_times:
-        try:
-            hour, minute = map(int, time_str.split(":"))
-            trigger = CronTrigger(hour=hour, minute=minute, timezone="UTC")
-            
-            _scheduler.add_job(
-                func=run_scheduled_deduplication,
-                trigger=trigger,
-                id=f"dedupe_{time_str.replace(':', '')}",
-                name=f"Deduplication at {time_str} UTC",
-                replace_existing=True,
-            )
-            logger.info(f"Scheduled deduplication for {time_str} UTC (cron: {hour}:{minute:02d})")
-        except ValueError as e:
-            logger.error(f"Invalid time format '{time_str}': {e}")
+    # Always add ingest queue job (every 2 minutes)
+    _scheduler.add_job(
+        func=run_pending_ingest_queue,
+        trigger=IntervalTrigger(minutes=2),
+        id="ingest_queue",
+        name="Process ingest queue",
+        replace_existing=True,
+    )
+    logger.info("Scheduled ingest queue processing every 2 minutes")
+
+    # Schedule deduplication jobs (only when enabled)
+    from .config import PREFERENCES
+    if PREFERENCES.deduplication.enabled:
+        for time_str in schedule_times:
+            try:
+                hour, minute = map(int, time_str.split(":"))
+                trigger = CronTrigger(hour=hour, minute=minute, timezone="UTC")
+                
+                _scheduler.add_job(
+                    func=run_scheduled_deduplication,
+                    trigger=trigger,
+                    id=f"dedupe_{time_str.replace(':', '')}",
+                    name=f"Deduplication at {time_str} UTC",
+                    replace_existing=True,
+                )
+                logger.info(f"Scheduled deduplication for {time_str} UTC (cron: {hour}:{minute:02d})")
+            except ValueError as e:
+                logger.error(f"Invalid time format '{time_str}': {e}")
     
     # Start the scheduler
     _scheduler.start()

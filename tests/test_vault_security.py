@@ -148,7 +148,7 @@ class VaultSecurityTester:
         return passed
 
     def test_03_testuser_ingest_document(self) -> bool:
-        """testuser ingests a document into their vault."""
+        """testuser ingests a document into their vault (async - waits for processing)."""
         resp = self._request("POST", "/ingest",
                             api_key=self.testuser.api_key,
                             json_data={
@@ -157,19 +157,37 @@ class VaultSecurityTester:
                                 "title": "Test Security Document"
                             })
         
-        if resp.status_code == 200:
-            data = resp.json()
-            self.testuser.document_id = data.get("document_id")
-            self.testuser.vault_id = data.get("vault_id")
-            passed = bool(self.testuser.document_id)
-        else:
-            passed = False
-            
+        if resp.status_code != 200:
+            self._log_result(TestResult(
+                name="testuser ingests document",
+                passed=False,
+                expected="200 with document_id",
+                actual=f"{resp.status_code}: {resp.text[:100]}",
+                details=""
+            ))
+            return False
+
+        data = resp.json()
+        self.testuser.vault_id = data.get("vault_id")
+        # Ingest is async - poll for document to appear (by URL)
+        for _ in range(30):
+            list_resp = self._request("GET", "/documents", api_key=self.testuser.api_key)
+            if list_resp.status_code == 200:
+                docs = list_resp.json()
+                for d in docs:
+                    if d.get("url") == TEST_DOCUMENT_URL:
+                        self.testuser.document_id = str(d["id"])
+                        break
+                if self.testuser.document_id:
+                    break
+            time.sleep(1)
+
+        passed = bool(self.testuser.document_id)
         self._log_result(TestResult(
             name="testuser ingests document",
             passed=passed,
-            expected="200 with document_id",
-            actual=f"{resp.status_code}: {resp.text[:100] if not passed else 'OK'}",
+            expected="200, document appears in list",
+            actual=f"200, doc_id={self.testuser.document_id}" if passed else "document not found after 30s",
             details=f"doc_id={self.testuser.document_id}, vault_id={self.testuser.vault_id}"
         ))
         return passed
