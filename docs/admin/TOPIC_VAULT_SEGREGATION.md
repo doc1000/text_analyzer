@@ -49,7 +49,7 @@ docker compose exec db psql -U badger -d badgerdb -f /migrations/006_add_vault_t
 
 #### `compute_hierarchical_topics()` (line 2063)
 - Updated call to `_cache_existing_topics()` to pass `vault_ids`
-- Updated topic deletion to filter by `vault_ids` (only deletes topics in user's vaults)
+- **Topic deletion disabled** during recluster - flush system manually when needed
 - **Added vault_id determination logic** (line 2120-2135):
   - Extracts vault_id from first document in cluster
   - Warns if cluster has documents from multiple vaults
@@ -60,6 +60,10 @@ docker compose exec db psql -U badger -d badgerdb -f /migrations/006_add_vault_t
 - Only fetches topics from user's accessible vaults
 
 ### 4. API Endpoint Updates (`app/main.py`)
+
+#### `POST /topics/recluster`
+- Requires editor or owner role; uses `get_user_accessible_vault_ids(..., min_role="editor")`
+- Viewers get empty `vault_ids` and cannot recluster (insulates vaults with view-only access, e.g. demo user and newuser vault)
 
 #### `GET /documents/{document_id}/topics` (line 1113)
 - Added vault filter to raw SQL query: `AND t.vault_id::text = ANY(:vault_ids)`
@@ -80,7 +84,8 @@ docker compose exec db psql -U badger -d badgerdb -f /migrations/006_add_vault_t
 - **Topic creation**: Always requires vault_id (derived from documents in cluster)
 - **Topic queries**: All topic queries filter by user's accessible vault_ids
 - **Topic matching**: Reuse logic only matches topics within user's vaults
-- **Topic deletion**: Only deletes topics in user's vaults during reclustering
+- **Topic deletion**: Disabled during recluster - flush system manually when needed
+- **Recluster endpoint**: Requires editor or owner role; viewers cannot recluster (prevents affecting vaults with view-only access)
 
 ## Testing Guide
 
@@ -267,7 +272,7 @@ git checkout HEAD^ -- app/models.py app/topics.py app/main.py
 ## Security Benefits
 
 1. **Database-level enforcement**: Foreign key constraint ensures referential integrity
-2. **Automatic cleanup**: Topics deleted when vault is deleted (CASCADE)
+2. **Automatic cleanup**: Topics deleted when vault is deleted (CASCADE). Topic deletion during recluster is disabled; flush manually when needed.
 3. **Query-level filtering**: Every topic query filters by user's accessible vaults
 4. **No cross-vault leakage**: Users cannot see topics from vaults they don't have access to
 5. **Audit trail**: vault_id provides clear ownership tracking

@@ -1003,6 +1003,8 @@ def _cleanup_empty_topics(
     """
     Clean up topics that have no documents assigned after orphan reassignment.
     
+    Topic deletion disabled - flush system manually when needed.
+    
     Args:
         db: Database session
         level0_ids: List of Level 0 topic IDs that may be empty
@@ -1010,44 +1012,10 @@ def _cleanup_empty_topics(
         vault_ids: List of vault IDs to scope document queries (filters documents by vault)
     
     Returns:
-        Total number of topics deleted
+        Total number of topics deleted (always 0 - deletion disabled)
     """
-    topics_deleted = 0
-    
-    # Delete Level 0 topics that now have no documents (in user's vaults)
-    if level0_ids:
-        # Find which ones are truly empty
-        empty_level0 = []
-        for tid in level0_ids:
-            doc_query = db.query(Document).filter(Document.assigned_topic_id == tid)
-            if vault_ids:
-                doc_query = doc_query.filter(Document.vault_id.in_(vault_ids))
-            has_docs = doc_query.first()
-            if not has_docs:
-                empty_level0.append(tid)
-        
-        if empty_level0:
-            db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id.in_(empty_level0)).delete(synchronize_session=False)
-            topics_deleted += len(empty_level0)
-            print(f"Deleted {len(empty_level0)} empty Level 0 topics")
-    
-    # Delete Level 1 topics that now have no Level 0 children
-    if level1_ids:
-        empty_level1 = []
-        for tid in level1_ids:
-            has_children = db.query(TOPIC_TABLE).filter(TOPIC_TABLE.parent_id == tid).first()
-            if not has_children:
-                empty_level1.append(tid)
-        
-        if empty_level1:
-            db.query(TOPIC_TABLE).filter(TOPIC_TABLE.id.in_(empty_level1)).delete(synchronize_session=False)
-            topics_deleted += len(empty_level1)
-            print(f"Deleted {len(empty_level1)} empty Level 1 topics")
-    
-    if topics_deleted > 0:
-        db.commit()
-    
-    return topics_deleted
+    # Topic deletion disabled - flush system manually when needed.
+    return 0
 
 
 def _incremental_topic_assignment(
@@ -2064,45 +2032,11 @@ def compute_hierarchical_topics(
     for level, level_stats in stats.items():
         print(f"  Level {level}: {level_stats['n_clusters']} clusters, avg size: {level_stats['avg_size']:.1f}")
     
-    # 8) Cache existing topic titles for reuse, then clear topics
+    # 8) Cache existing topic titles for reuse
     cached_topics_by_level = _cache_existing_topics(db, vault_ids=vault_ids)
     
-    # Only delete topics that don't have manually-assigned documents
-    # Get topic IDs that have manually-assigned documents
-    manually_assigned_topic_ids = (
-        db.query(Document.assigned_topic_id)
-        .filter(
-            Document.assigned_topic_id != None,
-            Document.topic_manually_assigned == True
-        )
-        .distinct()
-        .all()
-    )
-    protected_topic_ids = {row[0] for row in manually_assigned_topic_ids}
-    
-    try:
-        if protected_topic_ids:
-            # Delete only topics that are not protected
-            delete_query = db.query(TOPIC_TABLE).filter(
-                ~TOPIC_TABLE.id.in_(protected_topic_ids)
-            )
-            # Also filter by vault_ids to only delete topics in user's vaults
-            if vault_ids:
-                delete_query = delete_query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
-            deleted = delete_query.delete(synchronize_session=False)
-            db.commit()
-            print(f"Cleared {deleted} existing topics (preserved {len(protected_topic_ids)} topics with manual assignments)")
-        else:
-            # No protected topics, delete all topics in user's vaults
-            delete_query = db.query(TOPIC_TABLE)
-            if vault_ids:
-                delete_query = delete_query.filter(TOPIC_TABLE.vault_id.in_(vault_ids))
-            deleted = delete_query.delete()
-            db.commit()
-            print(f"Cleared {deleted} existing topics")
-    except Exception as e:
-        db.rollback()
-        print(f"[WARN] Could not clear existing topics: {e}")
+    # Topic deletion disabled - flush system manually when needed.
+    # Previously: deleted topics in vault_ids before creating new ones.
     
     # 9) Create topics at all levels (coarsest to finest)
     

@@ -753,9 +753,9 @@ def recluster_topics(
     """
     from .topics import compute_hierarchical_topics, clear_topics_cache
     
-    # Get vault IDs the user can access
-    vault_ids = get_user_accessible_vault_ids(user, db)
-    print(f"topic vault ideas: {vault_ids}")
+    # Get vault IDs the user can modify (editor or owner) - viewers cannot recluster
+    vault_ids = get_user_accessible_vault_ids(user, db, min_role="editor")
+    print(f"topic vault ids: {vault_ids}")
     # Optionally clear existing topic assignments (for full recluster)
     # Only clear AUTO-ASSIGNED topics, preserve manual assignments
     # Only clear assignments for documents in user's vaults
