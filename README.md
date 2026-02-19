@@ -237,6 +237,26 @@ Full API docs available at:
 
 ---
 
+## E2E Test Script (Pre-Merge Validation)
+
+Run the end-to-end test script to validate core behavior before merges:
+
+```bash
+export API_BASE=http://localhost:8000
+export DATABASE_URL=postgresql://badger:badgerpass@localhost:5433/badgerdb
+python scripts/run_e2e_tests.py
+```
+
+For remote (e.g. Fly.io), set `API_BASE` and `DATABASE_URL` to your deployment. The script:
+
+- Uses extension login flow (DB-inserted verification code)
+- Tests auth, vaults, ingest, document CRUD, topics, query
+- Takes pre/post DB snapshots and validates no existing user data is modified or deleted
+
+Requires: `psycopg2-binary` (in `app/requirements.txt`).
+
+---
+
 ## Troubleshooting
 
 ### "Unauthorized" errors
