@@ -2,7 +2,7 @@
 
 ## Privacy Policy
 
-**Last Updated:** January 2026
+**Last Updated:** February 2026
 
 VaultBubble is committed to protecting your privacy. This policy explains what data we collect and how it's used.
 
@@ -69,4 +69,4 @@ We may update this privacy policy. Changes will be posted here with an updated d
 
 ### Contact
 
-For questions about this privacy policy, please contact support@vaultbubbles.com.
+For questions about this privacy policy, please contact hello@vaultbubbles.com.
