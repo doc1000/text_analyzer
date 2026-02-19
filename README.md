@@ -239,21 +239,17 @@ Full API docs available at:
 
 ## E2E Test Script (Pre-Merge Validation)
 
-Run the end-to-end test script to validate core behavior before merges:
+Run the end-to-end test script to validate core behavior before merges. See **[tests/run_e2e_tests_instructions.md](tests/run_e2e_tests_instructions.md)** for full instructions (including Windows PowerShell and remote).
+
+Quick start (local):
 
 ```bash
 export API_BASE=http://localhost:8000
 export DATABASE_URL=postgresql://badger:badgerpass@localhost:5433/badgerdb
-python scripts/run_e2e_tests.py
+python tests/run_e2e_tests.py
 ```
 
-For remote (e.g. Fly.io), set `API_BASE` and `DATABASE_URL` to your deployment. The script:
-
-- Uses extension login flow (DB-inserted verification code)
-- Tests auth, vaults, ingest, document CRUD, topics, query
-- Takes pre/post DB snapshots and validates no existing user data is modified or deleted
-
-Requires: `psycopg2-binary` (in `app/requirements.txt`).
+The script uses extension login flow (DB-inserted verification code), tests auth, vaults, ingest, document CRUD, topics, query, and takes pre/post DB snapshots. Requires `psycopg2-binary`.
 
 ---
 

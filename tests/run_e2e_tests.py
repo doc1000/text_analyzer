@@ -16,7 +16,7 @@ Prerequisites:
 Usage:
     export API_BASE=http://localhost:8000
     export DATABASE_URL=postgresql://user:pass@localhost:5432/dbname
-    python scripts/run_e2e_tests.py
+    python tests/run_e2e_tests.py
 """
 
 import os
@@ -45,13 +45,14 @@ else:
     DATABASE_URL = None
 TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL") or f"e2e-test-{int(time.time())}@example.com"
 
-# Unique URLs for ingest to avoid duplicates
+# Unique URLs for ingest to avoid duplicates (4 docs needed for clustering: min 2 samples)
 RUN_ID = str(uuid.uuid4())[:8]
-NOTE_URL = f"note://test-note-{RUN_ID}"
-PAGE_URL = f"https://example.com/e2e-test-{RUN_ID}"
-
-NOTE_TEXT = "E2E test note content. Quick brown fox jumps over the lazy dog."
-PAGE_TEXT = "E2E test full page content. This document tests ingestion and retrieval."
+INGEST_ITEMS = [
+    {"url": f"note://test-note-1-{RUN_ID}", "text": "E2E test note 1. Quick brown fox jumps over the lazy dog.", "title": "E2E Test Note 1", "mode": "note"},
+    {"url": f"https://example.com/e2e-test-1-{RUN_ID}", "text": "E2E test page 1. This document tests ingestion and retrieval.", "title": "E2E Test Page 1", "mode": "page"},
+    {"url": f"note://test-note-2-{RUN_ID}", "text": "E2E test note 2. Different content for clustering diversity.", "title": "E2E Test Note 2", "mode": "note"},
+    {"url": f"https://example.org/e2e-test-2-{RUN_ID}", "text": "E2E test page 2. More sample content for topic detection.", "title": "E2E Test Page 2", "mode": "page"},
+]
 
 
 @dataclass
@@ -382,110 +383,52 @@ class E2ECoreFlowTester:
     # ---------- Phase 4: Ingestion ----------
 
     def phase4_ingest(self) -> bool:
-        """Ingest note and page, track created_doc_ids."""
-        # Ingest note
-        resp_note = self._request(
-            "POST",
-            "/ingest",
-            token=self.token,
-            json_data={
-                "url": NOTE_URL,
-                "text": NOTE_TEXT,
-                "title": "E2E Test Note",
-                "mode": "note",
-            },
-        )
-
-        if resp_note.status_code != 200:
+        """Ingest 4 documents (needed for clustering: min 2 samples), track created_doc_ids."""
+        created_ids = []
+        for i, item in enumerate(INGEST_ITEMS):
+            label = f"Phase 4{'abcd'[i]}: Ingest doc {i + 1}"
+            resp = self._request(
+                "POST",
+                "/ingest",
+                token=self.token,
+                json_data=item,
+            )
+            if resp.status_code != 200:
+                self._log_result(TestResult(
+                    name=label,
+                    passed=False,
+                    expected="200",
+                    actual=f"{resp.status_code}: {resp.text[:200]}",
+                ))
+                return False
+            data = resp.json()
+            doc_id = data.get("document_id")
+            if not doc_id:
+                self._log_result(TestResult(
+                    name=label,
+                    passed=False,
+                    expected="document_id",
+                    actual=str(data),
+                ))
+                return False
+            vault_id = data.get("vault_id")
+            if vault_id and vault_id != self.test_user_vault_id:
+                self._log_result(TestResult(
+                    name=label,
+                    passed=False,
+                    expected=f"vault_id={self.test_user_vault_id}",
+                    actual=f"vault_id={vault_id}",
+                ))
+                return False
+            if data.get("status") == "ok":
+                self.created_doc_ids.add(doc_id)
+                created_ids.append(doc_id)
             self._log_result(TestResult(
-                name="Phase 4a: Ingest note",
-                passed=False,
-                expected="200",
-                actual=f"{resp_note.status_code}: {resp_note.text[:200]}",
+                name=label,
+                passed=True,
+                expected="document created",
+                actual=f"doc_id={doc_id}",
             ))
-            return False
-
-        data_note = resp_note.json()
-        doc_id_note = data_note.get("document_id")
-        if not doc_id_note:
-            self._log_result(TestResult(
-                name="Phase 4a: Ingest note",
-                passed=False,
-                expected="document_id",
-                actual=str(data_note),
-            ))
-            return False
-
-        vault_id_note = data_note.get("vault_id")
-        if vault_id_note and vault_id_note != self.test_user_vault_id:
-            self._log_result(TestResult(
-                name="Phase 4a: Ingest note vault",
-                passed=False,
-                expected=f"vault_id={self.test_user_vault_id}",
-                actual=f"vault_id={vault_id_note}",
-            ))
-            return False
-
-        if data_note.get("status") == "ok":
-            self.created_doc_ids.add(doc_id_note)
-        self._log_result(TestResult(
-            name="Phase 4a: Ingest note",
-            passed=True,
-            expected="document created",
-            actual=f"doc_id={doc_id_note}",
-        ))
-
-        # Ingest page
-        resp_page = self._request(
-            "POST",
-            "/ingest",
-            token=self.token,
-            json_data={
-                "url": PAGE_URL,
-                "text": PAGE_TEXT,
-                "title": "E2E Test Page",
-                "mode": "page",
-            },
-        )
-
-        if resp_page.status_code != 200:
-            self._log_result(TestResult(
-                name="Phase 4b: Ingest page",
-                passed=False,
-                expected="200",
-                actual=f"{resp_page.status_code}: {resp_page.text[:200]}",
-            ))
-            return False
-
-        data_page = resp_page.json()
-        doc_id_page = data_page.get("document_id")
-        if not doc_id_page:
-            self._log_result(TestResult(
-                name="Phase 4b: Ingest page",
-                passed=False,
-                expected="document_id",
-                actual=str(data_page),
-            ))
-            return False
-
-        vault_id_page = data_page.get("vault_id")
-        if vault_id_page and vault_id_page != self.test_user_vault_id:
-            self._log_result(TestResult(
-                name="Phase 4b: Ingest page vault",
-                passed=False,
-                expected=f"vault_id={self.test_user_vault_id}",
-                actual=f"vault_id={vault_id_page}",
-            ))
-            return False
-
-        if data_page.get("status") == "ok":
-            self.created_doc_ids.add(doc_id_page)
-        self._log_result(TestResult(
-            name="Phase 4b: Ingest page",
-            passed=True,
-            expected="document created",
-            actual=f"doc_id={doc_id_page}",
-        ))
 
         # Wait for embeddings
         print("  Waiting 5s for embedding processing...")
@@ -498,19 +441,18 @@ class E2ECoreFlowTester:
             token=self.token,
         )
 
-        # List documents - both must appear
+        # List documents - all 4 must appear
         resp_list = self._request("GET", "/documents?limit=50", token=self.token)
         docs = resp_list.json() if resp_list.status_code == 200 else []
         doc_ids = {d.get("id") for d in docs if d.get("id")}
-
-        both_visible = doc_id_note in doc_ids and doc_id_page in doc_ids
+        all_visible = all(did in doc_ids for did in created_ids)
         self._log_result(TestResult(
-            name="Phase 4c: Documents visible after reload",
-            passed=both_visible,
-            expected="Both docs in list",
-            actual=f"note={doc_id_note in doc_ids}, page={doc_id_page in doc_ids}",
+            name="Phase 4e: Documents visible after reload",
+            passed=all_visible,
+            expected="All 4 docs in list",
+            actual=f"{sum(1 for did in created_ids if did in doc_ids)}/4 visible",
         ))
-        return both_visible
+        return all_visible
 
     # ---------- Phase 5: Document CRUD ----------
 
@@ -579,7 +521,7 @@ class E2ECoreFlowTester:
             ))
             return False
 
-        has_text = NOTE_TEXT in text or PAGE_TEXT in text
+        has_text = any(item["text"][:20] in text for item in INGEST_ITEMS)
         self._log_result(TestResult(
             name="Phase 5c: Get document text",
             passed=has_text,
