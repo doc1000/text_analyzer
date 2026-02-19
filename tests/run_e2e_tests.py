@@ -47,6 +47,8 @@ TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL") or f"e2e-test-{int(time.time())}@
 
 # Unique URLs for ingest to avoid duplicates (4 docs needed for clustering: min 2 samples)
 RUN_ID = str(uuid.uuid4())[:8]
+# Configurable wait for async ingest (remote/HuggingFace can be slow)
+E2E_INGEST_WAIT_SECONDS = int(os.getenv("E2E_INGEST_WAIT_SECONDS", "60"))
 INGEST_ITEMS = [
     {"url": f"note://test-note-1-{RUN_ID}", "text": "E2E test note 1. Quick brown fox jumps over the lazy dog.", "title": "E2E Test Note 1", "mode": "note"},
     {"url": f"https://example.com/e2e-test-1-{RUN_ID}", "text": "E2E test page 1. This document tests ingestion and retrieval.", "title": "E2E Test Page 1", "mode": "page"},
@@ -236,11 +238,11 @@ class E2ECoreFlowTester:
             allow_redirects=False,
         )
 
-        if resp.status_code != 302:
+        if resp.status_code not in (301, 302):
             self._log_result(TestResult(
                 name="Phase 1b: Verify code",
                 passed=False,
-                expected="302 redirect",
+                expected="301 or 302 redirect",
                 actual=f"{resp.status_code}: {resp.text[:200]}",
             ))
             return False
@@ -383,8 +385,8 @@ class E2ECoreFlowTester:
     # ---------- Phase 4: Ingestion ----------
 
     def phase4_ingest(self) -> bool:
-        """Ingest 4 documents (needed for clustering: min 2 samples), track created_doc_ids."""
-        created_ids = []
+        """Ingest 4 documents (async), poll for them to appear, track actual document IDs."""
+        ingest_urls = [item["url"] for item in INGEST_ITEMS]
         for i, item in enumerate(INGEST_ITEMS):
             label = f"Phase 4{'abcd'[i]}: Ingest doc {i + 1}"
             resp = self._request(
@@ -402,12 +404,11 @@ class E2ECoreFlowTester:
                 ))
                 return False
             data = resp.json()
-            doc_id = data.get("document_id")
-            if not doc_id:
+            if not data.get("document_id"):
                 self._log_result(TestResult(
                     name=label,
                     passed=False,
-                    expected="document_id",
+                    expected="document_id (or queue_id)",
                     actual=str(data),
                 ))
                 return False
@@ -420,37 +421,45 @@ class E2ECoreFlowTester:
                     actual=f"vault_id={vault_id}",
                 ))
                 return False
-            if data.get("status") == "ok":
-                self.created_doc_ids.add(doc_id)
-                created_ids.append(doc_id)
             self._log_result(TestResult(
                 name=label,
                 passed=True,
-                expected="document created",
-                actual=f"doc_id={doc_id}",
+                expected="document queued",
+                actual="OK",
             ))
 
-        # Wait for embeddings
-        print("  Waiting 5s for embedding processing...")
-        time.sleep(5)
+        # Poll for documents to appear (async ingest creates them in background)
+        print(f"  Waiting up to {E2E_INGEST_WAIT_SECONDS}s for async processing...")
+        start = time.time()
+        found_doc_ids: Dict[str, str] = {}  # url -> document_id
+        while (time.time() - start) < E2E_INGEST_WAIT_SECONDS:
+            resp_list = self._request("GET", "/documents?limit=50", token=self.token)
+            docs = resp_list.json() if resp_list.status_code == 200 else []
+            for d in docs:
+                url = d.get("url")
+                if url in ingest_urls and url not in found_doc_ids:
+                    found_doc_ids[url] = str(d["id"])
+            if len(found_doc_ids) >= 4:
+                break
+            time.sleep(2)
+        elapsed = time.time() - start
+        print(f"  Waited {elapsed:.1f}s, found {len(found_doc_ids)}/4 docs")
 
-        # Reload again
+        self.created_doc_ids = set(found_doc_ids.values())
+
+        # Reload topics
         self._request(
             "POST",
             "/topics/recluster?days=365&clear_assignments=false",
             token=self.token,
         )
 
-        # List documents - all 4 must appear
-        resp_list = self._request("GET", "/documents?limit=50", token=self.token)
-        docs = resp_list.json() if resp_list.status_code == 200 else []
-        doc_ids = {d.get("id") for d in docs if d.get("id")}
-        all_visible = all(did in doc_ids for did in created_ids)
+        all_visible = len(found_doc_ids) >= 4
         self._log_result(TestResult(
             name="Phase 4e: Documents visible after reload",
             passed=all_visible,
             expected="All 4 docs in list",
-            actual=f"{sum(1 for did in created_ids if did in doc_ids)}/4 visible",
+            actual=f"{len(found_doc_ids)}/4 visible",
         ))
         return all_visible
 

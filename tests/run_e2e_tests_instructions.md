@@ -28,13 +28,15 @@ python tests/run_e2e_tests.py
 
 ## Remote (e.g. Fly.io)
 
+**Important:** Use `https://` for API_BASE (not `http://`) to avoid redirect issues.
+
 ```powershell
 # PowerShell (Windows)
 $env:API_BASE = "https://vaultbubbles.fly.dev"
 $env:DATABASE_URL = "postgresql://..."   # Fly Postgres connection URL
 python tests/run_e2e_tests.py
 ```
-
+# make sure you use "https", not "http" or re-directs will break the test
 ```bash
 # Linux / macOS
 export API_BASE=https://vaultbubbles.fly.dev
@@ -51,3 +53,4 @@ python tests/run_e2e_tests.py
 ## Optional
 
 - `TEST_USER_EMAIL` — Override the test user email (default: `e2e-test-{timestamp}@example.com`)
+- `E2E_INGEST_WAIT_SECONDS` — Seconds to wait for async ingest (default: 60). Increase for slow remote deployments (e.g. `90` or `120`).
