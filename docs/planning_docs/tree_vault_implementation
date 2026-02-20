@@ -1,0 +1,438 @@
+Perfect. I’ll make anything ambiguous explicit with comments like:
+
+> -- TODO: confirm reference to existing table public.document(id, vault_id)
+
+Cursor can wire it correctly.
+
+Below is a **clean, implementation-ready spec** aligned to your goals:
+
+* No cross-vault tree structure
+* No document moving
+* Document layer fully decoupled
+* DB-enforced invariants
+* Permission logic inside SQL functions
+* Flat-tree JSON → Python in-memory build
+* Fully isolated from existing endpoints
+
+---
+
+# 🔐 Core Architectural Decisions (Locked In)
+
+1. **Vault = hard isolation boundary**
+2. `tree_node.parent_id` must reference same `vault_id`
+3. Documents never change `vault_id`
+4. No persistent cross-vault tree mount
+5. Multi-vault view = workspace overlay only
+6. Tree structure changes do NOT auto-recluster documents
+
+This is calm, predictable, and safe.
+
+---
+
+# 🗂️ New Subsystem: `semantic_tree_v2`
+
+Everything lives in its own schema.
+
+---
+
+# 1️⃣ SQL Migration (Clean + Explicit TODOs)
+
+```sql
+-- =========================================
+-- semantic_tree_v2
+-- Isolated vault-scoped semantic tree
+-- =========================================
+
+CREATE SCHEMA IF NOT EXISTS semantic_tree_v2;
+
+-- =========================================
+-- Vault Roles
+-- =========================================
+
+DO $$ BEGIN
+  CREATE TYPE semantic_tree_v2.vault_role AS ENUM ('owner','admin','editor','viewer');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS semantic_tree_v2.vault_user_role (
+  vault_id   UUID NOT NULL,
+  user_id    UUID NOT NULL,
+  role       semantic_tree_v2.vault_role NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (vault_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_user_role_user
+ON semantic_tree_v2.vault_user_role(user_id, vault_id);
+
+-- =========================================
+-- Tree Nodes (STRICT vault isolation)
+-- =========================================
+
+CREATE TABLE IF NOT EXISTS semantic_tree_v2.tree_node (
+  id          UUID PRIMARY KEY,
+  vault_id    UUID NOT NULL,
+  parent_id   UUID NULL,
+  title       TEXT NOT NULL,
+  summary     TEXT NULL,
+  sort_key    TEXT NOT NULL DEFAULT '',
+  created_by  UUID NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- CRITICAL: parent must be in same vault
+  CONSTRAINT fk_tree_node_parent_same_vault
+    FOREIGN KEY (parent_id, vault_id)
+    REFERENCES semantic_tree_v2.tree_node(id, vault_id)
+    ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tree_node_vault
+ON semantic_tree_v2.tree_node(vault_id);
+
+CREATE INDEX IF NOT EXISTS idx_tree_node_parent
+ON semantic_tree_v2.tree_node(vault_id, parent_id);
+
+-- =========================================
+-- Node Stats (UI performance, optional)
+-- =========================================
+
+CREATE TABLE IF NOT EXISTS semantic_tree_v2.tree_node_stats (
+  node_id    UUID PRIMARY KEY,
+  vault_id   UUID NOT NULL,
+  doc_count  INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CONSTRAINT fk_tree_node_stats_node
+    FOREIGN KEY (node_id, vault_id)
+    REFERENCES semantic_tree_v2.tree_node(id, vault_id)
+    ON DELETE CASCADE
+);
+
+-- =========================================
+-- Document Attachment (Decoupled)
+-- =========================================
+
+CREATE TABLE IF NOT EXISTS semantic_tree_v2.node_document (
+  vault_id     UUID NOT NULL,
+  node_id      UUID NOT NULL,
+  document_id  UUID NOT NULL,
+  created_by   UUID NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  PRIMARY KEY (vault_id, node_id, document_id),
+
+  CONSTRAINT fk_node_document_node
+    FOREIGN KEY (node_id, vault_id)
+    REFERENCES semantic_tree_v2.tree_node(id, vault_id)
+    ON DELETE CASCADE
+
+  -- TODO: confirm your document table structure.
+  -- If your document table uses (id, vault_id) composite PK:
+  -- ,CONSTRAINT fk_node_document_document
+  --   FOREIGN KEY (document_id, vault_id)
+  --   REFERENCES public.document(id, vault_id)
+  --   ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_document_doc
+ON semantic_tree_v2.node_document(vault_id, document_id);
+
+-- =========================================
+-- Workspace Overlay (User-level, not structural)
+-- =========================================
+
+CREATE TABLE IF NOT EXISTS semantic_tree_v2.user_workspace_vault (
+  user_id      UUID NOT NULL,
+  workspace_id UUID NOT NULL,
+  vault_id     UUID NOT NULL,
+  pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, workspace_id, vault_id)
+);
+```
+
+---
+
+# 2️⃣ Permission + Tree Functions
+
+Permissions live inside SQL functions.
+No cross-vault mutation possible.
+
+---
+
+## Role Resolution
+
+```sql
+CREATE OR REPLACE FUNCTION semantic_tree_v2.user_has_vault_role(
+  p_user_id UUID,
+  p_vault_id UUID,
+  p_min_role semantic_tree_v2.vault_role
+) RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+  WITH r AS (
+    SELECT role
+    FROM semantic_tree_v2.vault_user_role
+    WHERE user_id = p_user_id
+      AND vault_id = p_vault_id
+  )
+  SELECT CASE p_min_role
+    WHEN 'viewer' THEN EXISTS (SELECT 1 FROM r)
+    WHEN 'editor' THEN EXISTS (SELECT 1 FROM r WHERE role IN ('owner','admin','editor'))
+    WHEN 'admin'  THEN EXISTS (SELECT 1 FROM r WHERE role IN ('owner','admin'))
+    WHEN 'owner'  THEN EXISTS (SELECT 1 FROM r WHERE role = 'owner')
+  END;
+$$;
+```
+
+---
+
+## Create Node
+
+```sql
+CREATE OR REPLACE FUNCTION semantic_tree_v2.create_node(
+  p_user_id UUID,
+  p_vault_id UUID,
+  p_parent_id UUID,
+  p_title TEXT,
+  p_summary TEXT DEFAULT NULL,
+  p_sort_key TEXT DEFAULT ''
+) RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_id UUID := gen_random_uuid();
+BEGIN
+  IF NOT semantic_tree_v2.user_has_vault_role(p_user_id, p_vault_id, 'editor') THEN
+    RAISE EXCEPTION 'insufficient_privilege';
+  END IF;
+
+  INSERT INTO semantic_tree_v2.tree_node
+    (id, vault_id, parent_id, title, summary, sort_key, created_by)
+  VALUES
+    (v_id, p_vault_id, p_parent_id, p_title, p_summary, p_sort_key, p_user_id);
+
+  INSERT INTO semantic_tree_v2.tree_node_stats(node_id, vault_id)
+  VALUES (v_id, p_vault_id)
+  ON CONFLICT DO NOTHING;
+
+  RETURN v_id;
+END $$;
+```
+
+---
+
+## Move Node
+
+```sql
+CREATE OR REPLACE FUNCTION semantic_tree_v2.move_node(
+  p_user_id UUID,
+  p_vault_id UUID,
+  p_node_id UUID,
+  p_new_parent_id UUID
+) RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NOT semantic_tree_v2.user_has_vault_role(p_user_id, p_vault_id, 'editor') THEN
+    RAISE EXCEPTION 'insufficient_privilege';
+  END IF;
+
+  UPDATE semantic_tree_v2.tree_node
+  SET parent_id = p_new_parent_id,
+      updated_at = now()
+  WHERE id = p_node_id
+    AND vault_id = p_vault_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'node_not_found';
+  END IF;
+END $$;
+```
+
+---
+
+## Attach Document
+
+```sql
+CREATE OR REPLACE FUNCTION semantic_tree_v2.attach_document(
+  p_user_id UUID,
+  p_vault_id UUID,
+  p_node_id UUID,
+  p_document_id UUID
+) RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NOT semantic_tree_v2.user_has_vault_role(p_user_id, p_vault_id, 'editor') THEN
+    RAISE EXCEPTION 'insufficient_privilege';
+  END IF;
+
+  INSERT INTO semantic_tree_v2.node_document
+    (vault_id, node_id, document_id, created_by)
+  VALUES
+    (p_vault_id, p_node_id, p_document_id, p_user_id)
+  ON CONFLICT DO NOTHING;
+
+  UPDATE semantic_tree_v2.tree_node_stats
+  SET doc_count = doc_count + 1,
+      updated_at = now()
+  WHERE node_id = p_node_id
+    AND vault_id = p_vault_id;
+END $$;
+```
+
+---
+
+## Fetch Tree (Flat JSON)
+
+```sql
+CREATE OR REPLACE FUNCTION semantic_tree_v2.fetch_tree_flat(
+  p_user_id UUID,
+  p_vault_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  result JSONB;
+BEGIN
+  IF NOT semantic_tree_v2.user_has_vault_role(p_user_id, p_vault_id, 'viewer') THEN
+    RAISE EXCEPTION 'insufficient_privilege';
+  END IF;
+
+  SELECT jsonb_build_object(
+    'vault_id', p_vault_id,
+    'nodes', COALESCE(
+      jsonb_agg(
+        jsonb_build_object(
+          'id', n.id,
+          'parent_id', n.parent_id,
+          'title', n.title,
+          'summary', n.summary,
+          'sort_key', n.sort_key,
+          'doc_count', COALESCE(s.doc_count,0),
+          'updated_at', n.updated_at
+        )
+        ORDER BY n.sort_key, n.created_at
+      ),
+      '[]'::jsonb
+    )
+  )
+  INTO result
+  FROM semantic_tree_v2.tree_node n
+  LEFT JOIN semantic_tree_v2.tree_node_stats s
+    ON s.node_id = n.id
+   AND s.vault_id = n.vault_id
+  WHERE n.vault_id = p_vault_id;
+
+  RETURN result;
+END $$;
+```
+
+---
+
+# 3️⃣ Python Module (Repository + In-Memory Tree)
+
+Keep it isolated from endpoints.
+
+```python
+# semantic_tree_v2_repo.py
+
+import psycopg
+from typing import Dict, Any, Optional
+
+
+def build_tree(flat_nodes):
+    by_id = {}
+    children = {}
+
+    for n in flat_nodes:
+        by_id[n["id"]] = {**n, "children": []}
+        children.setdefault(n["parent_id"], []).append(n["id"])
+
+    for parent_id, child_ids in children.items():
+        if parent_id and parent_id in by_id:
+            by_id[parent_id]["children"] = child_ids
+
+    root_ids = children.get(None, [])
+    return {"root_ids": root_ids, "by_id": by_id}
+
+
+class SemanticTreeV2Repo:
+
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+
+    def fetch_tree(self, user_id: str, vault_id: str) -> Dict[str, Any]:
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT semantic_tree_v2.fetch_tree_flat(%s,%s)",
+                    (user_id, vault_id),
+                )
+                payload = cur.fetchone()[0]
+
+        return build_tree(payload["nodes"])
+```
+
+---
+
+# 🧪 What Cursor Should Test
+
+1. Create vault A and B
+2. Assign user as owner in both
+3. Create nodes in both
+4. Attempt cross-vault parent (should fail)
+5. Attach doc IDs
+6. Fetch tree and verify structure
+7. Verify stats increment
+
+---
+
+# 🚀 Final Cursor Prompt
+
+Use this exactly:
+
+```
+You are implementing a new isolated subsystem: semantic_tree_v2.
+
+Goals:
+- Strict vault isolation: no cross-vault parent relationships.
+- No document moving between vaults.
+- Document attachments stored in semantic_tree_v2.node_document.
+- Permissions enforced inside SQL functions.
+- No integration with endpoints yet.
+- Provide standalone test script.
+
+Steps:
+1) Create migration with schema semantic_tree_v2 and all tables/functions exactly as specified.
+2) If document table uses (id, vault_id) composite key, add FK in node_document.
+3) Implement semantic_tree_v2_repo.py with:
+   - fetch_tree()
+   - build_tree()
+4) Create test script:
+   - Create 2 vaults
+   - Assign roles
+   - Create nodes
+   - Attempt invalid cross-vault move (assert failure)
+   - Attach sample document_ids
+   - Fetch tree and print node counts
+
+Keep everything isolated from existing infrastructure.
+Do not modify existing endpoints.
+Do not reintroduce assigned_topic to document layer.
+Focus on correctness, clarity, and testability.
+```
+
+---
+
+If you'd like next, we can:
+
+* Harden this for production (RLS + security definer)
+* Add async job for stats rebuild
+* Or design the copy-document operation cleanly
+
+You’re building this correctly.
