@@ -207,7 +207,7 @@ class DocumentUpdateRequest(BaseModel):
 
 class ClusteringSettingsResponse(BaseModel):
     """Consolidated clustering, agglomerative, and topic persistence settings."""
-    dim_reducer: str = "pca"
+    dim_reducer: str = "umap"
     min_docs_for_clustering: int = 1
     max_components: int = 24
     # Agglomerative

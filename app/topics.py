@@ -46,6 +46,32 @@ def get_kmeans():
         from sklearn.cluster import KMeans
         _kmeans_class = KMeans
     return _kmeans_class
+
+
+def UMAP_recursive(
+    embeddings: np.ndarray,
+    n_comps: List[int] = None,
+    metric: str = "cosine",
+    random_state: int = 42,
+) -> np.ndarray:
+    """Recursive UMAP: cascade reduce through n_comps (e.g. 96->48->24)."""
+    if n_comps is None:
+        n_comps = [96, 48, 24]
+    reduced = embeddings
+    umap_mod = get_umap()
+    for ncomp in n_comps:
+        if ncomp >= reduced.shape[1]:
+            continue  # skip if target dim >= current
+        reducer = umap_mod.UMAP(
+            n_components=min(ncomp, reduced.shape[1] - 1),
+            metric=metric,
+            random_state=random_state,
+            init="random",  # avoids spectral init / eigsh issues with few samples
+        )
+        reduced = reducer.fit_transform(reduced)
+    return reduced
+
+
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
 from .config import PREFERENCES
 from .models import Document, get_or_create_embedding_class
@@ -104,18 +130,11 @@ def reduce_embeddings(X: np.ndarray) -> np.ndarray:
         return pca.fit_transform(X)
 
     if cfg.dim_reducer == "umap":
-        const_neighbors = max(2, min(cfg.max_neighbors, n_docs - 1))
-
-        umap_mod = get_umap()
-        reducer = umap_mod.UMAP(
-            n_neighbors=const_neighbors,
-            min_dist=0.1,
-            n_components=n_components,
+        return UMAP_recursive(
+            embeddings=X,
             metric="cosine",
             random_state=cfg.random_state,
-            init="random",  # avoids spectral init / eigsh issues
         )
-        return reducer.fit_transform(X)
 
     # Fallback if someone puts an unexpected value in config
     return X
