@@ -2,6 +2,7 @@
 
 from typing import List, Optional, Literal
 import os
+import time
 from openai import OpenAI
 import json
 import urllib.request
@@ -1119,14 +1120,22 @@ def embed_doc_chunks(
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
             batch_num = i // batch_size + 1
-            try:
-                batch_embeddings = get_embeddings_batch(batch)
-                all_embeddings.extend(batch_embeddings)
-                print(f"  ✓ Batch {batch_num}: {len(batch)} {chunk_type}s embedded")
-            except Exception as e:
-                print(f"  [WARN] Batch {batch_num} failed: {e}")
-                # Fill with None for failed batches
-                all_embeddings.extend([None] * len(batch))
+            for attempt in range(3):
+                try:
+                    batch_embeddings = get_embeddings_batch(batch)
+                    all_embeddings.extend(batch_embeddings)
+                    print(f"  ✓ Batch {batch_num}: {len(batch)} {chunk_type}s embedded")
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if ("503" in err_str or "Service Unavailable" in err_str) and attempt < 2:
+                        print(f"  [WARN] Batch {batch_num} failed (HuggingFace warm-up): {e}")
+                        print(f"  Sleeping 15s and retrying ({attempt + 1}/2)...")
+                        time.sleep(15)
+                    else:
+                        print(f"  [WARN] Batch {batch_num} failed: {e}")
+                        all_embeddings.extend([None] * len(batch))
+                        break
         
         # 3. Generate chunk summaries if enabled (only for chunk type)
         chunk_summaries = []
