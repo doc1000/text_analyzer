@@ -1,0 +1,336 @@
+Excellent. We’re now adding the missing piece that makes the system feel intentional instead of reactive:
+
+* **Hard anchors (document must stay inside subtree)**
+* **Staging Bubble instead of root accumulation**
+* **Scoped reclustering with stability preservation**
+* Still ONE persistent tree per vault
+
+Below is a clean, implementation-ready structure + Cursor prompt.
+
+---
+
+# PART 1 — Schema Extensions
+
+We are extending `semantic_tree_v2`, not creating a new system.
+
+---
+
+## 1️⃣ Add Node Role + Staging Flag
+
+We need a way to designate a single staging node per vault.
+
+```sql
+-- =========================================
+-- Extend semantic_tree_v2.tree_node
+-- =========================================
+
+ALTER TABLE semantic_tree_v2.tree_node
+ADD COLUMN IF NOT EXISTS node_role TEXT
+CHECK (node_role IN ('normal','staging'))
+DEFAULT 'normal';
+
+-- Only one staging node per vault
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_staging_per_vault
+ON semantic_tree_v2.tree_node(vault_id)
+WHERE node_role = 'staging';
+```
+
+### Behavior
+
+* Every vault must have exactly one staging node.
+* Staging node behaves like:
+
+  * A normal node structurally
+  * Default drop location for unclassified docs
+  * Eligible for scoped recluster
+
+---
+
+## 2️⃣ Document Anchors (Hard Constraint)
+
+This enforces “stay inside subtree.”
+
+```sql
+-- =========================================
+-- Document Hard Anchors
+-- =========================================
+
+CREATE TABLE IF NOT EXISTS semantic_tree_v2.document_anchor (
+  vault_id        UUID NOT NULL,
+  document_id     UUID NOT NULL,
+  anchor_node_id  UUID NOT NULL,
+  created_by      UUID NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  PRIMARY KEY (vault_id, document_id),
+
+  CONSTRAINT fk_anchor_node
+    FOREIGN KEY (anchor_node_id, vault_id)
+    REFERENCES semantic_tree_v2.tree_node(id, vault_id)
+    ON DELETE CASCADE
+
+  -- TODO: If documents use (id, vault_id) composite key:
+  -- ,FOREIGN KEY (document_id, vault_id)
+  --  REFERENCES public.document(id, vault_id)
+  --  ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_anchor_node_lookup
+ON semantic_tree_v2.document_anchor(vault_id, anchor_node_id);
+```
+
+### Rules
+
+* One hard anchor per document (for now).
+* Hard anchor means:
+
+  * During placement or reclustering,
+  * document must remain in subtree of anchor_node_id.
+
+---
+
+# PART 2 — Placement Logic Update
+
+### When inserting or re-evaluating a document:
+
+1. If document has anchor:
+
+   * Restrict candidate nodes to anchor subtree.
+2. Else:
+
+   * Try similarity placement globally.
+3. If similarity < threshold:
+
+   * Attach to staging node.
+
+---
+
+# PART 3 — Scoped Reclustering Framework
+
+We are NOT auto-reclustering.
+
+We introduce an explicit API:
+
+### Modes
+
+* `subtree` — recluster everything under node
+* `frontier` — recluster only immediate children level
+* `staging` — recluster staging bubble only
+
+---
+
+# PART 4 — Stability Preservation (Critical)
+
+During recluster:
+
+1. Collect old cluster nodes in scope
+2. Build new clusters
+3. Match new clusters to old nodes by document overlap:
+
+Example logic:
+
+```
+overlap = |intersection(old_docs, new_docs)| / |union|
+```
+
+If overlap ≥ 0.6:
+
+* Reuse old node ID
+* Update centroid/size
+
+Else:
+
+* Create new cluster node
+
+Only delete old cluster nodes if they have no matched documents.
+
+Never modify:
+
+* node_type='manual'
+* locked=TRUE
+
+---
+
+# PART 5 — Python Skeleton Additions
+
+Add to clustering service (simplified outline):
+
+```python
+def get_subtree_nodes(node_id, tree_index):
+    # precomputed parent/children maps
+    stack = [node_id]
+    results = set()
+
+    while stack:
+        current = stack.pop()
+        results.add(current)
+        stack.extend(tree_index.children.get(current, []))
+
+    return results
+```
+
+---
+
+## Anchor-Constrained Placement
+
+```python
+def get_candidate_nodes_for_document(doc_id, vault_id):
+    anchor = repo.get_document_anchor(doc_id, vault_id)
+
+    if anchor:
+        subtree_nodes = get_subtree_nodes(anchor, tree_index)
+        return subtree_nodes
+
+    return repo.get_all_nodes(vault_id)
+```
+
+---
+
+## Scoped Reclustering Entry
+
+```python
+def recluster_scope(vault_id, root_node_id, mode="subtree"):
+    """
+    mode:
+        - subtree
+        - frontier
+        - staging
+    """
+
+    # 1. collect scope nodes
+    # 2. collect scope documents
+    # 3. run clustering
+    # 4. match clusters to existing cluster nodes (overlap >= threshold)
+    # 5. update only cluster nodes
+```
+
+---
+
+# PART 6 — Cursor Prompt
+
+This includes everything needed.
+
+---
+
+```text
+We are extending the merged semantic_tree_v2 system.
+
+ARCHITECTURE (CONFIRMED):
+- Exactly ONE persistent tree per vault.
+- Manual and cluster nodes coexist.
+- Clustering is deliberate, never automatic.
+- Manual nodes are sovereign.
+- Locked nodes must never be modified.
+- Hard anchors constrain document placement.
+- Root node should NOT accumulate uncategorized documents.
+- Each vault has exactly one "Staging Bubble" node.
+
+--------------------------------
+PART 1 — Schema Updates
+--------------------------------
+
+1) Extend semantic_tree_v2.tree_node:
+   - Add column:
+        node_role TEXT CHECK ('normal','staging') DEFAULT 'normal'
+   - Add unique partial index:
+        one staging node per vault (node_role='staging')
+
+2) Create table semantic_tree_v2.document_anchor:
+   - vault_id UUID
+   - document_id UUID
+   - anchor_node_id UUID
+   - created_by UUID
+   - created_at TIMESTAMPTZ
+   - PRIMARY KEY (vault_id, document_id)
+   - FK (anchor_node_id, vault_id) -> semantic_tree_v2.tree_node
+   - If document table uses composite PK (id, vault_id), add FK accordingly.
+
+--------------------------------
+PART 2 — Placement Updates
+--------------------------------
+
+Update document assignment logic:
+
+When placing a document:
+1) If document has a hard anchor:
+     Restrict candidate nodes to subtree of anchor_node_id.
+2) Else:
+     Use global similarity placement.
+3) If similarity below minimum threshold:
+     Attach document to staging node.
+
+--------------------------------
+PART 3 — Reclustering System
+--------------------------------
+
+Add function:
+
+recluster_scope(vault_id, root_node_id, mode)
+
+Modes:
+- "subtree": recluster entire subtree
+- "frontier": recluster only direct children level
+- "staging": recluster staging node only
+
+Rules:
+- Only operate on node_type='cluster'
+- Never modify node_type='manual'
+- Never modify locked=TRUE
+- Respect document_anchor constraints (documents must remain within anchor subtree)
+
+--------------------------------
+PART 4 — Stability Matching
+--------------------------------
+
+When reclustering:
+
+1) For each new cluster:
+     Compare with old cluster nodes in scope using document overlap.
+2) If overlap >= 0.6:
+     Reuse existing node id.
+3) Else:
+     Create new cluster node.
+4) Delete cluster nodes only if they end up empty.
+
+--------------------------------
+PART 5 — Tests
+--------------------------------
+
+Add tests verifying:
+
+- Only one staging node per vault.
+- Anchored document never leaves anchor subtree.
+- Document without match goes to staging.
+- Reclustering subtree does not modify manual nodes.
+- Stability matching preserves node ids when overlap high.
+- Cross-vault constraints still enforced.
+
+--------------------------------
+IMPORTANT
+--------------------------------
+
+Do NOT integrate into main.py or topics.py yet.
+Do NOT modify legacy topic system.
+Do NOT auto-trigger reclustering on insert.
+Keep everything isolated and testable.
+
+Output:
+- Updated migration SQL
+- Updated clustering logic
+- Updated tree_management.py
+- Tests for anchors and staging behavior
+```
+
+---
+
+# Why This Is Correct
+
+This gives you:
+
+* Calm staging behavior
+* Controlled reclustering
+* Anchored semantic grouping
+* Stability across re-org
+* Minimal compute scope
+* No structural drift
+

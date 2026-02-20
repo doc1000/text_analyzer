@@ -203,11 +203,24 @@ class SemanticTreeNode(Base):
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
     node_type = Column(Text, nullable=False, default="manual")  # 'manual' | 'cluster'
+    node_role = Column(Text, nullable=False, default="normal")  # 'normal' | 'staging'
     centroid = Column(Vector(REDUCED_EMBED_DIM), nullable=True)
     size = Column(Integer, nullable=False, default=0)
     distance_from_parent = Column(Float, nullable=True)
     auto_generated = Column(Boolean, nullable=False, default=False)
     locked = Column(Boolean, nullable=False, default=False)
+
+
+class DocumentAnchor(Base):
+    """Hard anchor: document must stay within subtree of anchor_node_id."""
+    __tablename__ = "document_anchor"
+    __table_args__ = {"schema": "semantic_tree_v2"}
+
+    vault_id = Column(UUID(as_uuid=True), nullable=False, primary_key=True)
+    document_id = Column(UUID(as_uuid=True), nullable=False, primary_key=True)
+    anchor_node_id = Column(UUID(as_uuid=True), nullable=False)
+    created_by = Column(UUID(as_uuid=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class SemanticTreeNodeDocument(Base):
