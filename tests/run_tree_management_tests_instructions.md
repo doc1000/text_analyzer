@@ -1,10 +1,10 @@
 # Tree Management Test Script Instructions
 
-Run the tree management test script to validate the tree infrastructure (tree_nodes, node_documents) without touching endpoints or existing topic flow.
+Run the tree management test script to validate the semantic_tree_v2 tree infrastructure (cluster nodes, node_documents) without touching endpoints or existing topic flow.
 
 ## Prerequisites
 
-- Migration 007 applied (`migrations/007_tree_infrastructure.sql`)
+- Migrations 007, 008, 009, and 010 applied
 - Local DB with user `test@example.com` and documents that have embeddings (chunk or doc-level)
 - `DATABASE_URL` set
 - `HUGGINGFACE_API_TOKEN` (or your embedding provider) in `.env` or environment; the script loads `.env` automatically

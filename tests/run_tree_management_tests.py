@@ -191,7 +191,7 @@ class TreeManagementTester:
     def phase2_build_tree(self) -> bool:
         """Populate reduced_embedding, cluster, build tree_nodes and node_documents."""
         try:
-            from app.models import Document, TreeNode, NodeDocument
+            from app.models import Document, SemanticTreeNode, SemanticTreeNodeDocument
             from app.topics import reduce_embeddings, cluster_embeddings_multilevel
             from app.agglomerative import get_cluster_hierarchy
             from app.tree_management import (
@@ -229,16 +229,6 @@ class TreeManagementTester:
                 labels_by_level, structure, Z = cluster_embeddings_multilevel(X_cluster, doc_ids=doc_ids)
                 hierarchy = get_cluster_hierarchy(labels_by_level)
 
-                existing = db.query(TreeNode).filter(TreeNode.vault_id == self.vault_id).count()
-                if existing > 0:
-                    db.query(NodeDocument).filter(
-                        NodeDocument.node_id.in_(
-                            db.query(TreeNode.id).filter(TreeNode.vault_id == self.vault_id)
-                        )
-                    ).delete(synchronize_session=False)
-                    db.query(TreeNode).filter(TreeNode.vault_id == self.vault_id).delete(synchronize_session=False)
-                    db.commit()
-
                 self.root_ids = build_tree_from_clustering(
                     db, self.vault_id, self.user_id,
                     labels_by_level, structure, hierarchy, doc_ids,
@@ -246,11 +236,15 @@ class TreeManagementTester:
 
                 recompute_node_centroids(db, self.vault_id)
 
-                roots = db.query(TreeNode).filter(
-                    TreeNode.vault_id == self.vault_id,
-                    TreeNode.parent_id.is_(None),
+                roots = db.query(SemanticTreeNode).filter(
+                    SemanticTreeNode.vault_id == self.vault_id,
+                    SemanticTreeNode.parent_id.is_(None),
                 ).all()
-                nd_count = db.query(NodeDocument).join(TreeNode).filter(TreeNode.vault_id == self.vault_id).count()
+                nd_count = db.query(SemanticTreeNodeDocument).join(
+                    SemanticTreeNode,
+                    (SemanticTreeNodeDocument.node_id == SemanticTreeNode.id)
+                    & (SemanticTreeNodeDocument.vault_id == SemanticTreeNode.vault_id),
+                ).filter(SemanticTreeNode.vault_id == self.vault_id).count()
 
                 passed = len(roots) >= 1 and nd_count == len(self.docs)
                 self._log_result(TestResult(
@@ -279,7 +273,7 @@ class TreeManagementTester:
         """Create 2-3 derived docs, embed, assign to tree, verify placement."""
         try:
             import numpy as np
-            from app.models import Document, NodeDocument
+            from app.models import Document, SemanticTreeNodeDocument
             from app.topics import reduce_embeddings, compute_document_embeddings
             from app.helpers import embed_doc_chunks
             from app.tree_management import (
@@ -362,14 +356,14 @@ class TreeManagementTester:
 
                     node_id = assign_document_by_similarity(db, self.vault_id, vec, self.user_id)
                     if node_id:
-                        attach_document_to_node(db, node_id, d.id, self.user_id)
+                        attach_document_to_node(db, node_id, d.id, self.user_id, self.vault_id)
                         self.derived_doc_ids.append(d.id)
 
                 recompute_node_centroids(db, self.vault_id)
 
                 nd_derived = (
-                    db.query(NodeDocument)
-                    .filter(NodeDocument.document_id.in_(self.derived_doc_ids))
+                    db.query(SemanticTreeNodeDocument)
+                    .filter(SemanticTreeNodeDocument.document_id.in_(self.derived_doc_ids))
                     .count()
                 )
 
@@ -399,7 +393,7 @@ class TreeManagementTester:
     def phase4_delete_derived(self) -> bool:
         """Delete derived docs, verify node_documents CASCADE and structure integrity."""
         try:
-            from app.models import Document, TreeNode, NodeDocument
+            from app.models import Document, SemanticTreeNode, SemanticTreeNodeDocument
             from app.tree_management import recompute_node_centroids
 
             db = self._get_db_session()
@@ -418,15 +412,15 @@ class TreeManagementTester:
                     .count()
                 )
                 remaining = (
-                    db.query(NodeDocument)
-                    .filter(NodeDocument.document_id.in_(self.derived_doc_ids))
+                    db.query(SemanticTreeNodeDocument)
+                    .filter(SemanticTreeNodeDocument.document_id.in_(self.derived_doc_ids))
                     .count()
                 )
 
                 recompute_node_centroids(db, self.vault_id)
-                roots = db.query(TreeNode).filter(
-                    TreeNode.vault_id == self.vault_id,
-                    TreeNode.parent_id.is_(None),
+                roots = db.query(SemanticTreeNode).filter(
+                    SemanticTreeNode.vault_id == self.vault_id,
+                    SemanticTreeNode.parent_id.is_(None),
                 ).count()
 
                 passed = docs_remaining == 0 and remaining == 0
@@ -512,18 +506,28 @@ class TreeManagementTester:
     def phase6_teardown(self) -> bool:
         """Remove the tree we created so DB is restored; verify destructive ops."""
         try:
-            from app.models import TreeNode, NodeDocument
+            from app.models import SemanticTreeNode, SemanticTreeNodeDocument
 
             db = self._get_db_session()
             try:
-                deleted_nodes = db.query(TreeNode).filter(TreeNode.vault_id == self.vault_id).delete(synchronize_session=False)
+                deleted_nodes = db.query(SemanticTreeNode).filter(
+                    SemanticTreeNode.vault_id == self.vault_id,
+                    SemanticTreeNode.node_type == "cluster",
+                ).delete(synchronize_session=False)
                 db.commit()
 
-                node_count_after = db.query(TreeNode).filter(TreeNode.vault_id == self.vault_id).count()
+                node_count_after = db.query(SemanticTreeNode).filter(
+                    SemanticTreeNode.vault_id == self.vault_id,
+                    SemanticTreeNode.node_type == "cluster",
+                ).count()
                 nd_count_after = (
-                    db.query(NodeDocument)
-                    .join(TreeNode)
-                    .filter(TreeNode.vault_id == self.vault_id)
+                    db.query(SemanticTreeNodeDocument)
+                    .join(
+                        SemanticTreeNode,
+                        (SemanticTreeNodeDocument.node_id == SemanticTreeNode.id)
+                        & (SemanticTreeNodeDocument.vault_id == SemanticTreeNode.vault_id),
+                    )
+                    .filter(SemanticTreeNode.vault_id == self.vault_id)
                     .count()
                 )
 
@@ -531,7 +535,7 @@ class TreeManagementTester:
                 self._log_result(TestResult(
                     name="Phase 6: Teardown (restore DB)",
                     passed=passed,
-                    expected="0 tree_nodes, 0 node_documents after teardown",
+                    expected="0 cluster nodes, 0 node_documents after teardown",
                     actual=f"deleted_nodes={deleted_nodes}, nodes_after={node_count_after}, nd_after={nd_count_after}",
                 ))
                 return passed

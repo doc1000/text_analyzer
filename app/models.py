@@ -188,28 +188,41 @@ class Document(BaseModel):
     reduced_embedding = Column(Vector(REDUCED_EMBED_DIM), nullable=True)
 
 
-class TreeNode(BaseModel):
-    """Tree node (cluster) for SQL-driven topic modelling. Scoped by vault."""
-    __tablename__ = "tree_nodes"
+class SemanticTreeNode(Base):
+    """Canonical tree node in semantic_tree_v2. Manual and cluster nodes coexist."""
+    __tablename__ = "tree_node"
+    __table_args__ = {"schema": "semantic_tree_v2"}
 
-    vault_id = Column(UUID(as_uuid=True), ForeignKey("vaults.id", ondelete="CASCADE"), nullable=False, index=True)
-    parent_id = Column(UUID(as_uuid=True), ForeignKey("tree_nodes.id", ondelete="CASCADE"), nullable=True, index=True)
-    name = Column(Text, nullable=True)
-    node_type = Column(Text, nullable=False, default="cluster")
-    distance = Column(Float, nullable=True)
-    size = Column(Integer, nullable=False, default=0)
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    vault_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    parent_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    title = Column(Text, nullable=False)
+    summary = Column(Text, nullable=True)
+    sort_key = Column(Text, nullable=False, default="")
+    created_by = Column(UUID(as_uuid=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    node_type = Column(Text, nullable=False, default="manual")  # 'manual' | 'cluster'
     centroid = Column(Vector(REDUCED_EMBED_DIM), nullable=True)
+    size = Column(Integer, nullable=False, default=0)
+    distance_from_parent = Column(Float, nullable=True)
+    auto_generated = Column(Boolean, nullable=False, default=False)
     locked = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class NodeDocument(Base):
-    """Junction table: documents assigned to tree nodes. Composite PK, no id."""
-    __tablename__ = "node_documents"
-    __table_args__ = (PrimaryKeyConstraint("node_id", "document_id"),)
+class SemanticTreeNodeDocument(Base):
+    """Junction: documents assigned to semantic_tree_v2 nodes."""
+    __tablename__ = "node_document"
+    __table_args__ = (
+        PrimaryKeyConstraint("vault_id", "node_id", "document_id"),
+        {"schema": "semantic_tree_v2"},
+    )
 
-    node_id = Column(UUID(as_uuid=True), ForeignKey("tree_nodes.id", ondelete="CASCADE"), nullable=False)
-    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    vault_id = Column(UUID(as_uuid=True), nullable=False)
+    node_id = Column(UUID(as_uuid=True), nullable=False)
+    document_id = Column(UUID(as_uuid=True), nullable=False)
+    created_by = Column(UUID(as_uuid=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class EmbeddingModel(BaseModel):
