@@ -2,7 +2,10 @@
 Script to inspect the actual database schema and generate documentation.
 
 Generates DATABASE_SCHEMA.md with current schema structure for Cursor/AI reference.
-Run automatically after schema changes, or manually to update documentation.
+Includes all user schemas (public, embedding, semantic_tree_v2, etc.) excluding
+information_schema and PostgreSQL system schemas.
+
+Run: python inspect_schema.py
 """
 import os
 import sys
@@ -19,12 +22,65 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpas
 
 SCHEMA_DOC_PATH = Path(__file__).parent / "DATABASE_SCHEMA.md"
 
+# Schemas to exclude from documentation (PostgreSQL system schemas)
+EXCLUDED_SCHEMAS = frozenset({
+    "information_schema",
+    "pg_catalog",
+    "pg_toast",
+    "pg_temp_1",
+    "pg_toast_temp_1",
+})
+
+
+def _doc_table(doc_lines: list, inspector, schema: str, table: str, qualified_name: str) -> None:
+    """Append table documentation (columns, FKs, indexes) to doc_lines."""
+    doc_lines.append(f"### Table: `{qualified_name}`")
+    doc_lines.append("")
+
+    columns = inspector.get_columns(table, schema=schema)
+    doc_lines.append("| Column | Type | Nullable | Default |")
+    doc_lines.append("|--------|------|----------|---------|")
+    for col in columns:
+        col_type = str(col["type"])
+        nullable = "YES" if col["nullable"] else "NO"
+        default = str(col.get("default", "")) if col.get("default") else ""
+        doc_lines.append(f"| `{col['name']}` | `{col_type}` | {nullable} | {default} |")
+    doc_lines.append("")
+
+    fks = inspector.get_foreign_keys(table, schema=schema)
+    if fks:
+        doc_lines.append("**Foreign Keys:**")
+        doc_lines.append("")
+        for fk in fks:
+            cols = ", ".join(fk["constrained_columns"])
+            ref_table = fk["referred_table"]
+            ref_schema = fk.get("referred_schema") or "public"
+            ref_cols = ", ".join(fk["referred_columns"])
+            if ref_schema == "public":
+                doc_lines.append(f"- `{cols}` → `{ref_table}({ref_cols})`")
+            else:
+                doc_lines.append(f"- `{cols}` → `{ref_schema}.{ref_table}({ref_cols})`")
+        doc_lines.append("")
+
+    indexes = inspector.get_indexes(table, schema=schema)
+    if indexes:
+        doc_lines.append("**Indexes:**")
+        doc_lines.append("")
+        for idx in indexes:
+            idx_cols = ", ".join(idx["column_names"])
+            unique = "UNIQUE " if idx.get("unique", False) else ""
+            doc_lines.append(f"- `{idx['name']}`: {unique}`{idx_cols}`")
+        doc_lines.append("")
+
+    doc_lines.append("---")
+    doc_lines.append("")
+
+
 def generate_schema_doc():
     """Generate markdown documentation of the database schema."""
-    
     print(f"Connecting to: {DATABASE_URL.replace('badgerpass', '***')}")
-    print("="*80)
-    
+    print("=" * 80)
+
     doc_lines = []
     doc_lines.append("# Database Schema Documentation")
     doc_lines.append("")
@@ -35,206 +91,174 @@ def generate_schema_doc():
     doc_lines.append("")
     doc_lines.append("---")
     doc_lines.append("")
-    
+
     try:
         engine = create_engine(DATABASE_URL)
         inspector = inspect(engine)
-        
-        # Get all schemas
-        schemas = inspector.get_schema_names()
-        doc_lines.append(f"## Schemas")
+
+        all_schemas = inspector.get_schema_names()
+        user_schemas = sorted(s for s in all_schemas if s not in EXCLUDED_SCHEMAS and not s.startswith("pg_"))
+
+        doc_lines.append("## Schemas")
         doc_lines.append("")
-        doc_lines.append(f"Found schemas: `{', '.join(schemas)}`")
+        doc_lines.append(f"Documented schemas: `{', '.join(user_schemas)}`")
+        doc_lines.append("")
+        doc_lines.append("*(Excludes: information_schema, pg_catalog, pg_toast, and other system schemas)*")
         doc_lines.append("")
         doc_lines.append("---")
         doc_lines.append("")
-        
-        # Public schema tables
-        doc_lines.append("## Public Schema")
-        doc_lines.append("")
-        public_tables = inspector.get_table_names(schema='public')
-        
-        if public_tables:
-            for table in public_tables:
-                doc_lines.append(f"### Table: `{table}`")
+
+        for schema in user_schemas:
+            schema_title = schema.replace("_", " ").title()
+            doc_lines.append(f"## {schema_title} Schema")
+            doc_lines.append("")
+            doc_lines.append(f"*Schema: `{schema}`*")
+            doc_lines.append("")
+
+            tables = inspector.get_table_names(schema=schema)
+            if tables:
+                for table in sorted(tables):
+                    qualified = f"{schema}.{table}" if schema != "public" else table
+                    _doc_table(doc_lines, inspector, schema, table, qualified)
+            else:
+                doc_lines.append(f"No tables found in `{schema}` schema.")
                 doc_lines.append("")
-                
-                columns = inspector.get_columns(table, schema='public')
-                doc_lines.append("| Column | Type | Nullable | Default |")
-                doc_lines.append("|--------|------|----------|---------|")
-                for col in columns:
-                    col_type = str(col['type'])
-                    nullable = "YES" if col['nullable'] else "NO"
-                    default = str(col.get('default', '')) if col.get('default') else ""
-                    doc_lines.append(f"| `{col['name']}` | `{col_type}` | {nullable} | {default} |")
-                doc_lines.append("")
-                
-                # Foreign keys
-                fks = inspector.get_foreign_keys(table, schema='public')
-                if fks:
-                    doc_lines.append("**Foreign Keys:**")
-                    doc_lines.append("")
-                    for fk in fks:
-                        cols = ', '.join(fk['constrained_columns'])
-                        ref_table = fk['referred_table']
-                        ref_cols = ', '.join(fk['referred_columns'])
-                        doc_lines.append(f"- `{cols}` → `{ref_table}({ref_cols})`")
-                    doc_lines.append("")
-                
-                # Indexes
-                indexes = inspector.get_indexes(table, schema='public')
-                if indexes:
-                    doc_lines.append("**Indexes:**")
-                    doc_lines.append("")
-                    for idx in indexes:
-                        idx_cols = ', '.join(idx['column_names'])
-                        unique = "UNIQUE " if idx.get('unique', False) else ""
-                        doc_lines.append(f"- `{idx['name']}`: {unique}`{idx_cols}`")
-                    doc_lines.append("")
-                
                 doc_lines.append("---")
                 doc_lines.append("")
+
+        # Custom types (for schemas that define them, e.g. semantic_tree_v2.vault_role)
+        doc_lines.append("## Custom Types")
+        doc_lines.append("")
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT n.nspname AS schema_name, t.typname AS type_name, t.typtype
+                FROM pg_type t
+                JOIN pg_namespace n ON n.oid = t.typnamespace
+                WHERE n.nspname = ANY(:schemas)
+                  AND t.typtype = 'e'
+                  AND t.typname NOT LIKE 'pg_%'
+                ORDER BY n.nspname, t.typname
+            """), {"schemas": list(user_schemas)})
+            enum_types = result.fetchall()
+        if enum_types:
+            doc_lines.append("| Schema | Type | Kind |")
+            doc_lines.append("|--------|------|------|")
+            for row in enum_types:
+                doc_lines.append(f"| `{row[0]}` | `{row[1]}` | enum |")
+            doc_lines.append("")
         else:
-            doc_lines.append("No tables found in public schema.")
+            doc_lines.append("No custom enum types found.")
             doc_lines.append("")
-        
-        # Embedding schema tables
-        if 'embedding' in schemas:
-            doc_lines.append("## Embedding Schema")
+        doc_lines.append("---")
+        doc_lines.append("")
+
+        # Functions (exclude public to avoid extension noise: pgcrypto, vector, etc.)
+        doc_lines.append("## Functions")
+        doc_lines.append("")
+        doc_lines.append("*(Excludes public schema to avoid extension functions from pgcrypto, vector, etc.)*")
+        doc_lines.append("")
+        non_public_schemas = [s for s in user_schemas if s != "public"]
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT n.nspname AS schema_name, p.proname AS func_name,
+                       pg_get_function_arguments(p.oid) AS args,
+                       pg_get_function_result(p.oid) AS returns
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = ANY(:schemas)
+                  AND p.prokind = 'f'
+                ORDER BY n.nspname, p.proname
+            """), {"schemas": non_public_schemas})
+            functions = result.fetchall()
+        if functions:
+            doc_lines.append("| Schema | Function | Arguments | Returns |")
+            doc_lines.append("|--------|----------|-----------|---------|")
+            for row in functions:
+                args = (row[2] or "")[:80]
+                returns = (row[3] or "")[:40]
+                doc_lines.append(f"| `{row[0]}` | `{row[1]}` | `{args}` | `{returns}` |")
             doc_lines.append("")
-            embedding_tables = inspector.get_table_names(schema='embedding')
-            
-            if embedding_tables:
-                for table in embedding_tables:
-                    doc_lines.append(f"### Table: `embedding.{table}`")
-                    doc_lines.append("")
-                    
-                    columns = inspector.get_columns(table, schema='embedding')
-                    doc_lines.append("| Column | Type | Nullable | Default |")
-                    doc_lines.append("|--------|------|----------|---------|")
-                    for col in columns:
-                        col_type = str(col['type'])
-                        nullable = "YES" if col['nullable'] else "NO"
-                        default = str(col.get('default', '')) if col.get('default') else ""
-                        doc_lines.append(f"| `{col['name']}` | `{col_type}` | {nullable} | {default} |")
-                    doc_lines.append("")
-                    
-                    # Foreign keys
-                    fks = inspector.get_foreign_keys(table, schema='embedding')
-                    if fks:
-                        doc_lines.append("**Foreign Keys:**")
-                        doc_lines.append("")
-                        for fk in fks:
-                            cols = ', '.join(fk['constrained_columns'])
-                            ref_table = fk['referred_table']
-                            ref_schema = fk.get('referred_schema', 'public')
-                            ref_cols = ', '.join(fk['referred_columns'])
-                            doc_lines.append(f"- `{cols}` → `{ref_schema}.{ref_table}({ref_cols})`")
-                        doc_lines.append("")
-                    
-                    # Indexes
-                    indexes = inspector.get_indexes(table, schema='embedding')
-                    if indexes:
-                        doc_lines.append("**Indexes:**")
-                        doc_lines.append("")
-                        for idx in indexes:
-                            idx_cols = ', '.join(idx['column_names'])
-                            unique = "UNIQUE " if idx.get('unique', False) else ""
-                            doc_lines.append(f"- `{idx['name']}`: {unique}`{idx_cols}`")
-                        doc_lines.append("")
-                    
-                    doc_lines.append("---")
-                    doc_lines.append("")
-            else:
-                doc_lines.append("No tables found in embedding schema.")
-                doc_lines.append("")
-        
-        # Row counts
+        else:
+            doc_lines.append("No custom functions found.")
+            doc_lines.append("")
+        doc_lines.append("---")
+        doc_lines.append("")
+
+        # Statistics: row counts for all tables
         doc_lines.append("## Statistics")
         doc_lines.append("")
         doc_lines.append("### Row Counts")
         doc_lines.append("")
         with engine.connect() as conn:
-            # Count documents
-            result = conn.execute(text("SELECT COUNT(*) FROM documents"))
-            doc_count = result.scalar()
-            doc_lines.append(f"- `documents`: **{doc_count:,}** rows")
-            
-            # Count embedding tables
-            if 'embedding' in schemas:
-                result = conn.execute(text("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'embedding' 
-                    AND table_type = 'BASE TABLE'
-                """))
-                embedding_table_names = [row[0] for row in result]
-                
-                for table_name in embedding_table_names:
+            for schema in user_schemas:
+                tables = inspector.get_table_names(schema=schema)
+                for table in sorted(tables):
+                    qualified = f"{schema}.{table}"
                     try:
-                        result = conn.execute(text(f'SELECT COUNT(*) FROM embedding."{table_name}"'))
+                        result = conn.execute(
+                            text(f'SELECT COUNT(*) FROM "{schema}"."{table}"')
+                        )
                         count = result.scalar()
-                        doc_lines.append(f"- `embedding.{table_name}`: **{count:,}** rows")
+                        doc_lines.append(f"- `{qualified}`: **{count:,}** rows")
                     except Exception as e:
-                        doc_lines.append(f"- `embedding.{table_name}`: Error counting - {e}")
-        
+                        doc_lines.append(f"- `{qualified}`: Error counting - {e}")
+
         doc_lines.append("")
         doc_lines.append("---")
         doc_lines.append("")
-        
-        # Embedding model metadata
-        doc_lines.append("### Registered Embedding Models")
-        doc_lines.append("")
-        with engine.connect() as conn:
-            try:
-                result = conn.execute(text("""
-                    SELECT model_name, version, dimensions, table_location, loaded_at
-                    FROM embedding.embedding_model
-                    ORDER BY loaded_at DESC
-                """))
-                models = result.fetchall()
-                if models:
-                    doc_lines.append("| Model | Version | Dimensions | Table Location | Loaded At |")
-                    doc_lines.append("|-------|---------|------------|----------------|-----------|")
-                    for model in models:
-                        doc_lines.append(f"| `{model[0]}` | `{model[1]}` | {model[2]} | `{model[3]}` | {model[4]} |")
-                else:
-                    doc_lines.append("No embedding models registered.")
-            except Exception as e:
-                doc_lines.append(f"Error querying embedding_model: {e}")
-        
-        doc_lines.append("")
-        doc_lines.append("---")
-        doc_lines.append("")
+
+        # Embedding model metadata (if embedding schema exists)
+        if "embedding" in user_schemas:
+            doc_lines.append("### Registered Embedding Models")
+            doc_lines.append("")
+            with engine.connect() as conn:
+                try:
+                    result = conn.execute(text("""
+                        SELECT model_name, version, dimensions, table_location, loaded_at
+                        FROM embedding.embedding_model
+                        ORDER BY loaded_at DESC
+                    """))
+                    models = result.fetchall()
+                    if models:
+                        doc_lines.append("| Model | Version | Dimensions | Table Location | Loaded At |")
+                        doc_lines.append("|-------|---------|------------|----------------|-----------|")
+                        for model in models:
+                            doc_lines.append(f"| `{model[0]}` | `{model[1]}` | {model[2]} | `{model[3]}` | {model[4]} |")
+                    else:
+                        doc_lines.append("No embedding models registered.")
+                except Exception as e:
+                    doc_lines.append(f"Error querying embedding_model: {e}")
+            doc_lines.append("")
+            doc_lines.append("---")
+            doc_lines.append("")
+
         doc_lines.append("## Notes")
         doc_lines.append("")
         doc_lines.append("- This schema is automatically generated and should be updated when database structure changes")
         doc_lines.append("- Run `python inspect_schema.py` manually to regenerate this document")
         doc_lines.append("- The schema is automatically updated when `init_db()` is called")
         doc_lines.append("")
-        
-        # Write the document
-        SCHEMA_DOC_PATH.write_text('\n'.join(doc_lines), encoding='utf-8')
-        
-        print("\n" + "="*80)
-        print(f"✅ Schema documentation generated: {SCHEMA_DOC_PATH}")
-        print("="*80)
-        
+
+        SCHEMA_DOC_PATH.write_text("\n".join(doc_lines), encoding="utf-8")
+
+        print("\n" + "=" * 80)
+        print(f"Schema documentation generated: {SCHEMA_DOC_PATH}")
+        print("=" * 80)
+
         return True
-        
+
     except Exception as e:
-        error_msg = f"\n❌ Error inspecting schema: {e}\n"
+        error_msg = f"\nError inspecting schema: {e}\n"
         print(error_msg)
         import traceback
         traceback.print_exc()
-        
-        # Write error to document
+
         error_doc = [
             "# Database Schema Documentation",
             "",
             f"**Last Update Attempt:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
-            "## ⚠️ Error",
+            "## Error",
             "",
             f"Failed to generate schema documentation:",
             "",
@@ -243,122 +267,13 @@ def generate_schema_doc():
             f"```",
             "",
             "Please check database connection and try again.",
-            ""
+            "",
         ]
-        SCHEMA_DOC_PATH.write_text('\n'.join(error_doc), encoding='utf-8')
-        
+        SCHEMA_DOC_PATH.write_text("\n".join(error_doc), encoding="utf-8")
+
         return False
 
 
 if __name__ == "__main__":
     success = generate_schema_doc()
     sys.exit(0 if success else 1)
-
-try:
-    engine = create_engine(DATABASE_URL)
-    inspector = inspect(engine)
-    
-    # Get all schemas
-    schemas = inspector.get_schema_names()
-    print(f"\nSchemas found: {schemas}")
-    print("="*80)
-    
-    # Get all tables in public schema
-    print("\n📋 Tables in 'public' schema:")
-    print("-"*80)
-    public_tables = inspector.get_table_names(schema='public')
-    for table in public_tables:
-        print(f"\n  Table: {table}")
-        columns = inspector.get_columns(table, schema='public')
-        for col in columns:
-            col_type = col['type']
-            nullable = "NULL" if col['nullable'] else "NOT NULL"
-            default = f" DEFAULT {col['default']}" if col.get('default') else ""
-            print(f"    - {col['name']}: {col_type} {nullable}{default}")
-        
-        # Get indexes
-        indexes = inspector.get_indexes(table, schema='public')
-        if indexes:
-            print(f"    Indexes:")
-            for idx in indexes:
-                print(f"      - {idx['name']}: {idx['column_names']} ({idx.get('unique', False) and 'UNIQUE' or ''})")
-    
-    # Get all tables in embedding schema
-    if 'embedding' in schemas:
-        print("\n\n📋 Tables in 'embedding' schema:")
-        print("-"*80)
-        embedding_tables = inspector.get_table_names(schema='embedding')
-        for table in embedding_tables:
-            print(f"\n  Table: {table}")
-            columns = inspector.get_columns(table, schema='embedding')
-            for col in columns:
-                col_type = col['type']
-                nullable = "NULL" if col['nullable'] else "NOT NULL"
-                default = f" DEFAULT {col['default']}" if col.get('default') else ""
-                print(f"    - {col['name']}: {col_type} {nullable}{default}")
-            
-            # Get indexes
-            indexes = inspector.get_indexes(table, schema='embedding')
-            if indexes:
-                print(f"    Indexes:")
-                for idx in indexes:
-                    print(f"      - {idx['name']}: {idx['column_names']} ({idx.get('unique', False) and 'UNIQUE' or ''})")
-    
-    # Get row counts
-    print("\n\n📊 Row counts:")
-    print("-"*80)
-    with engine.connect() as conn:
-        # Count documents
-        result = conn.execute(text("SELECT COUNT(*) FROM documents"))
-        doc_count = result.scalar()
-        print(f"  documents: {doc_count:,} rows")
-        
-        # Count embedding tables
-        if 'embedding' in schemas:
-            result = conn.execute(text("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'embedding' 
-                AND table_type = 'BASE TABLE'
-            """))
-            embedding_table_names = [row[0] for row in result]
-            
-            for table_name in embedding_table_names:
-                try:
-                    result = conn.execute(text(f'SELECT COUNT(*) FROM embedding."{table_name}"'))
-                    count = result.scalar()
-                    print(f"  embedding.{table_name}: {count:,} rows")
-                except Exception as e:
-                    print(f"  embedding.{table_name}: Error counting - {e}")
-    
-    # Get embedding model metadata
-    print("\n\n🔧 Embedding Model Metadata:")
-    print("-"*80)
-    with engine.connect() as conn:
-        try:
-            result = conn.execute(text("""
-                SELECT model_name, version, dimensions, table_location, loaded_at
-                FROM embedding.embedding_model
-                ORDER BY loaded_at DESC
-            """))
-            models = result.fetchall()
-            if models:
-                for model in models:
-                    print(f"  Model: {model[0]} v{model[1]}")
-                    print(f"    Dimensions: {model[2]}")
-                    print(f"    Table: {model[3]}")
-                    print(f"    Loaded: {model[4]}")
-                    print()
-            else:
-                print("  No embedding models registered")
-        except Exception as e:
-            print(f"  Error querying embedding_model: {e}")
-    
-    print("\n" + "="*80)
-    print("Schema inspection complete!")
-    
-except Exception as e:
-    print(f"\n❌ Error connecting to database: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)

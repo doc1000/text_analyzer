@@ -5,7 +5,7 @@ from sqlalchemy import (
     ForeignKey, Integer, Index, BigInteger,
     String, text, Boolean, UniqueConstraint, PrimaryKeyConstraint,
     )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import Session, declared_attr
@@ -186,6 +186,9 @@ class Document(BaseModel):
 
     # Reduced embedding for tree-based topic modelling (PCA/UMAP). Zero-pad to REDUCED_EMBED_DIM if shorter.
     reduced_embedding = Column(Vector(REDUCED_EMBED_DIM), nullable=True)
+
+    # User tags for tag-based semantic labeling (semantic_tree_v2)
+    user_tags = Column(ARRAY(Text), nullable=False, server_default=text("'{}'"))
 
 
 class SemanticTreeNode(Base):

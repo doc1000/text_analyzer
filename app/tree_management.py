@@ -186,6 +186,18 @@ def recompute_node_centroids(db: Session, vault_id: UUID) -> None:
     db.commit()
 
 
+def relabel_vault(db: Session, vault_id: UUID) -> None:
+    """
+    Run tag-based relabeling on auto-generated nodes.
+    Skips locked and title_source='pinned' nodes.
+    """
+    db.execute(
+        text(f"SELECT {SCHEMA}.relabel_vault(:vault_id)"),
+        {"vault_id": str(vault_id)},
+    )
+    db.commit()
+
+
 def assign_document_by_similarity(
     db: Session,
     vault_id: UUID,
@@ -475,6 +487,7 @@ def recluster_scope(
     user_id: UUID,
     overlap_threshold: float = 0.6,
     min_similarity: float = 0.5,
+    relabel_after: bool = False,
 ) -> None:
     """
     Recluster documents in scope. Only operates on node_type='cluster' and locked=FALSE.
@@ -626,3 +639,5 @@ def recluster_scope(
     db.commit()
 
     recompute_node_centroids(db, vault_id)
+    if relabel_after:
+        relabel_vault(db, vault_id)
