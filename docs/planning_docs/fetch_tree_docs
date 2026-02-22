@@ -1,0 +1,397 @@
+Good. This is the next real system boundary.
+
+We are moving from **tree persistence mechanics**
+to
+**tree projection for contextual UI exploration**.
+
+This is where calm UX either succeeds or collapses.
+
+You're absolutely right:
+
+> We should NOT fetch the entire tree if the user is exploring a slice of documents.
+
+Instead, we need:
+
+> Contextual subtree projection derived from a document set.
+
+Let's design this cleanly.
+
+---
+
+# 🎯 Goal
+
+Given:
+
+* A vault
+* A filtered document set (e.g. last 2 days)
+* Potentially 10–500 documents
+* Spread across the tree
+
+We want:
+
+* The minimal subtree that covers those documents
+* Without unnecessary intermediate noise
+* With structure preserved enough to orient the user
+* Without downloading the entire tree
+
+---
+
+# 🧠 Core Concept: Induced Subtree
+
+This is a classic tree operation:
+
+1. Find nodes attached to selected documents
+2. Compute all ancestors of those nodes
+3. Return only:
+
+   * document nodes
+   * their ancestors
+4. Optionally compress unnecessary levels
+
+You already wrote the key logic:
+
+```python
+def get_ancestors(node_id):
+    ...
+```
+
+That's the backbone.
+
+---
+
+# 🏗️ Step 1 — Fetch Nodes For Document Set
+
+We need a SQL function:
+
+### Input
+
+* vault_id
+* document_id list
+
+### Output
+
+* minimal flat node list
+* only required nodes
+
+---
+
+## SQL: Fetch Contextual Subtree
+
+```sql
+CREATE OR REPLACE FUNCTION semantic_tree_v2.fetch_subtree_for_documents(
+    p_user_id UUID,
+    p_vault_id UUID,
+    p_document_ids UUID[]
+) RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    result JSONB;
+BEGIN
+    -- Permission check
+    IF NOT semantic_tree_v2.user_has_vault_role(p_user_id, p_vault_id, 'viewer') THEN
+        RAISE EXCEPTION 'insufficient_privilege';
+    END IF;
+
+    WITH RECURSIVE doc_nodes AS (
+        SELECT DISTINCT nd.node_id, nd.vault_id
+        FROM semantic_tree_v2.node_document nd
+        WHERE nd.vault_id = p_vault_id
+          AND nd.document_id = ANY(p_document_ids)
+    ),
+    ancestors AS (
+        SELECT tn.id, tn.parent_id, tn.vault_id, tn.title, tn.node_type
+        FROM semantic_tree_v2.tree_node tn
+        JOIN doc_nodes dn
+          ON tn.id = dn.node_id
+
+        UNION ALL
+
+        SELECT parent.id, parent.parent_id, parent.vault_id, parent.title, parent.node_type
+        FROM semantic_tree_v2.tree_node parent
+        JOIN ancestors child
+          ON child.parent_id = parent.id
+         AND parent.vault_id = p_vault_id
+    )
+    SELECT jsonb_agg(DISTINCT jsonb_build_object(
+        'id', id,
+        'parent_id', parent_id,
+        'title', title,
+        'node_type', node_type
+    ))
+    INTO result
+    FROM ancestors;
+
+    RETURN COALESCE(result, '[]'::jsonb);
+END $$;
+```
+
+This returns only:
+
+* Nodes directly attached to documents
+* Their ancestors up to root
+
+No full tree download.
+
+---
+
+# 🧠 Step 2 — Simplify Structure
+
+Now comes the UX refinement.
+
+If documents are scattered across tree:
+
+We don't want:
+
+```
+Root
+  A
+    B
+      C (doc)
+  X
+    Y
+      Z (doc)
+```
+
+We want:
+
+```
+A > B > C
+X > Y > Z
+```
+
+Or maybe even:
+
+```
+C
+Z
+```
+
+depending on context.
+
+So we add a Python projection layer:
+
+---
+
+## Python: Build + Compress
+
+```python
+def compress_tree(tree):
+    """
+    Remove intermediate nodes that:
+    - Have no documents directly attached
+    - Have only one child
+    - Are not manual or locked
+    """
+
+    changed = True
+    while changed:
+        changed = False
+        for node_id, node in list(tree["by_id"].items()):
+            children = node["children"]
+
+            if (
+                len(children) == 1
+                and node["doc_count"] == 0
+                and node["node_type"] == "cluster"
+            ):
+                child_id = children[0]
+                parent_id = node["parent_id"]
+
+                # reattach child to grandparent
+                tree["by_id"][child_id]["parent_id"] = parent_id
+                if parent_id:
+                    tree["by_id"][parent_id]["children"].remove(node_id)
+                    tree["by_id"][parent_id]["children"].append(child_id)
+
+                del tree["by_id"][node_id]
+                changed = True
+                break
+
+    return tree
+```
+
+This ensures:
+
+* No visual noise
+* No unnecessary depth
+* Manual nodes preserved
+* Cluster-only collapse allowed
+
+---
+
+# 🧠 Step 3 — Context Modes
+
+Different contexts require different projections.
+
+## Mode A — Recency View
+
+* Fetch subtree for docs in date range
+* Collapse aggressively
+* Show document counts per node
+
+## Mode B — Focus Node View
+
+* User clicks a node
+* Fetch subtree under that node
+* Include only nodes with documents in current filter
+* Do not collapse manual nodes
+
+## Mode C — Cluster Debug View
+
+* No compression
+* Show full hierarchy
+* For power users
+
+You can parameterize compression.
+
+---
+
+# 🧠 Step 4 — Performance Notes
+
+This approach:
+
+* Recursive query only climbs ancestors
+* Depth usually small (semantic trees shallow)
+* Very cheap compared to full tree load
+* Network payload proportional to context
+
+This keeps UI responsive.
+
+---
+
+# 🎯 Important: Do NOT Recompute Centroids Here
+
+Projection must not trigger:
+
+* reclustering
+* reassignment
+* tree mutation
+
+Projection = pure read.
+
+---
+
+# 🧠 Next Question You Must Decide
+
+When querying by documents:
+
+Should we also:
+
+* Include sibling nodes for orientation?
+  (so user sees surrounding context)
+
+Or
+
+* Only include exact minimal subtree?
+
+For calm UX, I recommend:
+
+Include minimal subtree
+
+* include immediate siblings of nodes with docs
+  (but collapsed visually)
+
+This preserves orientation without clutter.
+
+---
+
+# 🏗️ Cursor Prompt For Fetch + Projection
+
+Here is your implementation prompt:
+
+---
+
+```text
+We are implementing contextual subtree projection for semantic_tree_v2.
+
+Goal:
+- Given a vault_id and a list of document_ids,
+  return the minimal subtree covering those documents.
+- Do NOT download full tree.
+- Do NOT mutate tree.
+- This is read-only projection logic.
+
+--------------------------------
+PART 1 — SQL
+--------------------------------
+
+Create function:
+
+semantic_tree_v2.fetch_subtree_for_documents(
+    p_user_id UUID,
+    p_vault_id UUID,
+    p_document_ids UUID[]
+)
+
+Behavior:
+- Validate user has viewer access.
+- Find node_ids attached to documents.
+- Recursively collect ancestors up to root.
+- Return flat JSON list of nodes:
+    id, parent_id, title, node_type.
+
+--------------------------------
+PART 2 — Python
+--------------------------------
+
+In semantic_tree_v2_repo.py:
+
+Add:
+    fetch_subtree_for_documents()
+
+Add projection utilities:
+    build_tree()
+    compress_tree()
+
+Compression rules:
+- Remove intermediate cluster nodes with:
+    - no directly attached docs
+    - single child
+- Never remove manual nodes.
+- Never remove locked nodes.
+
+--------------------------------
+PART 3 — Tests
+--------------------------------
+
+Add tests:
+- Query recent documents.
+- Ensure only minimal subtree returned.
+- Ensure manual nodes preserved.
+- Ensure compression collapses trivial cluster chains.
+- Ensure cross-vault isolation still enforced.
+
+--------------------------------
+DO NOT:
+--------------------------------
+- Do not recluster.
+- Do not modify tree.
+- Do not integrate into endpoints yet.
+```
+
+---
+
+# 🧘 Why This Matters
+
+This is where your system begins to feel:
+
+* Focused
+* Context-aware
+* Calm
+* Lightweight
+* Intentional
+
+Without projection logic, the UI will feel heavy and noisy.
+
+With it, the tree becomes a lens.
+
+---
+
+If you'd like next, we can design:
+
+* How labels should be generated for cluster nodes during UI exploration
+* How to compute "topic confidence"
+* Or how to visually distinguish anchor-constrained documents
+
+You're now at the UI-intelligence layer.
