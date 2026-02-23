@@ -403,6 +403,130 @@ def get_tree_roots_for_vault(
     )
 
 
+def find_node_by_centroid_similarity(
+    db: Session,
+    vault_id: UUID,
+    centroid: np.ndarray,
+    min_similarity: float = 0.95,
+    exclude_node_ids: Optional[Set[UUID]] = None,
+) -> Optional[Tuple[UUID, float]]:
+    """
+    Find an existing unlocked auto cluster node whose centroid is >= min_similarity (cosine).
+    Returns (node_id, similarity) or None.
+    """
+    vec = pad_to_reduced_dim(centroid)
+    vec_str = "[" + ",".join(str(x) for x in vec) + "]"
+    max_dist = 1.0 - min_similarity
+
+    exclude_clause = ""
+    params: Dict = {"vault_id": str(vault_id), "embedding": vec_str, "max_dist": max_dist}
+    if exclude_node_ids:
+        exclude_clause = " AND id != ALL(CAST(:exclude_ids AS uuid[]))"
+        params["exclude_ids"] = [str(x) for x in exclude_node_ids]
+
+    result = db.execute(
+        text(f"""
+            SELECT id, (1 - (centroid <=> CAST(:embedding AS vector))::float) AS sim
+            FROM {SCHEMA}.tree_node
+            WHERE vault_id = :vault_id
+            AND node_type = 'cluster'
+            AND locked = FALSE
+            AND centroid IS NOT NULL
+            AND (node_role IS NULL OR node_role = 'normal')
+            AND (title_source IS NULL OR title_source NOT IN ('manual', 'pinned'))
+            AND (centroid <=> CAST(:embedding AS vector)) <= :max_dist
+            {exclude_clause}
+            ORDER BY centroid <=> CAST(:embedding AS vector)
+            LIMIT 1
+        """),
+        params,
+    )
+    row = result.fetchone()
+    if not row:
+        return None
+    return (row[0], float(row[1]))
+
+
+def clear_node_membership(db: Session, node_id: UUID, vault_id: UUID) -> None:
+    """
+    Remove all document assignments from a node. Leaves node in place for reuse.
+    """
+    db.execute(
+        text(f"""
+            DELETE FROM {SCHEMA}.node_document
+            WHERE vault_id = :vault_id AND node_id = :node_id
+        """),
+        {"vault_id": str(vault_id), "node_id": str(node_id)},
+    )
+    db.execute(
+        text(f"""
+            UPDATE {SCHEMA}.tree_node_stats
+            SET doc_count = 0, updated_at = now()
+            WHERE vault_id = :vault_id AND node_id = :node_id
+        """),
+        {"vault_id": str(vault_id), "node_id": str(node_id)},
+    )
+
+
+def _contract_single_member_structure(
+    structure: Dict[int, Dict[int, List]],
+    hierarchy: Dict[int, Dict[int, int]],
+    levels: List[int],
+) -> Tuple[Dict[int, Dict[int, List]], Dict[Tuple[int, int], Tuple[int, int]]]:
+    """
+    Remove single-member intermediate nodes from structure before persisting.
+    Single child cluster: lift child to grandparent. Single doc: pass doc to parent.
+    Returns (contracted_structure, parent_map) where parent_map[(level, label)] = (parent_level, parent_label).
+    """
+    import copy
+    struct = copy.deepcopy(structure)
+    level_0 = min(levels)
+    max_level = max(levels)
+    parent_map: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    for lev in hierarchy:
+        for fine_c, coarse_c in hierarchy[lev].items():
+            parent_map[(lev, fine_c)] = (lev + 1, coarse_c)
+    changed = True
+    while changed:
+        changed = False
+        # Single doc at level 0: pass to parent
+        for c in list(struct.get(level_0, {}).keys()):
+            doc_list = struct[level_0].get(c, [])
+            if len(doc_list) != 1:
+                continue
+            key = (level_0, c)
+            if key not in parent_map:
+                continue
+            pl, pc = parent_map[key]
+            if pl not in struct or pc not in struct[pl]:
+                continue
+            doc_id = doc_list[0]
+            struct[pl][pc] = list(struct[pl][pc]) + [doc_id]
+            del struct[level_0][c]
+            del parent_map[key]
+            changed = True
+            break
+        if changed:
+            continue
+        # Single child at level > 0: lift child to grandparent
+        children_of: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+        for (cl, cc), (pl, pc) in list(parent_map.items()):
+            children_of.setdefault((pl, pc), []).append((cl, cc))
+        for (pl, pc), children in list(children_of.items()):
+            if len(children) != 1:
+                continue
+            (cl, cc) = children[0]
+            if (pl, pc) not in parent_map:
+                continue
+            gp_level, gp_label = parent_map[(pl, pc)]
+            del struct[pl][pc]
+            del parent_map[(pl, pc)]
+            parent_map[(cl, cc)] = (gp_level, gp_label)
+            changed = True
+            break
+    return struct, parent_map
+
+
 def build_tree_from_clustering(
     db: Session,
     vault_id: UUID,
@@ -412,63 +536,127 @@ def build_tree_from_clustering(
     hierarchy: Dict[int, Dict[int, int]],
     doc_ids: List[UUID],
     anchored_docs: Optional[List[Tuple[UUID, UUID]]] = None,
+    reduced: Optional[Dict[UUID, np.ndarray]] = None,
 ) -> List[UUID]:
     """
     Build cluster node hierarchy from clustering output.
-    Only replaces auto-generated, unlocked cluster nodes that are not pinned/manual.
-    Manual, locked, pinned/manual title nodes are never touched.
-    anchored_docs: [(doc_id, anchor_node_id)] - docs to re-attach to anchor after rebuild (excluded from clustering).
+    Stability-first: reuse existing nodes by centroid similarity (95%) instead of delete-recreate.
+    Unmatched existing nodes are left in place with membership cleared.
+    Documents are attached only at level 0 (finest granularity).
+    anchored_docs: [(doc_id, anchor_node_id)] - docs to re-attach to anchor (excluded from clustering).
+    reduced: doc_id -> embedding for centroid computation; if None, always create new nodes.
     """
-    # Delete only stale auto-generated cluster nodes; preserve staging, locked, pinned, manual
-    db.execute(
+    levels = sorted(labels_by_level.keys())
+    level_0 = min(levels)
+    user_str = str(user_id)
+    vault_str = str(vault_id)
+
+    # Build parent_map from hierarchy: (level, fine_label) -> (level+1, coarse_label)
+    parent_map: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    for lev in hierarchy:
+        for fine_c, coarse_c in hierarchy[lev].items():
+            parent_map[(lev, int(fine_c))] = (lev + 1, int(coarse_c))
+
+    # Fetch existing auto cluster nodes for reuse and later membership clear
+    existing_rows = db.execute(
         text(f"""
-            DELETE FROM {SCHEMA}.tree_node
+            SELECT id FROM {SCHEMA}.tree_node
             WHERE vault_id = :vault_id AND node_type = 'cluster' AND auto_generated = TRUE AND locked = FALSE
             AND (node_role IS NULL OR node_role != 'staging')
             AND (title_source IS NULL OR title_source NOT IN ('manual', 'pinned'))
         """),
         {"vault_id": str(vault_id)},
-    )
-    db.commit()
+    ).fetchall()
+    existing_node_ids = {row[0] for row in existing_rows}
+    used_node_ids: Set[UUID] = set()
 
-    levels = sorted(labels_by_level.keys())
-    node_map: Dict[tuple, UUID] = {}  # (level, cluster_label) -> node_id
-    user_str = str(user_id)
-    vault_str = str(vault_id)
+    def _compute_centroid(doc_id_list: List) -> Optional[np.ndarray]:
+        if not reduced or not doc_id_list:
+            return None
+        vecs = [reduced[did] for did in doc_id_list if did in reduced]
+        if not vecs:
+            return None
+        centroid = np.mean(vecs, axis=0).astype(np.float32)
+        norm = np.linalg.norm(centroid)
+        if norm > 1e-10:
+            centroid = centroid / norm
+        return centroid
 
+    node_map: Dict[tuple, UUID] = {}
     for level in reversed(levels):
-        for cluster_label in np.unique(labels_by_level[level]):
+        for cluster_label in list(structure.get(level, {}).keys()):
             cluster_label = int(cluster_label)
             parent_id = None
-            if level < max(levels):
-                parent_cluster = hierarchy[level][cluster_label]
-                parent_id = node_map.get((level + 1, parent_cluster))
+            key = (level, cluster_label)
+            if key in parent_map:
+                pl, pc = parent_map[key]
+                parent_id = node_map.get((pl, pc))
 
-            result = db.execute(
-                text(f"SELECT {SCHEMA}.create_cluster_node(:user_id, :vault_id, :parent_id)"),
-                {"user_id": user_str, "vault_id": vault_str, "parent_id": str(parent_id) if parent_id else None},
-            )
-            node_id = result.scalar()
+            doc_id_list = structure[level].get(cluster_label, [])
+            centroid = _compute_centroid(doc_id_list)
+            node_id = None
+
+            if centroid is not None:
+                match = find_node_by_centroid_similarity(
+                    db, vault_id, centroid, min_similarity=0.95, exclude_node_ids=used_node_ids
+                )
+                if match:
+                    node_id, _ = match
+                    clear_node_membership(db, node_id, vault_id)
+                    used_node_ids.add(node_id)
+                    # Reparent if needed (parent may have changed)
+                    db.execute(
+                        text(f"""
+                            UPDATE {SCHEMA}.tree_node
+                            SET parent_id = :parent_id, updated_at = now()
+                            WHERE id = :node_id AND vault_id = :vault_id
+                        """),
+                        {
+                            "node_id": str(node_id),
+                            "vault_id": str(vault_id),
+                            "parent_id": str(parent_id) if parent_id else None,
+                        },
+                    )
+
+            if node_id is None:
+                result = db.execute(
+                    text(f"SELECT {SCHEMA}.create_cluster_node(:user_id, :vault_id, :parent_id)"),
+                    {"user_id": user_str, "vault_id": vault_str, "parent_id": str(parent_id) if parent_id else None},
+                )
+                node_id = result.scalar()
+                used_node_ids.add(node_id)
+
             node_map[(level, cluster_label)] = node_id
 
     db.commit()
 
-    # Attach documents to level 0 nodes
-    level_0 = min(levels)
-    for cluster_label, doc_id_list in structure[level_0].items():
-        node_id = node_map[(level_0, cluster_label)]
+    # Attach documents to level-0 nodes only.
+    # get_nested_cluster_structure puts all docs at every level; attaching at all levels
+    # would duplicate every doc onto the root node. Only level-0 has the correct
+    # fine-grained assignment.
+    for cluster_label, doc_id_list in structure.get(level_0, {}).items():
+        key = (level_0, int(cluster_label))
+        if key not in node_map:
+            continue
+        node_id = node_map[key]
         for doc_id in doc_id_list:
             attach_document_to_node(db, node_id, doc_id, user_id, vault_id)
 
-    # Re-attach anchored docs to their anchor (CASCADE removed their node_document links)
+    # Re-attach anchored docs to their anchor
     if anchored_docs:
         for doc_id, anchor_node_id in anchored_docs:
             attach_document_to_node(db, anchor_node_id, doc_id, user_id, vault_id)
 
+    # Clear membership from existing nodes that were not matched (cut pattern changed)
+    for old_id in existing_node_ids:
+        if old_id not in used_node_ids:
+            clear_node_membership(db, old_id, vault_id)
+
+    db.commit()
     recompute_node_centroids(db, vault_id)
 
     root_level = max(levels)
-    root_ids = [node_map[(root_level, int(lbl))] for lbl in np.unique(labels_by_level[root_level])]
+    root_ids = [node_map[(root_level, lbl)] for lbl in structure.get(root_level, {}).keys()]
     return root_ids
 
 

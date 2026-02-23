@@ -438,14 +438,45 @@ def ingest(
                 "vault_id": str(vault.id) if vault else None,
             }
 
-    # 7c. Tree placement: compute reduced embedding, persist, place in semantic tree
+    # 7c. Tree placement: run async so ingest returns immediately
     if vault and user:
         try:
+            import asyncio
+            from .db import SessionLocal
             from .topics import get_reduced_embeddings_for_recluster
             from .tree_management import place_document
-            reduced = get_reduced_embeddings_for_recluster(db, [doc])
-            if doc.id in reduced:
-                place_document(db, vault.id, doc.id, reduced[doc.id], user.id)
+
+            def _run_placement_sync():
+                sess = SessionLocal()
+                try:
+                    from .labeling import relabel_nodes
+                    d = sess.query(Document).filter(Document.id == doc.id).first()
+                    if not d:
+                        return
+                    reduced = get_reduced_embeddings_for_recluster(sess, [d])
+                    if d.id in reduced:
+                        node_id = place_document(sess, vault.id, d.id, reduced[d.id], user.id)
+                        relabel_nodes(sess, vault.id, [node_id], status="needs_llm")
+                        sess.commit()
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    print(f"[WARN] Tree placement failed (non-fatal): {e}")
+                finally:
+                    sess.close()
+
+            async def _place_async():
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, _run_placement_sync)
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(_place_async())
+                else:
+                    _run_placement_sync()
+            except RuntimeError:
+                _run_placement_sync()
         except Exception as e:
             import traceback
             traceback.print_exc()

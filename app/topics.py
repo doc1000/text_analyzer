@@ -2827,7 +2827,7 @@ def build_hierarchy_from_semantic_tree(
                     topic_children.append(child_node)
             all_ch = topic_children + doc_children
             doc_count = len(doc_children) + sum(c.get("doc_count", 0) for c in topic_children)
-            if doc_count == 0:
+            if doc_count == 0 and not topic_children:
                 return None
             return {
                 "name": node.get("title") or f"Node {node_id}",

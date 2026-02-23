@@ -70,6 +70,7 @@ _STOP_WORDS = {
     "how",
 }
 _GENERIC_LABEL_TERMS = ("cluster", "undefined", "misc", "insights", "unclassified")
+LLM_REFINEMENT_CONFIDENCE_THRESHOLD = 0.65
 
 
 @dataclass
@@ -409,6 +410,88 @@ def relabel_vault_deterministic(db: Session, vault_id: UUID) -> dict:
     return relabel_vault_deterministic_with_status(db, vault_id, status="auto")
 
 
+def relabel_nodes(
+    db: Session,
+    vault_id: UUID,
+    node_ids: List[UUID],
+    status: str = "needs_llm",
+) -> dict:
+    """
+    Deterministically relabel a subset of cluster nodes (e.g. after ingestion placement).
+    Uses same logic as relabel_vault_deterministic_with_status but scoped to node_ids.
+    """
+    if not node_ids:
+        return {"vault_id": str(vault_id), "eligible_nodes": 0, "updated_nodes": 0, "skipped_unchanged": 0}
+
+    eligible_rows = (
+        db.query(SemanticTreeNode.id, SemanticTreeNode.label_signature_hash)
+        .filter(
+            SemanticTreeNode.vault_id == vault_id,
+            SemanticTreeNode.id.in_(node_ids),
+            SemanticTreeNode.node_type == "cluster",
+            SemanticTreeNode.locked == False,
+            SemanticTreeNode.title_source.in_(("auto", "llm")),
+        )
+        .all()
+    )
+    if not eligible_rows:
+        return {"vault_id": str(vault_id), "eligible_nodes": 0, "updated_nodes": 0, "skipped_unchanged": 0}
+
+    scoped_ids = [row[0] for row in eligible_rows]
+    old_hash_by_node = {row[0]: row[1] for row in eligible_rows}
+    node_to_docs = _resolve_subtree_docs_for_nodes(db, vault_id, scoped_ids)
+    ctx = _build_vault_label_context(db, vault_id, node_to_docs)
+
+    updated_nodes = 0
+    skipped_unchanged = 0
+    for node_id in scoped_ids:
+        doc_ids = node_to_docs.get(node_id, [])
+        signals = _build_node_signals(ctx, doc_ids)
+        label, confidence = _select_deterministic_label(signals)
+        signals["deterministic_label"] = label
+        signals["deterministic_confidence"] = confidence
+
+        signature_hash = _compute_signature_hash(node_id, signals, doc_ids)
+        if old_hash_by_node.get(node_id) == signature_hash:
+            skipped_unchanged += 1
+            continue
+
+        effective_status = status
+        if status == "needs_llm" and confidence < LLM_REFINEMENT_CONFIDENCE_THRESHOLD:
+            effective_status = "auto"
+
+        db.execute(
+            text(
+                f"""
+                SELECT {SCHEMA}.update_node_label(
+                  :vault_id, :node_id, :label,
+                  CAST(:signals AS jsonb),
+                  :signature_hash,
+                  :status,
+                  :title_source
+                )
+                """
+            ),
+            {
+                "vault_id": str(vault_id),
+                "node_id": str(node_id),
+                "label": label,
+                "signals": json.dumps(signals),
+                "signature_hash": signature_hash,
+                "status": effective_status,
+                "title_source": None,
+            },
+        )
+        updated_nodes += 1
+
+    return {
+        "vault_id": str(vault_id),
+        "eligible_nodes": len(scoped_ids),
+        "updated_nodes": updated_nodes,
+        "skipped_unchanged": skipped_unchanged,
+    }
+
+
 def relabel_vault_deterministic_with_status(
     db: Session,
     vault_id: UUID,
@@ -459,6 +542,11 @@ def relabel_vault_deterministic_with_status(
             skipped_unchanged += 1
             continue
 
+        # Queue for LLM only when confidence meets threshold
+        effective_status = status
+        if status == "needs_llm" and confidence < LLM_REFINEMENT_CONFIDENCE_THRESHOLD:
+            effective_status = "auto"
+
         db.execute(
             text(
                 f"""
@@ -477,7 +565,7 @@ def relabel_vault_deterministic_with_status(
                 "label": label,
                 "signals": json.dumps(signals),
                 "signature_hash": signature_hash,
-                "status": status,
+                "status": effective_status,
                 "title_source": None,
             },
         )

@@ -901,7 +901,7 @@ def run_tests():
                     "vault_id": guard_vault,
                     "url": f"https://guard.example/{i}",
                     "title": "Postgres tuning guide",
-                    "text": "Postgres tuning guide for index strategy and query performance.",
+                    "text": "Postgres tuning guide guide guide for index strategy and query performance. Guide to optimization.",
                 },
             )
             db.execute(
