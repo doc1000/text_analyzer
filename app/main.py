@@ -1640,6 +1640,29 @@ def admin_scheduler_status(
     return status
 
 
+@app.post("/admin/labels/refine")
+def admin_refine_labels(
+    limit: int = 25,
+    _: None = Depends(require_bootstrap_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Run one on-demand label refinement pass.
+
+    Processes only nodes where label_status='needs_llm' and uses stored
+    label_signals for LLM refinement.
+    """
+    from .labeling import refine_pending_llm_labels
+
+    stats = refine_pending_llm_labels(db, limit=limit)
+    db.commit()
+    return {
+        "status": "ok",
+        "message": "Label refinement run complete",
+        "stats": stats,
+    }
+
+
 @app.get("/admin/test-extraction")
 def admin_test_extraction(
     url: str,

@@ -591,7 +591,11 @@ def run_tests():
         # ---------------------------------------------------------------------
         # Test 8: Deterministic relabel uses content signals
         # ---------------------------------------------------------------------
-        from app.labeling import relabel_vault_deterministic
+        from app.labeling import (
+            relabel_vault_deterministic,
+            relabel_vault_deterministic_with_status,
+            refine_pending_llm_labels,
+        )
 
         det_vault = str(uuid.uuid4())
         db.execute(
@@ -655,7 +659,84 @@ def run_tests():
         )
 
         # ---------------------------------------------------------------------
-        # Test 9: Existing tree functions still work
+        # Test 9: needs_llm -> final async refinement lifecycle
+        # ---------------------------------------------------------------------
+        # Change node content so signature changes and deterministic pass requeues.
+        det_extra_doc = str(uuid.uuid4())
+        db.execute(
+            text("""
+                INSERT INTO documents (id, vault_id, url, title, extracted_text, full_text, captured_at, user_tags)
+                VALUES (:id, :vault_id, :url, :title, :text, '', now(), ARRAY[]::text[])
+            """),
+            {
+                "id": det_extra_doc,
+                "vault_id": det_vault,
+                "url": "https://det.example/extra",
+                "title": "Database migration playbook",
+                "text": "Database migration playbook with rollout checks and schema changes.",
+            },
+        )
+        db.execute(
+            text("SELECT semantic_tree_v2.attach_document(:uid, :vid, :nid, :did)"),
+            {"uid": user_id, "vid": det_vault, "nid": str(det_node), "did": det_extra_doc},
+        )
+
+        lifecycle_stats = relabel_vault_deterministic_with_status(
+            db,
+            uuid.UUID(det_vault),
+            status="needs_llm",
+        )
+        queued_row = db.execute(
+            text("""
+                SELECT label_status, title_source, label_signature_hash, label_signals
+                FROM semantic_tree_v2.tree_node
+                WHERE id = :nid AND vault_id = :vid
+            """),
+            {"nid": str(det_node), "vid": det_vault},
+        ).fetchone()
+        queued_ok = (
+            queued_row is not None
+            and queued_row[0] == "needs_llm"
+            and queued_row[1] == "auto"
+            and queued_row[3] is not None
+        )
+        log(
+            "Deterministic relabel queues needs_llm",
+            queued_ok,
+            expected="status=needs_llm with stored label_signals",
+            actual=f"queued_row={queued_row}, stats={lifecycle_stats}",
+        )
+
+        refine_stats = refine_pending_llm_labels(
+            db,
+            vault_id=uuid.UUID(det_vault),
+            limit=10,
+            llm_callable=lambda _signals: "LLM Refined Migration Topic",
+        )
+        refined_row = db.execute(
+            text("""
+                SELECT title, label_status, title_source, label_signature_hash
+                FROM semantic_tree_v2.tree_node
+                WHERE id = :nid AND vault_id = :vid
+            """),
+            {"nid": str(det_node), "vid": det_vault},
+        ).fetchone()
+        refined_ok = (
+            refined_row is not None
+            and refined_row[0] == "LLM Refined Migration Topic"
+            and refined_row[1] == "final"
+            and refined_row[2] == "llm"
+            and bool(refined_row[3])
+        )
+        log(
+            "Async refinement finalizes needs_llm nodes",
+            refined_ok,
+            expected="title updated, status=final, title_source=llm",
+            actual=f"row={refined_row}, stats={refine_stats}",
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 10: Existing tree functions still work
         # ---------------------------------------------------------------------
         from app.semantic_tree_v2_repo import SemanticTreeV2Repo
 

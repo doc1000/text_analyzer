@@ -192,9 +192,10 @@ def relabel_vault(db: Session, vault_id: UUID) -> None:
     Uses vault-wide TF-IDF + content/tag signals in app layer, then
     writes via semantic_tree_v2.update_node_label.
     """
-    from .labeling import relabel_vault_deterministic
+    from .labeling import relabel_vault_deterministic_with_status
 
-    relabel_vault_deterministic(db, vault_id)
+    # PR3 lifecycle: deterministic relabel queues nodes for async LLM refinement.
+    relabel_vault_deterministic_with_status(db, vault_id, status="needs_llm")
     db.commit()
 
 

@@ -22,6 +22,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .db import DOCUMENT_TABLE
+from .config import PREFERENCES
+from .helpers import _ollama_chat, _openai_chat
 from .models import Document, SemanticTreeNode, SemanticTreeNodeDocument
 
 
@@ -351,6 +353,18 @@ def relabel_vault_deterministic(db: Session, vault_id: UUID) -> dict:
       "skipped_unchanged": int
     }
     """
+    return relabel_vault_deterministic_with_status(db, vault_id, status="auto")
+
+
+def relabel_vault_deterministic_with_status(
+    db: Session,
+    vault_id: UUID,
+    status: str = "auto",
+) -> dict:
+    """
+    Deterministically relabel eligible auto cluster nodes in a vault and set
+    the provided label_status on updated nodes.
+    """
     eligible_rows = (
         db.query(SemanticTreeNode.id, SemanticTreeNode.label_signature_hash)
         .filter(
@@ -419,7 +433,7 @@ def relabel_vault_deterministic(db: Session, vault_id: UUID) -> dict:
                 "label": label,
                 "signals": json.dumps(signals),
                 "signature_hash": signature_hash,
-                "status": "auto",
+                "status": status,
                 "title_source": None,
             },
         )
@@ -430,5 +444,140 @@ def relabel_vault_deterministic(db: Session, vault_id: UUID) -> dict:
         "eligible_nodes": len(node_ids),
         "updated_nodes": updated_nodes,
         "skipped_unchanged": skipped_unchanged,
+    }
+
+
+def _compose_llm_refinement_prompt(signals: dict) -> str:
+    tags = signals.get("tags", [])[:5]
+    tfidf_terms = signals.get("tfidf_terms", [])[:8]
+    summary_phrases = signals.get("summary_phrases", [])[:8]
+    title_terms = signals.get("title_terms", [])[:6]
+    doc_count = int(signals.get("doc_count", 0))
+    deterministic_label = (signals.get("deterministic_label") or "").strip()
+
+    def _fmt(entries: List[dict], key: str, score_key: Optional[str] = None) -> str:
+        if not entries:
+            return "- (none)"
+        lines = []
+        for e in entries:
+            term = str(e.get(key) or "").strip()
+            if not term:
+                continue
+            if score_key and e.get(score_key) is not None:
+                lines.append(f"- {term} ({score_key}={e.get(score_key)})")
+            else:
+                lines.append(f"- {term}")
+        return "\n".join(lines) if lines else "- (none)"
+
+    return (
+        "You are refining a cluster label.\n"
+        "Use the provided signals only. Produce a concise label (max 6 words).\n"
+        "Avoid generic labels like General, Topic, Cluster, Misc.\n\n"
+        f"Document count: {doc_count}\n"
+        f"Deterministic label: {deterministic_label or '(none)'}\n\n"
+        "Top tags:\n"
+        f"{_fmt(tags, 'tag', 'ratio')}\n\n"
+        "Top TF-IDF terms:\n"
+        f"{_fmt(tfidf_terms, 'phrase', 'score')}\n\n"
+        "Top summary phrases:\n"
+        f"{_fmt(summary_phrases, 'phrase', 'freq')}\n\n"
+        "Top title terms:\n"
+        f"{_fmt(title_terms, 'term', 'freq')}\n\n"
+        "Respond with exactly one line:\n"
+        "LABEL: <label>"
+    )
+
+
+def _generate_llm_label_from_signals(signals: dict) -> str:
+    prompt = _compose_llm_refinement_prompt(signals)
+    topic_provider = getattr(PREFERENCES.models, "topic_provider", "openai")
+    if topic_provider == "ollama":
+        topic_model = PREFERENCES.models.ollama.topic_model
+        text_out = _ollama_chat(prompt, model=topic_model)
+    else:
+        text_out = _openai_chat(prompt)
+
+    for line in text_out.splitlines():
+        if line.strip().upper().startswith("LABEL:"):
+            candidate = line.split(":", 1)[1].strip()
+            if candidate:
+                return " ".join(candidate.split()[:6])
+
+    fallback = (text_out or "").strip().splitlines()
+    if fallback:
+        return " ".join(fallback[0].split()[:6])
+    return (signals.get("deterministic_label") or _fallback_label(int(signals.get("doc_count", 0)))).strip()
+
+
+def refine_pending_llm_labels(
+    db: Session,
+    vault_id: Optional[UUID] = None,
+    limit: int = 25,
+    llm_callable=None,
+) -> dict:
+    """
+    Refine nodes currently queued for LLM processing (label_status='needs_llm').
+    Uses stored label_signals only; does not recompute TF-IDF/signals.
+    """
+    q = db.query(
+        SemanticTreeNode.id,
+        SemanticTreeNode.vault_id,
+        SemanticTreeNode.label_signals,
+        SemanticTreeNode.label_signature_hash,
+        SemanticTreeNode.title,
+    ).filter(
+        SemanticTreeNode.node_type == "cluster",
+        SemanticTreeNode.locked == False,
+        SemanticTreeNode.label_status == "needs_llm",
+    )
+    if vault_id is not None:
+        q = q.filter(SemanticTreeNode.vault_id == vault_id)
+    rows = q.order_by(SemanticTreeNode.updated_at.asc()).limit(max(1, int(limit))).all()
+
+    if not rows:
+        return {"processed": 0, "finalized": 0, "failed": 0}
+
+    finalized = 0
+    failed = 0
+    for node_id, node_vault_id, label_signals, signature_hash, current_title in rows:
+        signals = label_signals or {}
+        try:
+            if llm_callable is not None:
+                llm_label = str(llm_callable(signals)).strip()
+            else:
+                llm_label = _generate_llm_label_from_signals(signals)
+            if not llm_label:
+                llm_label = (signals.get("deterministic_label") or current_title or "Topic").strip()
+
+            db.execute(
+                text(
+                    f"""
+                    SELECT {SCHEMA}.update_node_label(
+                      :vault_id, :node_id, :label,
+                      CAST(:signals AS jsonb),
+                      :signature_hash,
+                      :status,
+                      :title_source
+                    )
+                    """
+                ),
+                {
+                    "vault_id": str(node_vault_id),
+                    "node_id": str(node_id),
+                    "label": llm_label,
+                    "signals": json.dumps(signals),
+                    "signature_hash": signature_hash,
+                    "status": "final",
+                    "title_source": "llm",
+                },
+            )
+            finalized += 1
+        except Exception:
+            failed += 1
+
+    return {
+        "processed": len(rows),
+        "finalized": finalized,
+        "failed": failed,
     }
 
