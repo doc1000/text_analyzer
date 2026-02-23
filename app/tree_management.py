@@ -199,6 +199,61 @@ def relabel_vault(db: Session, vault_id: UUID) -> None:
     db.commit()
 
 
+def cleanup_cluster_document_duplicates(db: Session, vault_id: UUID) -> int:
+    """
+    Ensure each document has at most one cluster-node assignment in a vault.
+    Keeps the most recently updated cluster node assignment and removes older ones.
+    """
+    result = db.execute(
+        text(f"""
+            WITH ranked AS (
+                SELECT
+                    nd.vault_id,
+                    nd.node_id,
+                    nd.document_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY nd.vault_id, nd.document_id
+                        ORDER BY tn.updated_at DESC NULLS LAST, nd.created_at DESC NULLS LAST, nd.node_id
+                    ) AS rn
+                FROM {SCHEMA}.node_document nd
+                JOIN {SCHEMA}.tree_node tn
+                  ON tn.id = nd.node_id
+                 AND tn.vault_id = nd.vault_id
+                WHERE nd.vault_id = :vault_id
+                  AND tn.node_type = 'cluster'
+            ),
+            removed AS (
+                DELETE FROM {SCHEMA}.node_document nd
+                USING ranked r
+                WHERE nd.vault_id = r.vault_id
+                  AND nd.node_id = r.node_id
+                  AND nd.document_id = r.document_id
+                  AND r.rn > 1
+                RETURNING nd.node_id
+            ),
+            decremented AS (
+                UPDATE {SCHEMA}.tree_node_stats s
+                SET doc_count = GREATEST(0, s.doc_count - x.cnt),
+                    updated_at = now()
+                FROM (
+                    SELECT node_id, COUNT(*)::int AS cnt
+                    FROM removed
+                    GROUP BY node_id
+                ) x
+                WHERE s.vault_id = :vault_id
+                  AND s.node_id = x.node_id
+                RETURNING 1
+            )
+            SELECT COUNT(*)::int FROM removed
+        """),
+        {"vault_id": str(vault_id)},
+    )
+    deleted = int(result.scalar() or 0)
+    if deleted > 0:
+        db.commit()
+    return deleted
+
+
 def assign_document_by_similarity(
     db: Session,
     vault_id: UUID,
@@ -360,17 +415,17 @@ def build_tree_from_clustering(
 ) -> List[UUID]:
     """
     Build cluster node hierarchy from clustering output.
-    Only deletes node_type='cluster' AND locked=FALSE AND (title_source IS NULL OR title_source = 'auto').
-    Manual, locked, and pinned/manual title nodes are never touched.
+    Only replaces auto-generated, unlocked cluster nodes that are not pinned/manual.
+    Manual, locked, pinned/manual title nodes are never touched.
     anchored_docs: [(doc_id, anchor_node_id)] - docs to re-attach to anchor after rebuild (excluded from clustering).
     """
-    # Delete only auto-generated cluster nodes; preserve staging, locked, pinned, manual
+    # Delete only stale auto-generated cluster nodes; preserve staging, locked, pinned, manual
     db.execute(
         text(f"""
             DELETE FROM {SCHEMA}.tree_node
-            WHERE vault_id = :vault_id AND node_type = 'cluster' AND locked = FALSE
+            WHERE vault_id = :vault_id AND node_type = 'cluster' AND auto_generated = TRUE AND locked = FALSE
             AND (node_role IS NULL OR node_role != 'staging')
-            AND (title_source IS NULL OR title_source = 'auto')
+            AND (title_source IS NULL OR title_source NOT IN ('manual', 'pinned'))
         """),
         {"vault_id": str(vault_id)},
     )

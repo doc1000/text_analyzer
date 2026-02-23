@@ -69,6 +69,7 @@ _STOP_WORDS = {
     "why",
     "how",
 }
+_GENERIC_LABEL_TERMS = ("cluster", "undefined", "misc", "insights", "unclassified")
 
 
 @dataclass
@@ -216,6 +217,58 @@ def _build_vault_label_context(
         doc_titles=doc_titles,
         doc_tags=doc_tags,
     )
+
+
+def _resolve_subtree_docs_for_nodes(
+    db: Session,
+    vault_id: UUID,
+    node_ids: List[UUID],
+) -> Dict[UUID, List[UUID]]:
+    """
+    Resolve subtree documents for each root node in node_ids using one recursive CTE.
+    """
+    if not node_ids:
+        return {}
+
+    result = db.execute(
+        text(
+            f"""
+            WITH RECURSIVE subtree AS (
+              SELECT id AS root_id, id AS node_id
+              FROM {SCHEMA}.tree_node
+              WHERE vault_id = :vault_id
+                AND id = ANY(CAST(:node_ids AS uuid[]))
+
+              UNION ALL
+
+              SELECT s.root_id, tn.id AS node_id
+              FROM {SCHEMA}.tree_node tn
+              JOIN subtree s ON tn.parent_id = s.node_id
+              WHERE tn.vault_id = :vault_id
+            )
+            SELECT s.root_id, nd.document_id
+            FROM subtree s
+            LEFT JOIN {SCHEMA}.node_document nd
+              ON nd.vault_id = :vault_id
+             AND nd.node_id = s.node_id
+            """
+        ),
+        {
+            "vault_id": str(vault_id),
+            "node_ids": [str(x) for x in node_ids],
+        },
+    )
+
+    by_node: Dict[UUID, set] = {nid: set() for nid in node_ids}
+    for root_id, document_id in result.fetchall():
+        if root_id in by_node and document_id is not None:
+            by_node[root_id].add(document_id)
+
+    # Keep deterministic ordering for stable signatures.
+    return {
+        nid: sorted(list(docs), key=lambda d: str(d))
+        for nid, docs in by_node.items()
+    }
 
 
 def _top_tfidf_terms(
@@ -386,17 +439,8 @@ def relabel_vault_deterministic_with_status(
     node_ids = [row[0] for row in eligible_rows]
     old_hash_by_node = {row[0]: row[1] for row in eligible_rows}
 
-    mapping_rows = (
-        db.query(SemanticTreeNodeDocument.node_id, SemanticTreeNodeDocument.document_id)
-        .filter(
-            SemanticTreeNodeDocument.vault_id == vault_id,
-            SemanticTreeNodeDocument.node_id.in_(node_ids),
-        )
-        .all()
-    )
-    node_to_docs: Dict[UUID, List[UUID]] = {nid: [] for nid in node_ids}
-    for node_id, doc_id in mapping_rows:
-        node_to_docs.setdefault(node_id, []).append(doc_id)
+    # Subtree-aware signal extraction: use all descendant documents, not only direct attachments.
+    node_to_docs = _resolve_subtree_docs_for_nodes(db, vault_id, node_ids)
 
     ctx = _build_vault_label_context(db, vault_id, node_to_docs)
 
@@ -509,6 +553,26 @@ def _generate_llm_label_from_signals(signals: dict) -> str:
     return (signals.get("deterministic_label") or _fallback_label(int(signals.get("doc_count", 0)))).strip()
 
 
+def _is_generic_llm_label(label: str) -> bool:
+    val = (label or "").strip().lower()
+    if not val:
+        return True
+    return any(term in val for term in _GENERIC_LABEL_TERMS)
+
+
+def _prefer_deterministic_over_generic(signals: dict, llm_label: str) -> bool:
+    """
+    Keep deterministic label when LLM output is generic and deterministic confidence is stronger.
+    """
+    if not _is_generic_llm_label(llm_label):
+        return False
+    det_label = (signals.get("deterministic_label") or "").strip()
+    det_conf = float(signals.get("deterministic_confidence", 0.0) or 0.0)
+    # Generic LLM outputs are treated as low confidence.
+    generic_llm_conf = 0.20
+    return bool(det_label) and det_conf > generic_llm_conf
+
+
 def refine_pending_llm_labels(
     db: Session,
     vault_id: Optional[UUID] = None,
@@ -547,6 +611,8 @@ def refine_pending_llm_labels(
             else:
                 llm_label = _generate_llm_label_from_signals(signals)
             if not llm_label:
+                llm_label = (signals.get("deterministic_label") or current_title or "Topic").strip()
+            if _prefer_deterministic_over_generic(signals, llm_label):
                 llm_label = (signals.get("deterministic_label") or current_title or "Topic").strip()
 
             db.execute(

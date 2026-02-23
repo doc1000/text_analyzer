@@ -1704,27 +1704,13 @@
         const days = parseInt(daysInput.value, 10) || 30;
         reloadBtn.disabled = true;
         reloadBtn.textContent = "Processing...";
-        const reclusterBanner = document.getElementById("reclusterBanner");
-        const reclusterBannerText = document.getElementById("reclusterBannerText");
-        if (reclusterBanner) reclusterBanner.style.display = "flex";
-        let reassuranceTimeout = null;
         try {
-          reassuranceTimeout = setTimeout(() => {
-            if (reclusterBannerText) reclusterBannerText.textContent = "Still reclustering… Large datasets can take a few minutes.";
-          }, 5000);
-          // Trigger incremental recluster (only uncategorized docs)
-          await authFetch(`${API_BASE}/topics/recluster?days=${days}&clear_assignments=false`, {
-            method: "POST"
-          });
-          // Reload the bubble map after reclustering
+          // Fetch-only reload: do not mutate persistent tree structure.
           await renderBubbleMap(days);
         } catch (error) {
           console.error("Error during reload:", error);
           await renderBubbleMap(days);
         } finally {
-          if (reassuranceTimeout) clearTimeout(reassuranceTimeout);
-          if (reclusterBanner) reclusterBanner.style.display = "none";
-          if (reclusterBannerText) reclusterBannerText.textContent = "Reclustering topics… This may take a minute for large datasets.";
           reloadBtn.disabled = false;
           reloadBtn.textContent = "Reload";
         }
@@ -2240,7 +2226,7 @@
         try {
           // Call recluster endpoint
           const res = await authFetch(
-            `${API_BASE}/topics/recluster?days=${days}&clear_assignments=${clearAssignments}`,
+            `${API_BASE}/topics/recluster?days=${days}&relabel=true&clear_assignments=${clearAssignments}`,
             { method: "POST" }
           );
           

@@ -14,7 +14,7 @@ Validates:
 - Integration: synthetic vault lifecycle
 
 Prerequisites:
-- Migrations 008 through 014 applied
+- Migrations 008 through 017 applied
 - DATABASE_URL set
 - User test@example.com exists
 
@@ -117,6 +117,13 @@ def run_tests():
             """),
             {"vault_id": vault_id, "user_id": user_id},
         )
+        db.execute(
+            text("""
+                INSERT INTO vault_memberships (vault_id, user_id, role, created_at)
+                VALUES (:vault_id, :user_id, 'owner', now())
+            """),
+            {"vault_id": vault_id, "user_id": user_id},
+        )
         log("Create vault", True)
 
         # ---------------------------------------------------------------------
@@ -195,6 +202,53 @@ def run_tests():
             doc_count == 2 and top_tag == "VaultBubbles" and top_ratio >= 0.9,
             expected="doc_count=2, top_tag=VaultBubbles, ratio>=0.9",
             actual=f"doc_count={doc_count}, top_tag={top_tag}, ratio={top_ratio}",
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 2b: Cluster-only uniqueness (same doc cannot stay in 2 cluster nodes)
+        # ---------------------------------------------------------------------
+        uniq_node_a = db.execute(
+            text("SELECT semantic_tree_v2.create_cluster_node(:uid, :vid, :pid)"),
+            {"uid": user_id, "vid": vault_id, "pid": root_id},
+        ).scalar()
+        uniq_node_b = db.execute(
+            text("SELECT semantic_tree_v2.create_cluster_node(:uid, :vid, :pid)"),
+            {"uid": user_id, "vid": vault_id, "pid": root_id},
+        ).scalar()
+        uniq_doc = str(uuid.uuid4())
+        db.execute(
+            text("""
+                INSERT INTO documents (id, vault_id, url, title, full_text, captured_at, user_tags)
+                VALUES (:id, :vault_id, 'https://test.example/uniq', 'Uniq Doc', '', now(), ARRAY[]::text[])
+            """),
+            {"id": uniq_doc, "vault_id": vault_id},
+        )
+        db.execute(
+            text("SELECT semantic_tree_v2.attach_document(:uid, :vid, :nid, :did)"),
+            {"uid": user_id, "vid": vault_id, "nid": str(uniq_node_a), "did": uniq_doc},
+        )
+        db.execute(
+            text("SELECT semantic_tree_v2.attach_document(:uid, :vid, :nid, :did)"),
+            {"uid": user_id, "vid": vault_id, "nid": str(uniq_node_b), "did": uniq_doc},
+        )
+        uniq_rows = db.execute(
+            text("""
+                SELECT node_id
+                FROM semantic_tree_v2.node_document nd
+                JOIN semantic_tree_v2.tree_node tn
+                  ON tn.id = nd.node_id AND tn.vault_id = nd.vault_id
+                WHERE nd.vault_id = :vid
+                  AND nd.document_id = :did
+                  AND tn.node_type = 'cluster'
+            """),
+            {"vid": vault_id, "did": uniq_doc},
+        ).fetchall()
+        uniq_node_ids = [str(r[0]) for r in uniq_rows]
+        log(
+            "Cluster-only unique document assignment",
+            len(uniq_node_ids) == 1 and uniq_node_ids[0] == str(uniq_node_b),
+            expected=f"single cluster attachment on {uniq_node_b}",
+            actual=str(uniq_node_ids),
         )
 
         # ---------------------------------------------------------------------
@@ -736,7 +790,179 @@ def run_tests():
         )
 
         # ---------------------------------------------------------------------
-        # Test 10: Existing tree functions still work
+        # Test 10: Subtree-aware signals aggregate descendant documents
+        # ---------------------------------------------------------------------
+        subtree_vault = str(uuid.uuid4())
+        db.execute(
+            text("INSERT INTO vaults (id, name, owner_id, is_personal, created_at) VALUES (:id, 'Subtree', :uid, false, now())"),
+            {"id": subtree_vault, "uid": user_id},
+        )
+        db.execute(
+            text("INSERT INTO semantic_tree_v2.vault_user_role (vault_id, user_id, role) VALUES (:vid, :uid, 'owner')"),
+            {"vid": subtree_vault, "uid": user_id},
+        )
+        subtree_root = db.execute(
+            text("SELECT semantic_tree_v2.create_node(:uid, :vid, NULL, 'Root')"),
+            {"uid": user_id, "vid": subtree_vault},
+        ).scalar()
+        subtree_parent = db.execute(
+            text("SELECT semantic_tree_v2.create_cluster_node(:uid, :vid, :pid)"),
+            {"uid": user_id, "vid": subtree_vault, "pid": subtree_root},
+        ).scalar()
+        subtree_child = db.execute(
+            text("SELECT semantic_tree_v2.create_cluster_node(:uid, :vid, :pid)"),
+            {"uid": user_id, "vid": subtree_vault, "pid": subtree_parent},
+        ).scalar()
+        for i in range(3):
+            did = str(uuid.uuid4())
+            db.execute(
+                text("""
+                    INSERT INTO documents (id, vault_id, url, title, extracted_text, full_text, captured_at, user_tags)
+                    VALUES (:id, :vault_id, :url, :title, :text, '', now(), ARRAY[]::text[])
+                """),
+                {
+                    "id": did,
+                    "vault_id": subtree_vault,
+                    "url": f"https://subtree.example/{i}",
+                    "title": "Vector database migration notes",
+                    "text": "Vector database migration playbook and schema rollout steps.",
+                },
+            )
+            db.execute(
+                text("SELECT semantic_tree_v2.attach_document(:uid, :vid, :nid, :did)"),
+                {"uid": user_id, "vid": subtree_vault, "nid": str(subtree_child), "did": did},
+            )
+
+        subtree_stats = relabel_vault_deterministic(db, uuid.UUID(subtree_vault))
+        subtree_parent_row = db.execute(
+            text("""
+                SELECT label_signals, label_signature_hash
+                FROM semantic_tree_v2.tree_node
+                WHERE id = :nid AND vault_id = :vid
+            """),
+            {"nid": str(subtree_parent), "vid": subtree_vault},
+        ).fetchone()
+        subtree_signals = subtree_parent_row[0] if subtree_parent_row else {}
+        subtree_doc_count = int((subtree_signals or {}).get("doc_count", 0))
+        log(
+            "Subtree-aware parent doc_count",
+            subtree_parent_row is not None and subtree_doc_count >= 3 and bool(subtree_parent_row[1]),
+            expected="parent cluster should include descendant docs in doc_count/signature",
+            actual=f"doc_count={subtree_doc_count}, stats={subtree_stats}, row={subtree_parent_row}",
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 11: Fetch-layer compression lifts trivial auto-generated wrapper
+        # ---------------------------------------------------------------------
+        from app.semantic_tree_v2_repo import SemanticTreeV2Repo, compress_tree
+
+        subtree_repo = SemanticTreeV2Repo(DATABASE_URL)
+        subtree_tree = subtree_repo.fetch_tree(user_id, subtree_vault, conn=db.connection())
+        compressed = compress_tree(subtree_tree)
+        parent_exists = str(subtree_parent) in compressed.get("by_id", {})
+        child_node = compressed.get("by_id", {}).get(str(subtree_child))
+        child_parent = child_node.get("parent_id") if child_node else None
+        log(
+            "Compression lifts single-child auto-generated node",
+            (not parent_exists) and str(child_parent) == str(subtree_root),
+            expected="parent removed and child reattached to root",
+            actual=f"parent_exists={parent_exists}, child_parent={child_parent}, root={subtree_root}",
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 12: Generic LLM output guard keeps strong deterministic label
+        # ---------------------------------------------------------------------
+        guard_vault = str(uuid.uuid4())
+        db.execute(
+            text("INSERT INTO vaults (id, name, owner_id, is_personal, created_at) VALUES (:id, 'Guard', :uid, false, now())"),
+            {"id": guard_vault, "uid": user_id},
+        )
+        db.execute(
+            text("INSERT INTO semantic_tree_v2.vault_user_role (vault_id, user_id, role) VALUES (:vid, :uid, 'owner')"),
+            {"vid": guard_vault, "uid": user_id},
+        )
+        guard_root = db.execute(
+            text("SELECT semantic_tree_v2.create_node(:uid, :vid, NULL, 'Root')"),
+            {"uid": user_id, "vid": guard_vault},
+        ).scalar()
+        guard_node = db.execute(
+            text("SELECT semantic_tree_v2.create_cluster_node(:uid, :vid, :pid)"),
+            {"uid": user_id, "vid": guard_vault, "pid": guard_root},
+        ).scalar()
+        for i in range(2):
+            did = str(uuid.uuid4())
+            db.execute(
+                text("""
+                    INSERT INTO documents (id, vault_id, url, title, extracted_text, full_text, captured_at, user_tags)
+                    VALUES (:id, :vault_id, :url, :title, :text, '', now(), ARRAY[]::text[])
+                """),
+                {
+                    "id": did,
+                    "vault_id": guard_vault,
+                    "url": f"https://guard.example/{i}",
+                    "title": "Postgres tuning guide",
+                    "text": "Postgres tuning guide for index strategy and query performance.",
+                },
+            )
+            db.execute(
+                text("SELECT semantic_tree_v2.attach_document(:uid, :vid, :nid, :did)"),
+                {"uid": user_id, "vid": guard_vault, "nid": str(guard_node), "did": did},
+            )
+        relabel_vault_deterministic_with_status(db, uuid.UUID(guard_vault), status="needs_llm")
+        deterministic_before = db.execute(
+            text("SELECT title FROM semantic_tree_v2.tree_node WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(guard_node), "vid": guard_vault},
+        ).scalar()
+        guard_stats = refine_pending_llm_labels(
+            db,
+            vault_id=uuid.UUID(guard_vault),
+            limit=10,
+            llm_callable=lambda _signals: "Undefined Cluster Insights",
+        )
+        guard_row = db.execute(
+            text("SELECT title, label_status, title_source FROM semantic_tree_v2.tree_node WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(guard_node), "vid": guard_vault},
+        ).fetchone()
+        log(
+            "Generic LLM output guard",
+            guard_row is not None
+            and guard_row[0] == deterministic_before
+            and guard_row[1] == "final"
+            and guard_row[2] == "llm",
+            expected="generic LLM label should not replace strong deterministic label",
+            actual=f"before={deterministic_before}, row={guard_row}, stats={guard_stats}",
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 12b: /topics/recluster mode routing behavior
+        # ---------------------------------------------------------------------
+        from fastapi import HTTPException
+        from app.main import recluster_topics
+
+        class _User:
+            def __init__(self, uid: str):
+                self.id = uuid.UUID(uid)
+
+        route_user = _User(user_id)
+        subtree_400 = False
+        try:
+            recluster_topics(
+                mode="subtree",
+                db=db,
+                user=route_user,
+                _=None,
+            )
+        except HTTPException as exc:
+            subtree_400 = exc.status_code == 400
+        log(
+            "Recluster mode routing validates subtree params",
+            subtree_400,
+            expected="HTTP 400 when subtree mode lacks vault_id/root_node_id",
+            actual=str(subtree_400),
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 13: Existing tree functions still work
         # ---------------------------------------------------------------------
         from app.semantic_tree_v2_repo import SemanticTreeV2Repo
 
@@ -764,6 +990,17 @@ def run_tests():
             "fetch_tree_flat includes label fields",
             has_label_fields,
             expected="label_signals, label_signature_hash, label_status present",
+            actual=str(first_node),
+        )
+        has_compression_metadata = (
+            "node_type" in first_node
+            and "locked" in first_node
+            and "auto_generated" in first_node
+        )
+        log(
+            "fetch_tree_flat includes compression metadata",
+            has_compression_metadata,
+            expected="node_type, locked, auto_generated present",
             actual=str(first_node),
         )
 

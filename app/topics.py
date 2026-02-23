@@ -1605,6 +1605,7 @@ def recluster_vaults_with_tree(
     """
     from .tree_management import (
         build_tree_from_clustering,
+        cleanup_cluster_document_duplicates,
         get_document_anchor,
         relabel_vault,
     )
@@ -1620,6 +1621,8 @@ def recluster_vaults_with_tree(
     vault_results = []
 
     for vault_id in vault_ids:
+        duplicate_rows_removed = cleanup_cluster_document_duplicates(db, vault_id)
+
         query = db.query(Document).filter(
             Document.vault_id == vault_id,
             Document.captured_at >= cutoff,
@@ -1658,6 +1661,7 @@ def recluster_vaults_with_tree(
                 "vault_id": str(vault_id),
                 "docs_clustered": len(to_cluster),
                 "anchored_reattached": len(anchored),
+                "duplicate_cluster_rows_removed": duplicate_rows_removed,
             })
             continue
 
@@ -1668,6 +1672,7 @@ def recluster_vaults_with_tree(
                 "vault_id": str(vault_id),
                 "docs_clustered": 0,
                 "anchored_reattached": len(anchored),
+                "duplicate_cluster_rows_removed": duplicate_rows_removed,
                 "message": "Need at least 2 docs with embeddings",
             })
             continue
@@ -1701,6 +1706,7 @@ def recluster_vaults_with_tree(
             "roots_created": len(root_ids),
             "docs_clustered": len(docs_with_embeds),
             "anchored_reattached": len(anchored),
+            "duplicate_cluster_rows_removed": duplicate_rows_removed,
         })
 
     return {

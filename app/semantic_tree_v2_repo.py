@@ -60,6 +60,7 @@ def compress_tree(tree: Dict[str, Any]) -> Dict[str, Any]:
                 len(children) == 1
                 and node.get("doc_count", 0) == 0
                 and node.get("node_type") == "cluster"
+                and bool(node.get("auto_generated", False)) is True
                 and not node.get("locked", False)
             ):
                 child_id = children[0]

@@ -11,7 +11,8 @@ from pydantic import BaseModel
 import uvicorn
 import os
 from datetime import datetime
-from typing import List
+from typing import List, Optional, Literal
+from uuid import UUID
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import asc, func, or_, text
@@ -735,6 +736,12 @@ def backfill_chunk_summaries_endpoint(
 def recluster_topics(
     days: int = 30,
     relabel: bool = False,
+    mode: Literal["full", "subtree", "relabel"] = "full",
+    vault_id: Optional[UUID] = None,
+    root_node_id: Optional[UUID] = None,
+    scope_mode: Literal["subtree", "frontier", "staging"] = "subtree",
+    overlap_threshold: float = 0.6,
+    min_similarity: float = 0.5,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
@@ -746,18 +753,135 @@ def recluster_topics(
     Args:
         days: Number of days of documents to include
         relabel: If True, run deterministic relabeling after recluster (default False)
+        mode: full (default), subtree, or relabel
+        vault_id: Optional single-vault target (required for subtree, optional for full/relabel)
+        root_node_id: Required for subtree mode
+        scope_mode: subtree/frontier/staging scope for subtree mode
+        overlap_threshold: Subtree stability matching threshold
+        min_similarity: Subtree assignment similarity floor
     
     Returns:
         Statistics about roots created, documents placed per vault
     """
     from .topics import recluster_vaults_with_tree
-    
-    vault_ids = get_user_accessible_vault_ids(user, db, min_role="editor")
-    if not vault_ids:
+    from .tree_management import recluster_scope, relabel_vault
+
+    if mode == "subtree":
+        if vault_id is None or root_node_id is None:
+            raise HTTPException(status_code=400, detail="subtree mode requires vault_id and root_node_id")
+        require_vault_access(user, vault_id, db, min_role="editor")
+        recluster_scope(
+            db=db,
+            vault_id=vault_id,
+            root_node_id=root_node_id,
+            mode=scope_mode,
+            user_id=user.id,
+            overlap_threshold=overlap_threshold,
+            min_similarity=min_similarity,
+            relabel_after=relabel,
+        )
+        return {
+            "status": "ok",
+            "mode": "subtree_recluster",
+            "vault_id": str(vault_id),
+            "root_node_id": str(root_node_id),
+            "scope_mode": scope_mode,
+            "relabel_after": relabel,
+        }
+
+    if mode == "relabel":
+        if vault_id is not None:
+            require_vault_access(user, vault_id, db, min_role="editor")
+            target_vault_ids = [vault_id]
+        else:
+            target_vault_ids = list(get_user_accessible_vault_ids(user, db, min_role="editor"))
+        if not target_vault_ids:
+            return {"status": "no_vaults", "message": "No vaults accessible", "vaults_processed": 0}
+        for vid in target_vault_ids:
+            relabel_vault(db, vid)
+        return {
+            "status": "ok",
+            "mode": "relabel_only",
+            "vaults_processed": len(target_vault_ids),
+            "vault_ids": [str(v) for v in target_vault_ids],
+        }
+
+    # mode == "full" (backward-compatible default behavior)
+    if vault_id is not None:
+        require_vault_access(user, vault_id, db, min_role="editor")
+        target_vault_ids = [vault_id]
+    else:
+        target_vault_ids = list(get_user_accessible_vault_ids(user, db, min_role="editor"))
+    if not target_vault_ids:
         return {"status": "no_vaults", "message": "No vaults accessible", "vaults_processed": 0}
 
     return recluster_vaults_with_tree(
-        db, user_id=user.id, days=days, vault_ids=list(vault_ids), relabel=relabel
+        db, user_id=user.id, days=days, vault_ids=target_vault_ids, relabel=relabel
+    )
+
+
+@app.post("/topics/recluster/full")
+def recluster_topics_full(
+    days: int = 30,
+    relabel: bool = False,
+    vault_id: Optional[UUID] = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """Explicit full tree rebuild endpoint."""
+    return recluster_topics(
+        days=days,
+        relabel=relabel,
+        mode="full",
+        vault_id=vault_id,
+        db=db,
+        user=user,
+        _=_,  # bearer dependency passthrough
+    )
+
+
+@app.post("/topics/recluster/subtree")
+def recluster_topics_subtree(
+    vault_id: UUID,
+    root_node_id: UUID,
+    scope_mode: Literal["subtree", "frontier", "staging"] = "subtree",
+    relabel: bool = False,
+    overlap_threshold: float = 0.6,
+    min_similarity: float = 0.5,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """Explicit scoped subtree recluster endpoint."""
+    return recluster_topics(
+        mode="subtree",
+        relabel=relabel,
+        vault_id=vault_id,
+        root_node_id=root_node_id,
+        scope_mode=scope_mode,
+        overlap_threshold=overlap_threshold,
+        min_similarity=min_similarity,
+        db=db,
+        user=user,
+        _=_,  # bearer dependency passthrough
+    )
+
+
+@app.post("/topics/relabel")
+def relabel_topics(
+    vault_id: Optional[UUID] = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """Explicit labeling-only endpoint (no recluster)."""
+    return recluster_topics(
+        mode="relabel",
+        vault_id=vault_id,
+        db=db,
+        user=user,
+        _=_,  # bearer dependency passthrough
     )
 
 
