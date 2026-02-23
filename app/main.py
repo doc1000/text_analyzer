@@ -437,6 +437,19 @@ def ingest(
                 "vault_id": str(vault.id) if vault else None,
             }
 
+    # 7c. Tree placement: compute reduced embedding, persist, place in semantic tree
+    if vault and user:
+        try:
+            from .topics import get_reduced_embeddings_for_recluster
+            from .tree_management import place_document
+            reduced = get_reduced_embeddings_for_recluster(db, [doc])
+            if doc.id in reduced:
+                place_document(db, vault.id, doc.id, reduced[doc.id], user.id)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[WARN] Tree placement failed (non-fatal): {e}")
+
     result = {
         "status": "ok",
         "document_id": str(doc.id),
@@ -630,25 +643,21 @@ def get_topics(
 
 @app.get("/topics/hierarchy")
 def get_topics_hierarchy(
-    days: int = 30, 
+    days: int = 30,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
     """
-    Return a D3-friendly hierarchy representation of topics with 3 levels:
-    
-    - Level 2 (Categories): Largest circles
-    - Level 1 (Topics): Medium circles within categories
-    - Level 0 (Fine): Smallest topic circles within topics
-    - Documents: Leaf nodes within Level 0 topics
-    
-    Uses the hierarchical topic structure from TOPIC_TABLE with parent_id relationships.
+    Return D3-friendly hierarchy from semantic_tree_v2.
     Only returns documents from vaults the user has access to.
     """
-    from .topics import build_hierarchical_topics_for_d3
+    from .topics import build_hierarchy_from_semantic_tree
+
     vault_ids = get_user_accessible_vault_ids(user, db)
-    return build_hierarchical_topics_for_d3(db, days=days, vault_ids=vault_ids)
+    return build_hierarchy_from_semantic_tree(
+        db, user_id=user.id, days=days, vault_ids=list(vault_ids) if vault_ids else None
+    )
 
 @app.get("/topics/clear_cache")
 def clear_cache():
@@ -725,61 +734,31 @@ def backfill_chunk_summaries_endpoint(
 @app.post("/topics/recluster")
 def recluster_topics(
     days: int = 30,
-    clear_assignments: bool = False,
+    relabel: bool = False,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
     """
-    Recluster documents using hierarchical agglomerative clustering.
-    Requires authenticated user - only reclusters documents in user's vaults.
-    
-    Creates topics at 3 levels:
-    - Level 0: Fine-grained (cosine sim >= 0.85)
-    - Level 1: Topics (cosine sim >= 0.75)
-    - Level 2: Super-topics/Categories (cosine sim >= 0.60)
-    
-    Topics at each level are linked to their parent at the next level up.
+    Recluster documents into semantic_tree_v2. Uses stored reduced_embedding when present.
+    Respects document_anchor; only replaces auto-generated cluster nodes.
     
     Args:
         days: Number of days of documents to include
-        clear_assignments: If True, clear ALL existing topic assignments and do full recluster.
-                          If False (default), only process uncategorized documents.
+        relabel: If True, run tag-based relabeling after recluster (default False)
     
     Returns:
-        Statistics about created topics at each level
+        Statistics about roots created, documents placed per vault
     """
-    from .topics import compute_hierarchical_topics, clear_topics_cache
+    from .topics import recluster_vaults_with_tree
     
-    # Get vault IDs the user can modify (editor or owner) - viewers cannot recluster
     vault_ids = get_user_accessible_vault_ids(user, db, min_role="editor")
-    print(f"topic vault ids: {vault_ids}")
-    # Optionally clear existing topic assignments (for full recluster)
-    # Only clear AUTO-ASSIGNED topics, preserve manual assignments
-    # Only clear assignments for documents in user's vaults
-    if clear_assignments:
-        query = db.query(Document).filter(
-            Document.assigned_topic_id != None,
-            Document.topic_manually_assigned != True  # Preserve manual assignments
-        )
-        if vault_ids:
-            query = query.filter(Document.vault_id.in_(vault_ids))
-        updated = query.update({
-            Document.assigned_topic_id: None,
-            Document.assigned_topic_title: None
-        }, synchronize_session=False)
-        db.commit()
-        print(f"Cleared topic assignments from {updated} auto-assigned documents (preserved manual assignments)")
-    
-    # Clear cache first
-    clear_topics_cache()
-    
-    # Compute hierarchical topics (pass clear_assignments to control behavior)
-    # Pass vault_ids to scope reclustering to user's documents
-    
-    result = compute_hierarchical_topics(db, days=days, full_recluster=clear_assignments, vault_ids=vault_ids)
-    
-    return result
+    if not vault_ids:
+        return {"status": "no_vaults", "message": "No vaults accessible", "vaults_processed": 0}
+
+    return recluster_vaults_with_tree(
+        db, user_id=user.id, days=days, vault_ids=list(vault_ids), relabel=relabel
+    )
 
 
 @app.get("/topics/stats")

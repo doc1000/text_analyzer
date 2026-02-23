@@ -1530,6 +1530,190 @@ def compute_document_embeddings(
     return doc_embeds
 
 
+def get_reduced_embeddings_for_recluster(
+    db: Session,
+    docs: List[Document],
+) -> Dict[UUID, np.ndarray]:
+    """
+    Get reduced embeddings for recluster. Prefer stored documents.reduced_embedding when present.
+    Only compute (from chunk avg + reduce) for docs where reduced_embedding IS NULL.
+    Persists newly computed reduced_embedding to documents.
+    Returns dict: document_id -> np.ndarray (reduced, padded to REDUCED_EMBED_DIM).
+    """
+    from .models import REDUCED_EMBED_DIM
+    from .tree_management import pad_to_reduced_dim
+
+    if not docs:
+        return {}
+
+    result: Dict[UUID, np.ndarray] = {}
+    docs_needing_compute: List[Document] = []
+
+    for d in docs:
+        if d.reduced_embedding is not None:
+            vec = d.reduced_embedding
+            if hasattr(vec, "__iter__") and not isinstance(vec, (str, bytes)):
+                arr = np.array(list(vec), dtype=np.float32)
+            else:
+                arr = np.array(vec, dtype=np.float32)
+            padded = pad_to_reduced_dim(arr)
+            result[d.id] = np.array(padded, dtype=np.float32)
+        else:
+            docs_needing_compute.append(d)
+
+    if not docs_needing_compute:
+        return result
+
+    # Compute from chunk embeddings for docs without stored reduced_embedding
+    full_embeds = compute_document_embeddings(db, docs_needing_compute)
+    if not full_embeds:
+        return result
+
+    doc_ids_ordered = [d.id for d in docs_needing_compute if d.id in full_embeds]
+    docs_with_embeds = [d for d in docs_needing_compute if d.id in full_embeds]
+    if not docs_with_embeds:
+        return result
+
+    X_full = np.stack([full_embeds[d.id] for d in docs_with_embeds], axis=0)
+    if len(docs_with_embeds) >= 2:
+        X_reduced = reduce_embeddings(X_full)
+    else:
+        X_reduced = X_full
+    if X_reduced.shape[1] > REDUCED_EMBED_DIM:
+        X_reduced = X_reduced[:, :REDUCED_EMBED_DIM]
+
+    for i, d in enumerate(docs_with_embeds):
+        vec = X_reduced[i] if i < X_reduced.shape[0] else X_reduced[0]
+        padded = pad_to_reduced_dim(vec)
+        arr = np.array(padded, dtype=np.float32)
+        result[d.id] = arr
+        d.reduced_embedding = padded
+    db.commit()
+    return result
+
+
+def recluster_vaults_with_tree(
+    db: Session,
+    user_id: UUID,
+    days: int = 30,
+    vault_ids: Optional[List[UUID]] = None,
+    relabel: bool = False,
+) -> dict:
+    """
+    Recluster documents per vault using semantic_tree_v2. Uses stored reduced_embedding when present.
+    Excludes anchored docs from clustering; re-attaches them to anchor after rebuild.
+    """
+    from .tree_management import (
+        build_tree_from_clustering,
+        get_document_anchor,
+        relabel_vault,
+    )
+
+    agglom_cfg = PREFERENCES.agglomerative
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    if not vault_ids:
+        return {"status": "no_vaults", "message": "No vaults accessible", "vaults_processed": 0}
+
+    total_roots = 0
+    total_docs_placed = 0
+    vault_results = []
+
+    for vault_id in vault_ids:
+        query = db.query(Document).filter(
+            Document.vault_id == vault_id,
+            Document.captured_at >= cutoff,
+        )
+        docs = query.order_by(Document.captured_at.desc()).all()
+
+        # Canonical URL dedupe
+        canonical_groups: Dict[str, List[Document]] = {}
+        for d in docs:
+            cu = canonicalize_url(d.url or "")
+            canonical_groups.setdefault(cu, []).append(d)
+        canonical_docs = []
+        for cu, group in canonical_groups.items():
+            group_sorted = sorted(group, key=lambda d: d.captured_at or datetime.min, reverse=True)
+            canonical_docs.append(group_sorted[0])
+
+        # Split anchored vs non-anchored
+        anchored: List[Tuple[UUID, UUID]] = []
+        to_cluster: List[Document] = []
+        for d in canonical_docs:
+            anchor_id = get_document_anchor(db, d.id, vault_id)
+            if anchor_id:
+                anchored.append((d.id, anchor_id))
+            else:
+                to_cluster.append(d)
+
+        if len(to_cluster) < 2:
+            if to_cluster:
+                reduced_single = get_reduced_embeddings_for_recluster(db, to_cluster)
+                d = to_cluster[0]
+                if d.id in reduced_single and user_id:
+                    from .tree_management import place_document
+                    place_document(db, vault_id, d.id, reduced_single[d.id], user_id)
+                    total_docs_placed += 1
+            vault_results.append({
+                "vault_id": str(vault_id),
+                "docs_clustered": len(to_cluster),
+                "anchored_reattached": len(anchored),
+            })
+            continue
+
+        reduced = get_reduced_embeddings_for_recluster(db, to_cluster)
+        docs_with_embeds = [d for d in to_cluster if d.id in reduced]
+        if len(docs_with_embeds) < 2:
+            vault_results.append({
+                "vault_id": str(vault_id),
+                "docs_clustered": 0,
+                "anchored_reattached": len(anchored),
+                "message": "Need at least 2 docs with embeddings",
+            })
+            continue
+
+        doc_ids_ordered = [d.id for d in docs_with_embeds]
+        X = np.stack([reduced[d.id] for d in docs_with_embeds], axis=0)
+        if X.shape[1] > 30:
+            X = X[:, :30]
+
+        labels_by_level, structure, _ = cluster_embeddings_hierarchical(
+            X,
+            doc_ids=doc_ids_ordered,
+            thresholds=agglom_cfg.level_thresholds,
+            linkage_method=agglom_cfg.linkage_method,
+        )
+        hierarchy = get_cluster_hierarchy(labels_by_level)
+
+        root_ids = build_tree_from_clustering(
+            db, vault_id, user_id,
+            labels_by_level, structure, hierarchy, doc_ids_ordered,
+            anchored_docs=anchored if anchored else None,
+        )
+        total_roots += len(root_ids)
+        total_docs_placed += len(docs_with_embeds) + len(anchored)
+
+        if relabel:
+            relabel_vault(db, vault_id)
+
+        vault_results.append({
+            "vault_id": str(vault_id),
+            "roots_created": len(root_ids),
+            "docs_clustered": len(docs_with_embeds),
+            "anchored_reattached": len(anchored),
+        })
+
+    return {
+        "status": "ok",
+        "mode": "tree_recluster",
+        "vaults_processed": len(vault_ids),
+        "total_roots_created": total_roots,
+        "total_topics_created": total_roots,
+        "documents_placed": total_docs_placed,
+        "vault_results": vault_results,
+    }
+
+
 def get_document_summaries(
     db: Session,
     doc_ids: List[UUID]
@@ -2565,6 +2749,140 @@ def get_topics_with_cache(
 
 def clear_topics_cache():
     _topics_cache.clear()
+# ---------- Semantic tree hierarchy for D3 ----------
+
+def build_hierarchy_from_semantic_tree(
+    db: Session,
+    user_id: UUID,
+    days: int = 30,
+    vault_ids: Optional[List[UUID]] = None,
+) -> dict:
+    """
+    Build D3-friendly hierarchy from semantic_tree_v2. Uses db session (no new engine).
+    """
+    from sqlalchemy import text
+    from .models import SemanticTreeNodeDocument
+    from .semantic_tree_v2_repo import build_tree, compress_tree
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    if vault_ids is not None and len(vault_ids) == 0:
+        return {"name": "Topics", "time_range_days": days, "children": [], "type": "root"}
+
+    all_children = []
+    for vault_id in (vault_ids or []):
+        result = db.execute(
+            text("SELECT semantic_tree_v2.fetch_tree_flat(:user_id, :vault_id)"),
+            {"user_id": str(user_id), "vault_id": str(vault_id)},
+        )
+        payload = result.scalar()
+        if not payload:
+            continue
+        nodes_raw = payload.get("nodes") if isinstance(payload, dict) else []
+        if not nodes_raw:
+            continue
+
+        tree = build_tree(nodes_raw)
+        tree = compress_tree(tree)
+
+        docs_by_node: Dict[str, List[Document]] = {}
+        rows = (
+            db.query(SemanticTreeNodeDocument.node_id, Document)
+            .join(Document, Document.id == SemanticTreeNodeDocument.document_id)
+            .filter(
+                SemanticTreeNodeDocument.vault_id == vault_id,
+                Document.captured_at >= cutoff,
+            )
+            .all()
+        )
+        for node_id, doc in rows:
+            key = str(node_id)
+            docs_by_node.setdefault(key, []).append(doc)
+
+        def to_d3_node(node_id: str) -> dict:
+            node = tree["by_id"].get(node_id)
+            if not node:
+                return None
+            doc_list = docs_by_node.get(node_id, [])
+            doc_children = [
+                {
+                    "name": d.title or "(no title)",
+                    "doc_id": str(d.id),
+                    "url": d.url,
+                    "captured_at": d.captured_at.isoformat() if d.captured_at else None,
+                    "size": 1,
+                    "type": "document",
+                }
+                for d in doc_list
+            ]
+            topic_children = []
+            for cid in node.get("children", []):
+                child_node = to_d3_node(cid)
+                if child_node and child_node.get("doc_count", 0) > 0:
+                    topic_children.append(child_node)
+            all_ch = topic_children + doc_children
+            doc_count = len(doc_children) + sum(c.get("doc_count", 0) for c in topic_children)
+            if doc_count == 0:
+                return None
+            return {
+                "name": node.get("title") or f"Node {node_id}",
+                "topic_id": node_id,
+                "summary": node.get("summary"),
+                "doc_count": doc_count,
+                "children": all_ch if all_ch else None,
+                "size": doc_count if not all_ch else None,
+                "type": "topic",
+            }
+
+        for root_id in tree.get("root_ids", []):
+            d3_node = to_d3_node(root_id)
+            if d3_node:
+                all_children.append(d3_node)
+
+    assigned_doc_ids = set()
+    if vault_ids:
+        nd_rows = (
+            db.query(SemanticTreeNodeDocument.document_id)
+            .filter(SemanticTreeNodeDocument.vault_id.in_(vault_ids))
+            .distinct()
+            .all()
+        )
+        assigned_doc_ids = {r[0] for r in nd_rows}
+    unassigned_query = db.query(Document).filter(
+        Document.captured_at >= cutoff,
+    )
+    if vault_ids:
+        unassigned_query = unassigned_query.filter(Document.vault_id.in_(vault_ids))
+    if assigned_doc_ids:
+        unassigned_query = unassigned_query.filter(~Document.id.in_(assigned_doc_ids))
+    unassigned_docs = unassigned_query.all()
+    if unassigned_docs:
+        all_children.append({
+            "name": f"Uncategorized ({len(unassigned_docs)})",
+            "topic_id": "uncategorized",
+            "level": -1,
+            "doc_count": len(unassigned_docs),
+            "children": [
+                {
+                    "name": d.title or "(no title)",
+                    "doc_id": str(d.id),
+                    "url": d.url,
+                    "captured_at": d.captured_at.isoformat() if d.captured_at else None,
+                    "size": 1,
+                    "type": "document",
+                }
+                for d in unassigned_docs
+            ],
+            "type": "topic",
+        })
+
+    return {
+        "name": "Topics",
+        "time_range_days": days,
+        "children": all_children,
+        "type": "root",
+    }
+
+
 # ---------- convert TopicResponse into D3-friendly hierarchy ----------
 
 def build_topics_hierarchy(resp: TopicsResponse) -> dict:

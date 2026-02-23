@@ -355,18 +355,21 @@ def build_tree_from_clustering(
     structure: Dict[int, Dict[int, List]],
     hierarchy: Dict[int, Dict[int, int]],
     doc_ids: List[UUID],
+    anchored_docs: Optional[List[Tuple[UUID, UUID]]] = None,
 ) -> List[UUID]:
     """
-    Build cluster node hierarchy from clustering output. Only modifies node_type='cluster' AND locked=FALSE.
-    Deletes existing cluster nodes in vault, creates new ones, attaches documents to level 0 nodes.
-    Manual and locked nodes are never touched.
+    Build cluster node hierarchy from clustering output.
+    Only deletes node_type='cluster' AND locked=FALSE AND (title_source IS NULL OR title_source = 'auto').
+    Manual, locked, and pinned/manual title nodes are never touched.
+    anchored_docs: [(doc_id, anchor_node_id)] - docs to re-attach to anchor after rebuild (excluded from clustering).
     """
-    # Delete existing cluster nodes except staging (CASCADE removes node_document and tree_node_stats)
+    # Delete only auto-generated cluster nodes; preserve staging, locked, pinned, manual
     db.execute(
         text(f"""
             DELETE FROM {SCHEMA}.tree_node
             WHERE vault_id = :vault_id AND node_type = 'cluster' AND locked = FALSE
             AND (node_role IS NULL OR node_role != 'staging')
+            AND (title_source IS NULL OR title_source = 'auto')
         """),
         {"vault_id": str(vault_id)},
     )
@@ -400,6 +403,13 @@ def build_tree_from_clustering(
         node_id = node_map[(level_0, cluster_label)]
         for doc_id in doc_id_list:
             attach_document_to_node(db, node_id, doc_id, user_id, vault_id)
+
+    # Re-attach anchored docs to their anchor (CASCADE removed their node_document links)
+    if anchored_docs:
+        for doc_id, anchor_node_id in anchored_docs:
+            attach_document_to_node(db, anchor_node_id, doc_id, user_id, vault_id)
+
+    recompute_node_centroids(db, vault_id)
 
     root_level = max(levels)
     root_ids = [node_map[(root_level, int(lbl))] for lbl in np.unique(labels_by_level[root_level])]

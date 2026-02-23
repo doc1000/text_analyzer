@@ -32,7 +32,8 @@ ReDoc: http://localhost:8000/redoc
 Auth for protected endpoints
 Most endpoints use Bearer token auth (API key).
 1. Create an API key
-Set VB_BOOTSTRAP_TOKEN in .env (e.g. dev-bootstrap-token-change-me from env.example).
+Set VB_BOOTSTRAP_TOKEN in .env (e.g. dev-bootstrap-token-change-me from env.example).  For our purposes, it will already be set in .env
+rememmber, it is not on the local system, it is set in Backend container.
 In Swagger, call POST /auth/bootstrap/create-key:
 Header: X-Bootstrap-Token: dev-bootstrap-token-change-me (or your value)
 Body: {"email": "your@email.com"}
