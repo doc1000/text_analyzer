@@ -745,7 +745,7 @@ def recluster_topics(
     
     Args:
         days: Number of days of documents to include
-        relabel: If True, run tag-based relabeling after recluster (default False)
+        relabel: If True, run deterministic relabeling after recluster (default False)
     
     Returns:
         Statistics about roots created, documents placed per vault

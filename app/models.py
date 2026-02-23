@@ -5,7 +5,7 @@ from sqlalchemy import (
     ForeignKey, Integer, Index, BigInteger,
     String, text, Boolean, UniqueConstraint, PrimaryKeyConstraint,
     )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID, JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import Session, declared_attr
@@ -212,6 +212,11 @@ class SemanticTreeNode(Base):
     distance_from_parent = Column(Float, nullable=True)
     auto_generated = Column(Boolean, nullable=False, default=False)
     locked = Column(Boolean, nullable=False, default=False)
+    title_source = Column(Text, nullable=False, default="auto")
+    title_evidence = Column(JSONB, nullable=True)
+    label_signals = Column(JSONB, nullable=True)
+    label_signature_hash = Column(Text, nullable=True)
+    label_status = Column(Text, nullable=False, default="auto")
 
 
 class DocumentAnchor(Base):

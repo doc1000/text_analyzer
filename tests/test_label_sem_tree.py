@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for tag-based semantic labeling (semantic_tree_v2).
+Tests for semantic labeling metadata + tag-based relabel safeguards (semantic_tree_v2).
 
 Validates:
 - Tag storage and GIN index
@@ -14,7 +14,7 @@ Validates:
 - Integration: synthetic vault lifecycle
 
 Prerequisites:
-- Migrations 008 through 013 applied
+- Migrations 008 through 014 applied
 - DATABASE_URL set
 - User test@example.com exists
 
@@ -399,7 +399,263 @@ def run_tests():
         )
 
         # ---------------------------------------------------------------------
-        # Test 7: Existing tree functions still work
+        # Test 7: update_node_label guards + no-op on unchanged signature
+        # ---------------------------------------------------------------------
+        upd_vault = str(uuid.uuid4())
+        db.execute(
+            text("INSERT INTO vaults (id, name, owner_id, is_personal, created_at) VALUES (:id, 'UpdateLabel', :uid, false, now())"),
+            {"id": upd_vault, "uid": user_id},
+        )
+        db.execute(
+            text("INSERT INTO semantic_tree_v2.vault_user_role (vault_id, user_id, role) VALUES (:vid, :uid, 'owner')"),
+            {"vid": upd_vault, "uid": user_id},
+        )
+        upd_root = db.execute(
+            text("SELECT semantic_tree_v2.create_node(:uid, :vid, NULL, 'Root')"),
+            {"uid": user_id, "vid": upd_vault},
+        ).scalar()
+        upd_node = db.execute(
+            text("SELECT semantic_tree_v2.create_cluster_node(:uid, :vid, :pid)"),
+            {"uid": user_id, "vid": upd_vault, "pid": upd_root},
+        ).scalar()
+
+        # First update should apply.
+        db.execute(
+            text("""
+                SELECT semantic_tree_v2.update_node_label(
+                    :vid, :nid, :label, CAST(:signals AS jsonb), :sig, :status, :src
+                )
+            """),
+            {
+                "vid": upd_vault,
+                "nid": str(upd_node),
+                "label": "Deterministic Label",
+                "signals": '{"doc_count": 3, "tags": [{"tag":"X","freq":2,"ratio":0.66}]}',
+                "sig": "sig-1",
+                "status": "auto",
+                "src": None,
+            },
+        )
+        first_row = db.execute(
+            text("""
+                SELECT title, title_source, label_signature_hash, label_status
+                FROM semantic_tree_v2.tree_node
+                WHERE id = :nid AND vault_id = :vid
+            """),
+            {"nid": str(upd_node), "vid": upd_vault},
+        ).fetchone()
+        log(
+            "update_node_label applies update",
+            first_row is not None
+            and first_row[0] == "Deterministic Label"
+            and first_row[1] == "auto"
+            and first_row[2] == "sig-1"
+            and first_row[3] == "auto",
+            expected="title updated, title_source=auto, signature/status persisted",
+            actual=str(first_row),
+        )
+
+        # Same signature should no-op (title unchanged).
+        db.execute(
+            text("""
+                SELECT semantic_tree_v2.update_node_label(
+                    :vid, :nid, :label, CAST(:signals AS jsonb), :sig, :status, :src
+                )
+            """),
+            {
+                "vid": upd_vault,
+                "nid": str(upd_node),
+                "label": "ShouldNotApply",
+                "signals": '{"doc_count": 3}',
+                "sig": "sig-1",
+                "status": "needs_llm",
+                "src": None,
+            },
+        )
+        same_sig_row = db.execute(
+            text("SELECT title, label_status FROM semantic_tree_v2.tree_node WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(upd_node), "vid": upd_vault},
+        ).fetchone()
+        log(
+            "update_node_label skips unchanged signature",
+            same_sig_row is not None and same_sig_row[0] == "Deterministic Label" and same_sig_row[1] == "auto",
+            expected="no-op when signature unchanged",
+            actual=str(same_sig_row),
+        )
+
+        # Pinned node should remain unchanged.
+        db.execute(
+            text("UPDATE semantic_tree_v2.tree_node SET title_source = 'pinned', title = 'PinnedLockedIn' WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(upd_node), "vid": upd_vault},
+        )
+        db.execute(
+            text("""
+                SELECT semantic_tree_v2.update_node_label(
+                    :vid, :nid, :label, CAST(:signals AS jsonb), :sig, :status, :src
+                )
+            """),
+            {
+                "vid": upd_vault,
+                "nid": str(upd_node),
+                "label": "PinnedShouldNotChange",
+                "signals": '{"doc_count": 4}',
+                "sig": "sig-2",
+                "status": "needs_llm",
+                "src": "llm",
+            },
+        )
+        pinned_guard_row = db.execute(
+            text("SELECT title, title_source, label_signature_hash FROM semantic_tree_v2.tree_node WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(upd_node), "vid": upd_vault},
+        ).fetchone()
+        log(
+            "update_node_label skips pinned nodes",
+            pinned_guard_row is not None
+            and pinned_guard_row[0] == "PinnedLockedIn"
+            and pinned_guard_row[1] == "pinned"
+            and pinned_guard_row[2] == "sig-1",
+            expected="pinned node unchanged",
+            actual=str(pinned_guard_row),
+        )
+
+        # Manual node should remain unchanged.
+        db.execute(
+            text("UPDATE semantic_tree_v2.tree_node SET title_source = 'manual', title = 'ManualLockedIn' WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(upd_node), "vid": upd_vault},
+        )
+        db.execute(
+            text("""
+                SELECT semantic_tree_v2.update_node_label(
+                    :vid, :nid, :label, CAST(:signals AS jsonb), :sig, :status, :src
+                )
+            """),
+            {
+                "vid": upd_vault,
+                "nid": str(upd_node),
+                "label": "ManualShouldNotChange",
+                "signals": '{"doc_count": 5}',
+                "sig": "sig-3",
+                "status": "needs_llm",
+                "src": None,
+            },
+        )
+        manual_guard_row = db.execute(
+            text("SELECT title, title_source, label_signature_hash FROM semantic_tree_v2.tree_node WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(upd_node), "vid": upd_vault},
+        ).fetchone()
+        log(
+            "update_node_label skips manual nodes",
+            manual_guard_row is not None
+            and manual_guard_row[0] == "ManualLockedIn"
+            and manual_guard_row[1] == "manual"
+            and manual_guard_row[2] == "sig-1",
+            expected="manual node unchanged",
+            actual=str(manual_guard_row),
+        )
+
+        # Locked node should remain unchanged.
+        db.execute(
+            text("UPDATE semantic_tree_v2.tree_node SET title_source = 'auto', locked = true, title = 'LockedIn' WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(upd_node), "vid": upd_vault},
+        )
+        db.execute(
+            text("""
+                SELECT semantic_tree_v2.update_node_label(
+                    :vid, :nid, :label, CAST(:signals AS jsonb), :sig, :status, :src
+                )
+            """),
+            {
+                "vid": upd_vault,
+                "nid": str(upd_node),
+                "label": "LockedShouldNotChange",
+                "signals": '{"doc_count": 6}',
+                "sig": "sig-4",
+                "status": "needs_llm",
+                "src": None,
+            },
+        )
+        locked_guard_row = db.execute(
+            text("SELECT title, locked, label_signature_hash FROM semantic_tree_v2.tree_node WHERE id = :nid AND vault_id = :vid"),
+            {"nid": str(upd_node), "vid": upd_vault},
+        ).fetchone()
+        log(
+            "update_node_label skips locked nodes",
+            locked_guard_row is not None
+            and locked_guard_row[0] == "LockedIn"
+            and bool(locked_guard_row[1]) is True
+            and locked_guard_row[2] == "sig-1",
+            expected="locked node unchanged",
+            actual=str(locked_guard_row),
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 8: Deterministic relabel uses content signals
+        # ---------------------------------------------------------------------
+        from app.labeling import relabel_vault_deterministic
+
+        det_vault = str(uuid.uuid4())
+        db.execute(
+            text("INSERT INTO vaults (id, name, owner_id, is_personal, created_at) VALUES (:id, 'Deterministic', :uid, false, now())"),
+            {"id": det_vault, "uid": user_id},
+        )
+        db.execute(
+            text("INSERT INTO semantic_tree_v2.vault_user_role (vault_id, user_id, role) VALUES (:vid, :uid, 'owner')"),
+            {"vid": det_vault, "uid": user_id},
+        )
+        det_root = db.execute(
+            text("SELECT semantic_tree_v2.create_node(:uid, :vid, NULL, 'Root')"),
+            {"uid": user_id, "vid": det_vault},
+        ).scalar()
+        det_node = db.execute(
+            text("SELECT semantic_tree_v2.create_cluster_node(:uid, :vid, :pid)"),
+            {"uid": user_id, "vid": det_vault, "pid": det_root},
+        ).scalar()
+        for i in range(3):
+            did = str(uuid.uuid4())
+            db.execute(
+                text("""
+                    INSERT INTO documents (id, vault_id, url, title, extracted_text, full_text, captured_at, user_tags)
+                    VALUES (:id, :vault_id, :url, :title, :text, '', now(), ARRAY[]::text[])
+                """),
+                {
+                    "id": did,
+                    "vault_id": det_vault,
+                    "url": f"https://det.example/{i}",
+                    "title": "Postgres migration checklist",
+                    "text": "Postgres migration rollout checklist for schema migration and index tuning.",
+                },
+            )
+            db.execute(
+                text("SELECT semantic_tree_v2.attach_document(:uid, :vid, :nid, :did)"),
+                {"uid": user_id, "vid": det_vault, "nid": str(det_node), "did": did},
+            )
+
+        stats = relabel_vault_deterministic(db, uuid.UUID(det_vault))
+        det_row = db.execute(
+            text("""
+                SELECT title, label_signature_hash, label_status, label_signals
+                FROM semantic_tree_v2.tree_node
+                WHERE id = :nid AND vault_id = :vid
+            """),
+            {"nid": str(det_node), "vid": det_vault},
+        ).fetchone()
+        det_title = (det_row[0] or "").lower() if det_row else ""
+        det_hash = det_row[1] if det_row else None
+        det_status = det_row[2] if det_row else None
+        det_signals = det_row[3] if det_row else {}
+        log(
+            "Deterministic relabel content signals",
+            det_row is not None
+            and bool(det_hash)
+            and det_status == "auto"
+            and "tfidf_terms" in (det_signals or {})
+            and ("postgres" in det_title or "migration" in det_title),
+            expected="non-generic content-derived label with hash/status",
+            actual=f"title={det_title}, status={det_status}, hash={det_hash}, stats={stats}",
+        )
+
+        # ---------------------------------------------------------------------
+        # Test 9: Existing tree functions still work
         # ---------------------------------------------------------------------
         from app.semantic_tree_v2_repo import SemanticTreeV2Repo
 
@@ -409,7 +665,7 @@ def run_tests():
         has_nodes = len(tree.get("by_id", {})) > 0
         log("fetch_tree_flat", has_nodes, expected="non-empty tree", actual=f"{len(tree.get('by_id', {}))} nodes")
 
-        # Check fetch_tree_flat returns title_source and title_evidence
+        # Check fetch_tree_flat returns title_source/title_evidence + new label metadata
         flat = db.execute(
             text("SELECT semantic_tree_v2.fetch_tree_flat(:uid, :vid)"),
             {"uid": user_id, "vid": vault_id},
@@ -418,6 +674,17 @@ def run_tests():
         first_node = nodes[0] if nodes else {}
         has_title_source = "title_source" in first_node
         log("fetch_tree_flat includes title_source", has_title_source, actual=str(first_node.get("title_source", "missing")))
+        has_label_fields = (
+            "label_signals" in first_node
+            and "label_signature_hash" in first_node
+            and "label_status" in first_node
+        )
+        log(
+            "fetch_tree_flat includes label fields",
+            has_label_fields,
+            expected="label_signals, label_signature_hash, label_status present",
+            actual=str(first_node),
+        )
 
         trans.rollback()
 

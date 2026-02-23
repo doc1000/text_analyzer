@@ -188,13 +188,13 @@ def recompute_node_centroids(db: Session, vault_id: UUID) -> None:
 
 def relabel_vault(db: Session, vault_id: UUID) -> None:
     """
-    Run tag-based relabeling on auto-generated nodes.
-    Skips locked and title_source='pinned' nodes.
+    Run deterministic relabeling on eligible cluster nodes.
+    Uses vault-wide TF-IDF + content/tag signals in app layer, then
+    writes via semantic_tree_v2.update_node_label.
     """
-    db.execute(
-        text(f"SELECT {SCHEMA}.relabel_vault(:vault_id)"),
-        {"vault_id": str(vault_id)},
-    )
+    from .labeling import relabel_vault_deterministic
+
+    relabel_vault_deterministic(db, vault_id)
     db.commit()
 
 
