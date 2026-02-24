@@ -56,19 +56,22 @@ def UMAP_recursive(
 ) -> np.ndarray:
     """Recursive UMAP: cascade reduce through n_comps (e.g. 96->48->24)."""
     if n_comps is None:
-        n_comps = [96, 48, 24]
+        n_comps = [48,12]
     reduced = embeddings
     umap_mod = get_umap()
-    for ncomp in n_comps:
+    for ncomp in n_comps: 
         if ncomp >= reduced.shape[1]:
             continue  # skip if target dim >= current
         reducer = umap_mod.UMAP(
             n_components=min(ncomp, reduced.shape[1] - 1),
             metric=metric,
+            n_neighbors=5,
+            min_dist=0.05,
             random_state=random_state,
             init="random",  # avoids spectral init / eigsh issues with few samples
         )
         reduced = reducer.fit_transform(reduced)
+    print(f"UMAP Reduced embeddings from {embeddings.shape[1]} to {reduced.shape[1]} dimensions for {embeddings.shape[0]} documents")
     return reduced
 
 
@@ -130,6 +133,7 @@ def reduce_embeddings(X: np.ndarray) -> np.ndarray:
         return pca.fit_transform(X)
 
     if cfg.dim_reducer == "umap":
+        #print(f"UMAP TRIGGERED")
         return UMAP_recursive(
             embeddings=X,
             metric="cosine",
