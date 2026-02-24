@@ -7,7 +7,8 @@ from sqlalchemy.orm import sessionmaker #, Session
 from .models import Base, get_or_create_embedding_class
 from .config import PREFERENCES
 
-_raw_db_url = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpass@db:5432/badgerdb")
+# Default: localhost for local dev. Docker Compose overrides with db:5432.
+_raw_db_url = os.getenv("DATABASE_URL", "postgresql+psycopg2://badger:badgerpass@localhost:5432/badgerdb")
 
 # Fly.io uses postgres:// but SQLAlchemy needs postgresql://
 # Also ensure we use psycopg2 driver

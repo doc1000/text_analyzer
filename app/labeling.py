@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from .db import DOCUMENT_TABLE
 from .config import PREFERENCES
 from .helpers import _ollama_chat, _openai_chat
-from .models import Document, SemanticTreeNode, SemanticTreeNodeDocument
+from .models import Document, SemanticTreeNode
 
 
 SCHEMA = "semantic_tree_v2"
@@ -82,6 +82,7 @@ class VaultLabelContext:
     doc_texts: Dict[UUID, str]
     doc_titles: Dict[UUID, str]
     doc_tags: Dict[UUID, List[str]]
+    doc_summaries: Dict[UUID, str]  # summary_text only, for per-doc phrase extraction
 
 
 def _tokenize(text_value: str) -> List[str]:
@@ -151,7 +152,7 @@ def _build_vault_label_context(
                 ordered_doc_ids.append(did)
 
     if not ordered_doc_ids:
-        return VaultLabelContext({}, [], None, {}, {}, {})
+        return VaultLabelContext({}, [], None, {}, {}, {}, {})
 
     rows = (
         db.query(
@@ -171,6 +172,7 @@ def _build_vault_label_context(
     doc_texts: Dict[UUID, str] = {}
     doc_titles: Dict[UUID, str] = {}
     doc_tags: Dict[UUID, List[str]] = {}
+    doc_summaries: Dict[UUID, str] = {}
     for r in rows:
         doc_id = r[0]
         title = (r[1] or "").strip()
@@ -185,6 +187,7 @@ def _build_vault_label_context(
         doc_texts[doc_id] = text_value
         doc_titles[doc_id] = title
         doc_tags[doc_id] = tags
+        doc_summaries[doc_id] = summary_text
 
     # Keep stable order for reproducible signature behavior.
     doc_ids = [did for did in ordered_doc_ids if did in doc_texts]
@@ -218,6 +221,7 @@ def _build_vault_label_context(
         doc_texts=doc_texts,
         doc_titles=doc_titles,
         doc_tags=doc_tags,
+        doc_summaries=doc_summaries,
     )
 
 
@@ -271,6 +275,56 @@ def _resolve_subtree_docs_for_nodes(
         nid: sorted(list(docs), key=lambda d: str(d))
         for nid, docs in by_node.items()
     }
+
+
+def _deduplicate_phrases(phrases: List[str]) -> List[str]:
+    """
+    Drop phrases that are substrings of already-selected phrases.
+    Keeps longer/more specific terms (e.g. 'machine learning' over 'machine').
+    """
+    if not phrases:
+        return []
+    seen: List[str] = []
+    for p in phrases:
+        p_clean = (p or "").strip()
+        if not p_clean:
+            continue
+        p_lower = p_clean.lower()
+        # Skip if p is a proper substring of something already in seen
+        if any(p_lower != s.lower() and p_lower in s.lower() for s in seen):
+            continue
+        # Remove shorter phrases that p subsumes
+        seen = [s for s in seen if s.lower() == p_lower or s.lower() not in p_lower]
+        seen.append(p_clean)
+    return seen
+
+
+def _extract_phrases_per_doc(
+    ctx: VaultLabelContext,
+    doc_ids: List[UUID],
+    top_per_doc: int = 5,
+    top_aggregate: int = 10,
+) -> List[dict]:
+    """
+    Extract top phrases from each doc (summary/title/tags), limit per doc,
+    aggregate with weight=1 per doc. Prevents long documents from dominating.
+    """
+    pool: Counter[str] = Counter()
+    for did in doc_ids:
+        title = (ctx.doc_titles.get(did) or "").strip()
+        tags = ctx.doc_tags.get(did) or []
+        summary = (ctx.doc_summaries.get(did) or "").strip()
+        text = f"{title} {' '.join(str(t or '').strip() for t in tags)} {summary}".strip()
+        if not text:
+            continue
+        phrases = _extract_summary_phrases(text, top_k=top_per_doc)
+        for p in phrases:
+            phrase = (p.get("phrase") or "").strip()
+            if phrase:
+                pool[phrase] += 1
+    top_phrases = [p for p, _ in pool.most_common(top_aggregate)]
+    top_phrases = _deduplicate_phrases(top_phrases)
+    return [{"phrase": p} for p in top_phrases[:top_aggregate]]
 
 
 def _top_tfidf_terms(
@@ -330,7 +384,7 @@ def _select_deterministic_label(signals: dict) -> Tuple[str, float]:
     for t in summary_phrases:
         phrase = (t.get("phrase") or "").strip()
         if phrase:
-            candidate_scores[phrase] += 0.30 * float(t.get("freq", 0))
+            candidate_scores[phrase] += 0.30 * float(t.get("freq", 0) or 1.0)
     for t in title_terms:
         term = (t.get("term") or "").strip()
         if term:
@@ -353,47 +407,39 @@ def _select_deterministic_label(signals: dict) -> Tuple[str, float]:
 
 
 def _compute_signature_hash(node_id: UUID, signals: dict, doc_ids: List[UUID]) -> str:
-    # Stable, normalized subset for change detection.
+    # Stable, normalized subset for change detection. Phrase/tag/term strings only (no scores).
+    def _phrases(entries: List[dict], key: str) -> List[str]:
+        return [str(x.get(key) or "").strip() for x in entries[:10] if x.get(key)]
+
     sig_payload = {
         "node_id": str(node_id),
         "doc_count": int(signals.get("doc_count", 0)),
         "doc_ids": [str(x) for x in sorted(doc_ids, key=lambda d: str(d))],
-        "tags": [
-            {"tag": x.get("tag"), "freq": int(x.get("freq", 0))}
-            for x in signals.get("tags", [])[:10]
-        ],
-        "tfidf_terms": [
-            {"phrase": x.get("phrase"), "score": round(float(x.get("score", 0.0)), 6)}
-            for x in signals.get("tfidf_terms", [])[:10]
-        ],
-        "title_terms": [
-            {"term": x.get("term"), "freq": int(x.get("freq", 0))}
-            for x in signals.get("title_terms", [])[:10]
-        ],
-        "summary_phrases": [
-            {"phrase": x.get("phrase"), "freq": int(x.get("freq", 0))}
-            for x in signals.get("summary_phrases", [])[:10]
-        ],
+        "tags": _phrases(signals.get("tags", []), "tag"),
+        "tfidf_terms": _phrases(signals.get("tfidf_terms", []), "phrase"),
+        "title_terms": _phrases(signals.get("title_terms", []), "term"),
+        "summary_phrases": _phrases(signals.get("summary_phrases", []), "phrase"),
     }
     encoded = json.dumps(sig_payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _build_node_signals(
-    ctx: VaultLabelContext,
-    node_doc_ids: List[UUID],
-) -> dict:
+def _build_node_signals(ctx: VaultLabelContext, node_doc_ids: List[UUID]) -> dict:
+    """
+    Build label signals from document summaries, titles, tags, and keywords.
+    Per-doc phrase extraction with equal doc weighting (prevents long docs from dominating).
+    """
     doc_ids = [did for did in node_doc_ids if did in ctx.doc_texts]
     titles = [ctx.doc_titles.get(did, "") for did in doc_ids if ctx.doc_titles.get(did)]
-    merged_text = "\n".join(ctx.doc_texts.get(did, "") for did in doc_ids if ctx.doc_texts.get(did))
-    signals = {
+    return {
         "doc_count": len(doc_ids),
-        "tags": _aggregate_tags(ctx.doc_tags, doc_ids),
+        "tags": _aggregate_tags(ctx.doc_tags, doc_ids)[:10],
         "tfidf_terms": _top_tfidf_terms(ctx, doc_ids, top_k=10),
         "title_terms": _aggregate_title_terms(titles, top_k=10),
-        "summary_phrases": _extract_summary_phrases(merged_text, top_k=10),
+        "summary_phrases": _extract_phrases_per_doc(
+            ctx, doc_ids, top_per_doc=5, top_aggregate=10
+        ),
     }
-    return signals
 
 
 def relabel_vault_deterministic(db: Session, vault_id: UUID) -> dict:
@@ -521,9 +567,7 @@ def relabel_vault_deterministic_with_status(
     node_ids = [row[0] for row in eligible_rows]
     old_hash_by_node = {row[0]: row[1] for row in eligible_rows}
 
-    # Subtree-aware signal extraction: use all descendant documents, not only direct attachments.
     node_to_docs = _resolve_subtree_docs_for_nodes(db, vault_id, node_ids)
-
     ctx = _build_vault_label_context(db, vault_id, node_to_docs)
 
     updated_nodes = 0
@@ -576,43 +620,58 @@ def relabel_vault_deterministic_with_status(
 
 
 def _compose_llm_refinement_prompt(signals: dict) -> str:
-    tags = signals.get("tags", [])[:5]
-    tfidf_terms = signals.get("tfidf_terms", [])[:8]
-    summary_phrases = signals.get("summary_phrases", [])[:8]
-    title_terms = signals.get("title_terms", [])[:6]
+    tags = signals.get("tags", [])[:10]
+    tfidf_terms = signals.get("tfidf_terms", [])[:10]
+    summary_phrases = signals.get("summary_phrases", [])[:10]
+    title_terms = signals.get("title_terms", [])[:10]
     doc_count = int(signals.get("doc_count", 0))
     deterministic_label = (signals.get("deterministic_label") or "").strip()
 
-    def _fmt(entries: List[dict], key: str, score_key: Optional[str] = None) -> str:
+    def _fmt_phrases_only(entries: List[dict], key: str) -> str:
+        """Format entries as plain list; words/phrases only, no numbers."""
         if not entries:
             return "- (none)"
         lines = []
         for e in entries:
             term = str(e.get(key) or "").strip()
-            if not term:
-                continue
-            if score_key and e.get(score_key) is not None:
-                lines.append(f"- {term} ({score_key}={e.get(score_key)})")
-            else:
+            if term:
                 lines.append(f"- {term}")
         return "\n".join(lines) if lines else "- (none)"
 
     return (
-        "You are refining a cluster label.\n"
-        "Use the provided signals only. Produce a concise label (max 6 words).\n"
-        "Avoid generic labels like General, Topic, Cluster, Misc.\n\n"
+        """You are refining a cluster label.
+
+        Your goal:
+        Generate a label that captures the unifying theme across all documents.
+
+        If multiple specific entities (e.g., places, products, people) appear,
+        prefer a higher-level category that unites them.
+
+        Use specific entities only as secondary clarifiers.
+
+        Output format (exactly two lines):
+        Title:
+        Detail
+        or
+        <short general theme (max 4 words)>
+        <optional clarifiers such as key entities, separated by commas>"""
+        "Example: Travel: Capetown, Isla Mujeres, Winter Park"
+        "Example: Pets: Dog adoption, Dog Training"
+        "Example: AI Research: Clustering, Drift Detection"
+        "If multiple locations, products, or proper nouns appear, "
+        "do NOT choose just one unless it clearly dominates the entire cluster. "
+        "Prefer a category that includes all of them."
         f"Document count: {doc_count}\n"
         f"Deterministic label: {deterministic_label or '(none)'}\n\n"
         "Top tags:\n"
-        f"{_fmt(tags, 'tag', 'ratio')}\n\n"
+        f"{_fmt_phrases_only(tags, 'tag')}\n\n"
         "Top TF-IDF terms:\n"
-        f"{_fmt(tfidf_terms, 'phrase', 'score')}\n\n"
+        f"{_fmt_phrases_only(tfidf_terms, 'phrase')}\n\n"
         "Top summary phrases:\n"
-        f"{_fmt(summary_phrases, 'phrase', 'freq')}\n\n"
+        f"{_fmt_phrases_only(summary_phrases, 'phrase')}\n\n"
         "Top title terms:\n"
-        f"{_fmt(title_terms, 'term', 'freq')}\n\n"
-        "Respond with exactly one line:\n"
-        "LABEL: <label>"
+        f"{_fmt_phrases_only(title_terms, 'term')}\n\n"
+        "Respond with exactly one line:\nLABEL: <label>"
     )
 
 

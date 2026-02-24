@@ -19,8 +19,9 @@ Prerequisites:
 - User test@example.com exists
 
 Usage:
-    export DATABASE_URL=postgresql+psycopg2://badger:badgerpass@localhost:5433/badgerdb
+    # Local (default: localhost:5432; use db:5432 when running inside Docker)
     python tests/test_label_sem_tree.py
+    # Or: export DATABASE_URL=postgresql+psycopg2://badger:badgerpass@localhost:5432/badgerdb
 """
 
 import os
@@ -40,13 +41,13 @@ from dataclasses import dataclass
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-_raw_db_url = os.getenv("DATABASE_URL")
-if _raw_db_url:
-    DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-    if "postgresql://" in DATABASE_URL and "+psycopg2" not in DATABASE_URL:
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
-else:
-    DATABASE_URL = None
+_raw_db_url = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg2://badger:badgerpass@localhost:5432/badgerdb",
+)
+DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+if "postgresql://" in DATABASE_URL and "+psycopg2" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@example.com")
 
@@ -61,10 +62,6 @@ class TestResult:
 
 
 def run_tests():
-    if not DATABASE_URL:
-        print("ERROR: DATABASE_URL environment variable not set")
-        return 1
-
     results: list[TestResult] = []
 
     def log(name: str, passed: bool, expected: str = "", actual: str = "", details: str = ""):
@@ -78,6 +75,66 @@ def run_tests():
                 print(f"         Actual: {actual}")
             if details:
                 print(f"         Details: {details}")
+
+    # ---------------------------------------------------------------------
+    # Unit tests (no DB required) - new labeling pipeline
+    # ---------------------------------------------------------------------
+    from app.labeling import (
+        _deduplicate_phrases,
+        _extract_phrases_per_doc,
+        _compose_llm_refinement_prompt,
+        VaultLabelContext,
+    )
+
+    dedup = _deduplicate_phrases(["machine learning", "machine", "learning", "deep learning"])
+    log(
+        "_deduplicate_phrases keeps longer terms",
+        "machine" not in dedup and "machine learning" in dedup,
+        expected="'machine' dropped when 'machine learning' present",
+        actual=str(dedup),
+    )
+
+    ctx = VaultLabelContext(
+        doc_index={},
+        feature_names=[],
+        tfidf_matrix=None,
+        doc_texts={},
+        doc_titles={},
+        doc_tags={},
+        doc_summaries={},
+    )
+    did1 = uuid.uuid4()
+    did2 = uuid.uuid4()
+    ctx.doc_titles[did1] = "Capetown travel guide"
+    ctx.doc_summaries[did1] = "Capetown beaches and culture"
+    ctx.doc_tags[did1] = ["travel"]
+    ctx.doc_titles[did2] = "Winter Park skiing"
+    ctx.doc_summaries[did2] = "Ski resorts in Winter Park"
+    ctx.doc_tags[did2] = []
+    phrases_out = _extract_phrases_per_doc(ctx, [did1, did2], top_per_doc=3, top_aggregate=6)
+    phrases_strs = [p.get("phrase", "") for p in phrases_out]
+    log(
+        "_extract_phrases_per_doc normalizes per doc",
+        len(phrases_strs) >= 2 and any("capetown" in p.lower() or "travel" in p.lower() for p in phrases_strs),
+        expected="phrases from both docs (no single doc dominating)",
+        actual=str(phrases_strs[:6]),
+    )
+
+    prompt = _compose_llm_refinement_prompt({
+        "tags": [{"tag": "travel"}],
+        "tfidf_terms": [{"phrase": "beach"}, {"phrase": "ski"}],
+        "summary_phrases": [{"phrase": "vacation"}],
+        "title_terms": [{"term": "guide"}],
+        "doc_count": 5,
+        "deterministic_label": "Travel",
+    })
+    has_phrases_only = "travel" in prompt and "beach" in prompt and "score=" not in prompt and "freq=" not in prompt
+    log(
+        "_compose_llm_refinement_prompt phrases only no numbers",
+        has_phrases_only,
+        expected="phrases in prompt without score/freq/ratio",
+        actual="score= in prompt" if "score=" in prompt else ("freq= in prompt" if "freq=" in prompt else "ok"),
+    )
 
     engine = create_engine(DATABASE_URL)
     session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
