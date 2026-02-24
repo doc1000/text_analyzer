@@ -36,6 +36,7 @@ def ensure_schemas():
             print(f"⚠ Could not enable pgcrypto extension: {e}")        
         # Schema for dynamic embedding tables + metadata
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS embedding"))
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS semantic_tree_v2"))
 
 
 def _migrate_add_summary_columns():
