@@ -447,6 +447,28 @@ def find_node_by_centroid_similarity(
     return (row[0], float(row[1]))
 
 
+def _update_node_centroid(
+    db: Session,
+    node_id: UUID,
+    vault_id: UUID,
+    centroid: np.ndarray,
+) -> None:
+    """
+    Set centroid on a cluster node. Used when creating new nodes so level 1+
+    hierarchy nodes (which never get documents) have centroid for future matching.
+    """
+    vec = pad_to_reduced_dim(centroid)
+    vec_str = "[" + ",".join(str(x) for x in vec) + "]"
+    db.execute(
+        text(f"""
+            UPDATE {SCHEMA}.tree_node
+            SET centroid = CAST(:embedding AS vector), updated_at = now()
+            WHERE id = :node_id AND vault_id = :vault_id
+        """),
+        {"node_id": str(node_id), "vault_id": str(vault_id), "embedding": vec_str},
+    )
+
+
 def clear_node_membership(db: Session, node_id: UUID, vault_id: UUID) -> None:
     """
     Remove all document assignments from a node. Leaves node in place for reuse.
@@ -625,6 +647,9 @@ def build_tree_from_clustering(
                 )
                 node_id = result.scalar()
                 used_node_ids.add(node_id)
+                # Set centroid for new nodes (level 1+ never get docs, so recompute won't set it)
+                if centroid is not None:
+                    _update_node_centroid(db, node_id, vault_id, centroid)
 
             node_map[(level, cluster_label)] = node_id
 
@@ -895,3 +920,6 @@ def recluster_scope(
     recompute_node_centroids(db, vault_id)
     if relabel_after:
         relabel_vault(db, vault_id)
+        from .labeling import refine_pending_llm_labels
+        refine_pending_llm_labels(db, vault_id=vault_id, limit=500)
+        db.commit()

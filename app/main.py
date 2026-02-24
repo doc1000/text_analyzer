@@ -765,8 +765,8 @@ def backfill_chunk_summaries_endpoint(
 
 @app.post("/topics/recluster")
 def recluster_topics(
-    days: int = 30,
-    relabel: bool = False,
+    days: int = 60,
+    relabel: bool = True,
     mode: Literal["full", "subtree", "relabel"] = "full",
     vault_id: Optional[UUID] = None,
     root_node_id: Optional[UUID] = None,
@@ -828,8 +828,11 @@ def recluster_topics(
             target_vault_ids = list(get_user_accessible_vault_ids(user, db, min_role="editor"))
         if not target_vault_ids:
             return {"status": "no_vaults", "message": "No vaults accessible", "vaults_processed": 0}
+        from .labeling import refine_pending_llm_labels
         for vid in target_vault_ids:
             relabel_vault(db, vid)
+            refine_pending_llm_labels(db, vault_id=vid, limit=500)
+            db.commit()
         return {
             "status": "ok",
             "mode": "relabel_only",

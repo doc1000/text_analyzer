@@ -68,9 +68,10 @@ _STOP_WORDS = {
     "who",
     "why",
     "how",
+    "document"
 }
 _GENERIC_LABEL_TERMS = ("cluster", "undefined", "misc", "insights", "unclassified")
-LLM_REFINEMENT_CONFIDENCE_THRESHOLD = 0.65
+LLM_REFINEMENT_CONFIDENCE_THRESHOLD = 0.95
 
 
 @dataclass
@@ -457,8 +458,6 @@ def relabel_nodes(
             continue
 
         effective_status = status
-        if status == "needs_llm" and confidence < LLM_REFINEMENT_CONFIDENCE_THRESHOLD:
-            effective_status = "auto"
 
         db.execute(
             text(
@@ -542,10 +541,7 @@ def relabel_vault_deterministic_with_status(
             skipped_unchanged += 1
             continue
 
-        # Queue for LLM only when confidence meets threshold
         effective_status = status
-        if status == "needs_llm" and confidence < LLM_REFINEMENT_CONFIDENCE_THRESHOLD:
-            effective_status = "auto"
 
         db.execute(
             text(
