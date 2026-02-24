@@ -2772,7 +2772,7 @@ def build_hierarchy_from_semantic_tree(
     """
     from sqlalchemy import text
     from .models import SemanticTreeNodeDocument
-    from .semantic_tree_v2_repo import build_tree, compress_tree
+    from .semantic_tree_v2_repo import build_tree, compress_tree, collapse_single_doc_leaves
 
     cutoff = datetime.utcnow() - timedelta(days=days)
     if vault_ids is not None and len(vault_ids) == 0:
@@ -2807,6 +2807,8 @@ def build_hierarchy_from_semantic_tree(
         for node_id, doc in rows:
             key = str(node_id)
             docs_by_node.setdefault(key, []).append(doc)
+
+        collapse_single_doc_leaves(tree, docs_by_node)
 
         def to_d3_node(node_id: str) -> dict:
             node = tree["by_id"].get(node_id)

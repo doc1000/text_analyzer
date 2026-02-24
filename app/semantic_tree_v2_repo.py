@@ -84,6 +84,47 @@ def compress_tree(tree: Dict[str, Any]) -> Dict[str, Any]:
     return tree
 
 
+def collapse_single_doc_leaves(
+    tree: Dict[str, Any],
+    docs_by_node: Dict[str, List],
+) -> None:
+    """
+    Move single-doc leaf cluster nodes up to their parent, but only when the parent
+    has >= 2 children. This prevents the cascade that would otherwise flatten the tree.
+    Mutates tree and docs_by_node in place. Read-only path only - does not write to DB.
+    """
+    changed = True
+    while changed:
+        changed = False
+        for node_id, node in list(tree["by_id"].items()):
+            children = node.get("children", [])
+            key = str(node_id)
+            doc_list = docs_by_node.get(key, [])
+            if not (
+                len(doc_list) == 1
+                and len(children) == 0
+                and node.get("node_type") == "cluster"
+                and bool(node.get("auto_generated", False)) is True
+                and not node.get("locked", False)
+            ):
+                continue
+            parent_id = node.get("parent_id")
+            if parent_id is None or parent_id not in tree["by_id"]:
+                continue
+            parent_children = tree["by_id"][parent_id].get("children", [])
+            if len(parent_children) < 2:
+                # Removing this child would leave parent as single-child; skip
+                continue
+            # Safe to collapse: move doc to parent
+            parent_key = str(parent_id)
+            docs_by_node.setdefault(parent_key, []).append(doc_list[0])
+            del docs_by_node[key]
+            parent_children.remove(node_id)
+            del tree["by_id"][node_id]
+            changed = True
+            break
+
+
 class SemanticTreeV2Repo:
     """Repository for semantic_tree_v2 schema. Uses SQL functions for permissions."""
 
