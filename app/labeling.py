@@ -611,6 +611,24 @@ def relabel_vault_deterministic_with_status(
         )
         updated_nodes += 1
 
+    # Nodes skipped above (hash unchanged) keep their old label_status.
+    # Promote any remaining 'auto' cluster nodes to 'needs_llm' so the background
+    # executor/scheduler can refine them — prevents nodes from being permanently stuck.
+    db.execute(
+        text(
+            f"""
+            UPDATE {SCHEMA}.tree_node
+            SET label_status = 'needs_llm', updated_at = now()
+            WHERE vault_id = :vault_id
+              AND node_type = 'cluster'
+              AND locked = FALSE
+              AND title_source = 'auto'
+              AND label_status = 'auto'
+            """
+        ),
+        {"vault_id": str(vault_id)},
+    )
+
     return {
         "vault_id": str(vault_id),
         "eligible_nodes": len(node_ids),

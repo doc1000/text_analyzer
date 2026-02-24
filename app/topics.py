@@ -1894,7 +1894,6 @@ def recluster_vaults_with_tree(
         get_document_anchor,
         relabel_vault,
     )
-    from .labeling import refine_pending_llm_labels
 
     agglom_cfg = PREFERENCES.agglomerative
     cutoff = datetime.utcnow() - timedelta(days=days)
@@ -1987,9 +1986,8 @@ def recluster_vaults_with_tree(
 
         if relabel:
             relabel_vault(db, vault_id)
-            # Run LLM refinement immediately so labels are replaced without waiting for scheduler
-            refine_pending_llm_labels(db, vault_id=vault_id, limit=500)
-            db.commit()
+            from .scheduler import trigger_vault_llm_refinement
+            trigger_vault_llm_refinement(vault_id)
 
         vault_results.append({
             "vault_id": str(vault_id),

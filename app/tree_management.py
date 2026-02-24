@@ -920,6 +920,5 @@ def recluster_scope(
     recompute_node_centroids(db, vault_id)
     if relabel_after:
         relabel_vault(db, vault_id)
-        from .labeling import refine_pending_llm_labels
-        refine_pending_llm_labels(db, vault_id=vault_id, limit=500)
-        db.commit()
+        from .scheduler import trigger_vault_llm_refinement
+        trigger_vault_llm_refinement(vault_id)

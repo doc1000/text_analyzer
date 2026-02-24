@@ -828,11 +828,10 @@ def recluster_topics(
             target_vault_ids = list(get_user_accessible_vault_ids(user, db, min_role="editor"))
         if not target_vault_ids:
             return {"status": "no_vaults", "message": "No vaults accessible", "vaults_processed": 0}
-        from .labeling import refine_pending_llm_labels
+        from .scheduler import trigger_vault_llm_refinement
         for vid in target_vault_ids:
             relabel_vault(db, vid)
-            refine_pending_llm_labels(db, vault_id=vid, limit=500)
-            db.commit()
+            trigger_vault_llm_refinement(vid)
         return {
             "status": "ok",
             "mode": "relabel_only",

@@ -9,6 +9,7 @@ import os
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
+from uuid import UUID
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -115,6 +116,47 @@ def run_scheduled_label_refinement():
         logger.error(f"Fatal error in scheduled label refinement: {e}", exc_info=True)
     finally:
         db.close()
+
+
+def trigger_vault_llm_refinement(vault_id: UUID) -> None:
+    """
+    Immediately submit LLM label refinement for a vault to the background executor.
+
+    Returns without blocking — the HTTP response can be sent before LLM calls complete.
+    Falls back gracefully if the executor has not been initialized yet (scheduler not started).
+    """
+    global _executor
+    if _executor is None:
+        logger.warning(
+            "Background executor not ready; LLM refinement for vault %s deferred to scheduler",
+            vault_id,
+        )
+        return
+
+    def _job() -> None:
+        db: Session = SessionLocal()
+        try:
+            from .labeling import refine_pending_llm_labels
+
+            stats = refine_pending_llm_labels(db, vault_id=vault_id, limit=500)
+            db.commit()
+            logger.info(
+                "Immediate LLM refinement complete vault=%s processed=%s finalized=%s failed=%s",
+                vault_id,
+                stats.get("processed", 0),
+                stats.get("finalized", 0),
+                stats.get("failed", 0),
+            )
+        except Exception as e:
+            db.rollback()
+            logger.error(
+                "Immediate LLM refinement failed vault=%s: %s", vault_id, e, exc_info=True
+            )
+        finally:
+            db.close()
+
+    _executor.submit(_job)
+    logger.info("Queued immediate LLM refinement for vault=%s", vault_id)
 
 
 def init_scheduler(schedule_times: list[str] = None):
