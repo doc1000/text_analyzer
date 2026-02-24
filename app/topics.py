@@ -13,6 +13,7 @@ from openai import OpenAI
 _cosine_similarity_fn = None
 _umap_module = None
 _pca_class = None
+_incr_pca_class = None
 _kmeans_class = None
 
 def get_cosine_similarity():
@@ -47,6 +48,14 @@ def get_kmeans():
         _kmeans_class = KMeans
     return _kmeans_class
 
+def get_incremental_pca():
+    """Lazy-load sklearn IncrementalPCA class."""
+    global _incr_pca_class
+    if _incr_pca_class is None:
+        from sklearn.decomposition import IncrementalPCA
+        _incr_pca_class = IncrementalPCA
+    return _incr_pca_class
+
 
 def UMAP_recursive(
     embeddings: np.ndarray,
@@ -77,7 +86,7 @@ def UMAP_recursive(
 
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
 from .config import PREFERENCES
-from .models import Document, get_or_create_embedding_class
+from .models import Document, PCAModelRecord, get_or_create_embedding_class
 from .db import get_db
 from .schemas import (         # whatever pydantic models you use
     Topic,
@@ -101,12 +110,267 @@ from .agglomerative import (
 _topics_cache: dict[tuple[int, datetime | None, tuple | None], TopicsResponse] = {}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Persistent IncrementalPCA helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_total_chunk_count(db: Session) -> int:
+    """Return the total number of rows currently in EMBED_TABLE."""
+    return db.query(func.count(EMBED_TABLE.id)).scalar() or 0
+
+
+def load_active_pca_model(
+    db: Session, vault_scope: str, source_table: str
+) -> Optional[PCAModelRecord]:
+    """Return the active PCA model record for this scope/table, or None."""
+    return (
+        db.query(PCAModelRecord)
+        .filter_by(vault_scope=vault_scope, source_table=source_table, active=True)
+        .order_by(PCAModelRecord.created_at.desc())
+        .first()
+    )
+
+
+def save_pca_model(
+    db: Session,
+    ipca,
+    vault_scope: str,
+    source_table: str,
+    chunk_count: int,
+    active: bool = False,
+) -> PCAModelRecord:
+    """Persist an IncrementalPCA's arrays to embedding.pca_model and return the record."""
+    ev = ipca.explained_variance_.tolist() if hasattr(ipca, "explained_variance_") else None
+    record = PCAModelRecord(
+        vault_scope=vault_scope,
+        source_table=source_table,
+        original_dim=int(ipca.components_.shape[1]),
+        n_components=int(ipca.components_.shape[0]),
+        components=ipca.components_.tolist(),
+        mean=ipca.mean_.tolist(),
+        explained_variance=ev,
+        training_chunk_count=chunk_count,
+        trained_at=datetime.utcnow(),
+        active=active,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def reconstruct_ipca(record: PCAModelRecord):
+    """Rebuild an IncrementalPCA from stored arrays so .transform() works."""
+    IncrementalPCA = get_incremental_pca()
+    ipca = IncrementalPCA(n_components=record.n_components)
+    ipca.components_ = np.array(record.components, dtype=np.float64)
+    ipca.mean_ = np.array(record.mean, dtype=np.float64)
+    ipca.n_features_in_ = record.original_dim
+    ipca.n_components_ = record.n_components
+    ipca.n_samples_seen_ = record.training_chunk_count or 0
+    ipca.noise_variance_ = 0.0
+    if record.explained_variance:
+        ev = np.array(record.explained_variance, dtype=np.float64)
+        ipca.explained_variance_ = ev
+        total = ev.sum()
+        ipca.explained_variance_ratio_ = (
+            ev / total if total > 0 else np.full_like(ev, 1.0 / len(ev))
+        )
+        n = max((record.training_chunk_count or 2) - 1, 1)
+        ipca.singular_values_ = np.sqrt(np.maximum(ev * n, 0.0))
+    else:
+        ipca.explained_variance_ = np.ones(record.n_components)
+        ipca.explained_variance_ratio_ = np.ones(record.n_components) / record.n_components
+        ipca.singular_values_ = np.ones(record.n_components)
+    return ipca
+
+
+def _apply_pca_l2(ipca, X: np.ndarray) -> np.ndarray:
+    """Transform X with the IncrementalPCA then L2-normalize each row."""
+    X_r = ipca.transform(X)
+    norms = np.linalg.norm(X_r, axis=1, keepdims=True)
+    return (X_r / np.maximum(norms, 1e-8)).astype(np.float32)
+
+
+def train_global_ipca(db: Session, n_components: int, batch_size: int = 512):
+    """
+    Train IncrementalPCA on ALL chunk embeddings in EMBED_TABLE (global scope).
+    Streams in pages of `batch_size` rows so memory stays bounded.
+    Returns the fitted IncrementalPCA instance.
+    """
+    IncrementalPCA = get_incremental_pca()
+    ipca = IncrementalPCA(n_components=n_components)
+    page = 0
+    fitted_batches = 0
+    while True:
+        rows = (
+            db.query(EMBED_TABLE.embedding)
+            .filter(EMBED_TABLE.embedding != None)  # noqa: E711
+            .offset(page * batch_size)
+            .limit(batch_size)
+            .all()
+        )
+        if not rows:
+            break
+        batch = np.array(
+            [r.embedding for r in rows if r.embedding is not None],
+            dtype=np.float32,
+        )
+        if batch.shape[0] < n_components:
+            page += 1
+            continue  # IncrementalPCA requires batch_size >= n_components
+        ipca.partial_fit(batch)
+        fitted_batches += 1
+        page += 1
+        print(f"  [incrPCA] partial_fit batch {fitted_batches} ({page * batch_size} chunks scanned)...")
+    if fitted_batches == 0:
+        raise RuntimeError(
+            f"Not enough chunks to train IncrementalPCA "
+            f"(need at least {n_components} per batch, have {page * batch_size} total)"
+        )
+    print(f"[incrPCA] Training complete: {n_components} components, {fitted_batches} batches")
+    return ipca
+
+
+def _recompute_and_activate(new_model_id, doc_batch_size: int = 200) -> None:
+    """
+    Background thread: recompute every document's reduced_embedding using the
+    newly trained PCA model, then atomically activate it and retire the old one.
+    """
+    import threading
+    from .models import REDUCED_EMBED_DIM
+    from .tree_management import pad_to_reduced_dim
+
+    thread_name = threading.current_thread().name
+    print(f"[{thread_name}] Starting background reduced_embedding recompute for model {new_model_id}")
+
+    db_gen = get_db()
+    db: Session = next(db_gen)
+    try:
+        record = db.get(PCAModelRecord, new_model_id)
+        if record is None:
+            print(f"[{thread_name}] Model {new_model_id} not found — aborting")
+            return
+
+        ipca = reconstruct_ipca(record)
+
+        # Snapshot all doc IDs up front to avoid offset drift during bulk updates
+        all_doc_ids = [row[0] for row in db.query(Document.id).all()]
+        total = len(all_doc_ids)
+        processed = 0
+
+        for i in range(0, total, doc_batch_size):
+            batch_ids = all_doc_ids[i : i + doc_batch_size]
+            docs = db.query(Document).filter(Document.id.in_(batch_ids)).all()
+            embeds = compute_document_embeddings(db, docs)
+            if not embeds:
+                processed += len(batch_ids)
+                continue
+
+            ordered_ids = [d.id for d in docs if d.id in embeds]
+            X = np.stack([embeds[did] for did in ordered_ids], axis=0)
+            X_r = _apply_pca_l2(ipca, X)
+            if X_r.shape[1] > REDUCED_EMBED_DIM:
+                X_r = X_r[:, :REDUCED_EMBED_DIM]
+
+            updates = []
+            for doc_id, vec in zip(ordered_ids, X_r):
+                padded = pad_to_reduced_dim(vec)
+                updates.append({"id": doc_id, "reduced_embedding": list(padded)})
+
+            db.bulk_update_mappings(Document, updates)
+            db.commit()
+            processed += len(batch_ids)
+            print(f"[{thread_name}] reduced_embedding recomputed: {processed}/{total} docs")
+
+        # Atomic swap: deactivate all other models for this scope/table
+        db.query(PCAModelRecord).filter(
+            PCAModelRecord.vault_scope == record.vault_scope,
+            PCAModelRecord.source_table == record.source_table,
+            PCAModelRecord.id != new_model_id,
+        ).update({"active": False}, synchronize_session=False)
+        record.active = True
+        db.commit()
+        print(f"[{thread_name}] Model {new_model_id} activated — recompute complete.")
+
+    except Exception as exc:
+        db.rollback()
+        print(f"[{thread_name}] ERROR in _recompute_and_activate: {exc}")
+        raise
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+
+def maybe_retrain_pca(db: Session) -> None:
+    """
+    Called after chunk ingestion. Checks whether the global IncrementalPCA model
+    needs (re)training — either because none exists yet, or because the chunk
+    count has grown by ≥ pca_retrain_threshold (default 10%).
+
+    If retraining is needed:
+      1. Train a new model on ALL chunks globally via IncrementalPCA.partial_fit.
+      2. Save it to embedding.pca_model with active=False (staging).
+      3. Spawn a daemon thread that recomputes every document's reduced_embedding
+         and then atomically activates the new model.
+    """
+    import threading
+
+    if PREFERENCES.clustering.dim_reducer != "incrPCA":
+        return
+
+    cfg = PREFERENCES.clustering
+    source_table = EMBED_TABLE.__tablename__
+    current_count = get_total_chunk_count(db)
+    n_components = min(max(2, cfg.max_components), current_count)
+
+    if current_count < n_components:
+        return  # not enough data to fit
+
+    # Don't double-train if a background recompute is already in progress
+    pending = (
+        db.query(func.count(PCAModelRecord.id))
+        .filter_by(vault_scope="global", source_table=source_table, active=False)
+        .scalar()
+    ) or 0
+    if pending > 0:
+        return
+
+    record = load_active_pca_model(db, "global", source_table)
+    needs_train = record is None or (
+        record.training_chunk_count is not None
+        and current_count >= int(record.training_chunk_count * (1 + cfg.pca_retrain_threshold))
+    )
+    if not needs_train:
+        return
+
+    prev_count = record.training_chunk_count if record else 0
+    print(f"[incrPCA] Retraining global PCA: {current_count} chunks (prev {prev_count})")
+    try:
+        ipca = train_global_ipca(db, n_components)
+    except RuntimeError as exc:
+        print(f"[incrPCA] Skipping retrain: {exc}")
+        return
+
+    new_rec = save_pca_model(db, ipca, "global", source_table, current_count, active=False)
+    t = threading.Thread(
+        target=_recompute_and_activate,
+        args=(new_rec.id,),
+        name=f"incrPCA-recompute-{new_rec.id}",
+        daemon=True,
+    )
+    t.start()
+    print(f"[incrPCA] Background recompute started (thread: {t.name})")
+
 
 # ---------- Dimensionality reduction ----------
 def reduce_embeddings(X: np.ndarray) -> np.ndarray:
     """
     Reduce embeddings according to preferences:
-    - 'pca': PCA with bounded components
+    - 'incrPCA': load global persistent IncrementalPCA from DB, transform + L2-normalize
+    - 'pca': PCA with bounded components (fit on current batch)
     - 'umap': UMAP with sane bounds and random init
     - 'none': return X unchanged
     """
@@ -115,6 +379,24 @@ def reduce_embeddings(X: np.ndarray) -> np.ndarray:
 
     if cfg.dim_reducer == "none":
         return X
+
+    # incrPCA uses a globally-trained persistent model; bypass batch-size checks
+    if cfg.dim_reducer == "incrPCA":
+        db_gen = get_db()
+        db: Session = next(db_gen)
+        try:
+            source_table = EMBED_TABLE.__tablename__
+            record = load_active_pca_model(db, "global", source_table)
+            if record is None:
+                print("[incrPCA] No active model yet — returning unreduced embeddings")
+                return X
+            ipca = reconstruct_ipca(record)
+        finally:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
+        return _apply_pca_l2(ipca, X)
 
     # Decide how many components we can reasonably take
     max_components = max(2, cfg.max_components)
@@ -133,7 +415,6 @@ def reduce_embeddings(X: np.ndarray) -> np.ndarray:
         return pca.fit_transform(X)
 
     if cfg.dim_reducer == "umap":
-        #print(f"UMAP TRIGGERED")
         return UMAP_recursive(
             embeddings=X,
             metric="cosine",

@@ -1230,7 +1230,11 @@ def embed_doc_chunks(
                 chunk_embeddings=valid_embeddings,
                 chunk_summaries=chunk_summaries
             )
-        
+
+            # 8. Check whether the global IncrementalPCA model needs retraining
+            from .topics import maybe_retrain_pca
+            maybe_retrain_pca(db)
+
         return success_count
         
     except Exception as e:

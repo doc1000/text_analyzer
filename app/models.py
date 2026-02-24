@@ -191,6 +191,38 @@ class Document(BaseModel):
     user_tags = Column(ARRAY(Text), nullable=False, server_default=text("'{}'"))
 
 
+class PCAModelRecord(Base):
+    """Persistent IncrementalPCA model stored in embedding.pca_model.
+
+    `active` is only True after the background recompute of all
+    document.reduced_embedding values has completed, guaranteeing that
+    clustering always reads embeddings produced by the active model.
+    """
+    __tablename__ = "pca_model"
+    __table_args__ = {"schema": "embedding"}
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    vault_scope = Column(Text, nullable=False, server_default=text("'global'"))
+    source_table = Column(Text, nullable=False)
+    original_dim = Column(Integer, nullable=False)
+    n_components = Column(Integer, nullable=False)
+    # 2-D array: shape (n_components, original_dim)
+    components = Column(ARRAY(Float, dimensions=2), nullable=False)
+    # 1-D array: shape (original_dim,)
+    mean = Column(ARRAY(Float), nullable=False)
+    # 1-D array: shape (n_components,) — nullable
+    explained_variance = Column(ARRAY(Float), nullable=True)
+    training_chunk_count = Column(Integer, nullable=True)
+    trained_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=text("now()"))
+    active = Column(Boolean, nullable=False, server_default=text("false"), default=False)
+
+
 class SemanticTreeNode(Base):
     """Canonical tree node in semantic_tree_v2. Manual and cluster nodes coexist."""
     __tablename__ = "tree_node"

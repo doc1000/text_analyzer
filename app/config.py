@@ -47,14 +47,14 @@ ChatModel = Literal[
 ]
 # may need to add something to make sure that EMBED_DIM is consistent
 
-DimReducer = Literal["pca","umap", "none"]
+DimReducer = Literal["pca", "umap", "none", "incrPCA"]
 ClusterAlgo = Literal["kmeans", "agglomerative"]  # kmeans or agglomerative hierarchical
 LinkageMethod = Literal["average", "single", "complete"]  # for agglomerative clustering
 
 
 @dataclass
 class ClusteringConfig:
-    dim_reducer: DimReducer = "umap"  # "pca", "umap", or "none" - using "umap" for topic tree
+    dim_reducer: DimReducer = "incrPCA"
     use_reducer_for_clustering: bool = True  # was use_umap_for_clustering
     cluster_algo: ClusterAlgo = "kmeans"
     min_docs_for_clustering: int = 1
@@ -66,6 +66,8 @@ class ClusteringConfig:
     k_topics_recluster: int = 50
     k_sub_min: int = 1
     k_sub_max: int = 10
+    # Fraction of chunk-count growth that triggers a full PCA retrain (default 10%)
+    pca_retrain_threshold: float = 0.10
 
 
 @dataclass
