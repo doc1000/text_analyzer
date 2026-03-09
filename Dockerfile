@@ -47,4 +47,5 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 FROM base AS dev
 USER root
 RUN pip install jupyterlab
+RUN pip install --no-cache-dir pandas
 USER appuser
