@@ -108,9 +108,12 @@
       border-radius: 8px 0 0 0;
     }
 
+    .browser-tab:not(:first-child) {
+      border-left: none;
+    }
+
     .browser-tab:last-child {
       border-radius: 0 8px 0 0;
-      border-left: none;
     }
 
     .browser-tab:hover:not(.active) {
@@ -341,6 +344,34 @@
       text-decoration: underline;
     }
 
+    /* Other browsers list */
+    .other-browser-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .other-browser-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      padding: 1rem 1.25rem;
+      background: #111827;
+      border-radius: 8px;
+      margin-bottom: 0.75rem;
+    }
+
+    .other-browser-list li:last-child {
+      margin-bottom: 0;
+    }
+
+    .other-browser-list .browser-name {
+      font-weight: 500;
+      color: #f8fafc;
+    }
+
     /* Responsive */
     @media (max-width: 600px) {
       .container {
@@ -364,6 +395,16 @@
 
       .browser-tab span:last-child {
         display: none;
+      }
+
+      .other-browser-list li {
+        flex-direction: column;
+        align-items: stretch;
+        text-align: center;
+      }
+
+      .other-browser-list .download-btn {
+        justify-content: center;
       }
     }
   </style>
@@ -393,6 +434,10 @@
       <button class="browser-tab" data-browser="firefox">
         <span class="browser-tab-icon">🦊</span>
         <span>Firefox</span>
+      </button>
+      <button class="browser-tab" data-browser="other">
+        <span class="browser-tab-icon">🔗</span>
+        <span>Other</span>
       </button>
     </div>
 
@@ -480,7 +525,22 @@
           <p class="step-desc">Use email and code from the email you received to log in to your account.</p>
         </div>
       </div>
+    </div>
 
+    <!-- Other Browsers (Chrome Web Store compatible) -->
+    <div class="tab-content" id="other-content">
+      <p class="notice-text" style="margin-bottom: 1rem;">The following browsers work with the VaultBubbles extension from the Chrome Web Store:</p>
+      <ul class="other-browser-list">
+        <li>
+          <span class="browser-name">Microsoft Edge</span>
+          <a href="https://chromewebstore.google.com/detail/gifejlbpojmnmnheknjgmgleaokccgfc?utm_source=item-share-cb" class="download-btn" target="_blank" rel="noopener noreferrer">Add to Edge</a>
+        </li>
+        <li>
+          <span class="browser-name">Brave</span>
+          <a href="https://chromewebstore.google.com/detail/gifejlbpojmnmnheknjgmgleaokccgfc?utm_source=item-share-cb" class="download-btn" target="_blank" rel="noopener noreferrer">Add to Brave</a>
+        </li>
+      </ul>
+    </div>
 
     <!-- Getting Started -->
     <div class="getting-started">
