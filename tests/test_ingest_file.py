@@ -1,23 +1,34 @@
 """
 Tests for the POST /ingest/file endpoint.
 
-All DB, auth, vault, and doc-ingestion HTTP calls are mocked. No running
-database or ingestion service is required.
+All DB, auth, vault, and ingestion calls are mocked. No running database or
+ingestion service is required. The ingestion pipeline is now in-process via
+the vbub-doc-ingestion package; parse_file() is patched at app.main.
 
 Run with:
     pytest tests/test_ingest_file.py -v
 """
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 from fastapi.testclient import TestClient
+
+from vbub_doc_ingestion import CanonicalDocument
+from vbub_doc_ingestion.domain.contracts import (
+    BinaryRef,
+    DocumentMetadata,
+    ExtractionResult,
+    SourceLocator,
+)
+from vbub_doc_ingestion.domain.enums import IngestionStatus
+from vbub_doc_ingestion.services.file_validation_service import FileValidationError
 
 from app.main import app
 from app.auth import get_current_user, resolve_target_vault
 from app.db import get_db
-from app.schemas import CanonicalDocumentResponse
+
 
 # ---------------------------------------------------------------------------
 # Shared test constants
@@ -33,13 +44,30 @@ MOCK_VAULT.id = uuid.uuid4()
 
 _VALID_FILE = ("report.pdf", b"%PDF-1.4 content", "application/pdf")
 
-_CANONICAL_RESPONSE = CanonicalDocumentResponse.model_validate({
-    "displayName": "report.pdf",
-    "extraction": {
-        "cleanText": "Full text of the quarterly report.",
-        "title": "Q3 Report",
-    },
-})
+_CANONICAL_DOC = CanonicalDocument(
+    document_id="doc_abc123",
+    display_name="report.pdf",
+    canonical_mime="application/pdf",
+    extension="pdf",
+    binary_ref=BinaryRef(
+        storage_key="blobs/report.pdf",
+        checksum_sha256="deadbeef",
+        size_bytes=16,
+    ),
+    source_locator=SourceLocator(),
+    extraction=ExtractionResult(
+        parser_name="PdfExtractor",
+        parser_version="0.1.0",
+        title="Q3 Report",
+        clean_text="Full text of the quarterly report.",
+        warnings=[],
+    ),
+    metadata=DocumentMetadata(
+        tags=[],
+        created_at=datetime(2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc),
+    ),
+    status=IngestionStatus.ready_for_indexing,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +128,7 @@ def anon_client():
 
 def test_ingest_file_success(auth_client):
     """Valid file upload returns 200 with status=queued, queue_id, and filename."""
-    with patch("app.main.send_file", return_value=_CANONICAL_RESPONSE), \
+    with patch("app.main.parse_file", return_value=_CANONICAL_DOC), \
          patch("app.main.process_ingest_item"):
         response = auth_client.post(
             "/ingest/file",
@@ -117,7 +145,7 @@ def test_ingest_file_success(auth_client):
 
 def test_ingest_file_queue_row_created(auth_client, mock_db):
     """A queue row is inserted with the correct payload_json mapping."""
-    with patch("app.main.send_file", return_value=_CANONICAL_RESPONSE), \
+    with patch("app.main.parse_file", return_value=_CANONICAL_DOC), \
          patch("app.main.process_ingest_item"):
         auth_client.post(
             "/ingest/file",
@@ -135,38 +163,39 @@ def test_ingest_file_queue_row_created(auth_client, mock_db):
 def test_ingest_file_requires_auth(anon_client):
     """Without a valid token, the endpoint returns 401 when auth is required."""
     with patch.dict("os.environ", {"VB_REQUIRE_AUTH": "true"}), \
-         patch("app.main.send_file", return_value=_CANONICAL_RESPONSE), \
+         patch("app.main.parse_file", return_value=_CANONICAL_DOC), \
          patch("app.main.process_ingest_item"):
         response = anon_client.post(
             "/ingest/file",
             files={"file": _VALID_FILE},
-            # No Authorization header
         )
 
     assert response.status_code == 401
 
 
-def test_ingest_file_service_unreachable_returns_503(auth_client):
-    """ConnectionError from the doc-ingestion service surfaces as HTTP 503."""
-    with patch("app.main.send_file", side_effect=requests.ConnectionError("refused")), \
+def test_ingest_file_validation_error_returns_422(auth_client):
+    """FileValidationError from the ingestion package surfaces as HTTP 422."""
+    with patch("app.main.parse_file",
+               side_effect=FileValidationError("Unsupported file type '.exe'.")), \
          patch("app.main.process_ingest_item"):
         response = auth_client.post(
             "/ingest/file",
             files={"file": _VALID_FILE},
         )
 
-    assert response.status_code == 503
-    assert "unavailable" in response.json()["detail"].lower()
+    assert response.status_code == 422
+    assert "unsupported" in response.json()["detail"].lower()
 
 
-def test_ingest_file_service_error_returns_502(auth_client):
-    """HTTPError from the doc-ingestion service surfaces as HTTP 502."""
-    with patch("app.main.send_file", side_effect=requests.HTTPError("422 Unprocessable")), \
+def test_ingest_file_unexpected_error_returns_500(auth_client):
+    """An unexpected exception from the ingestion pipeline surfaces as HTTP 500."""
+    with patch("app.main.parse_file",
+               side_effect=RuntimeError("unexpected pipeline failure")), \
          patch("app.main.process_ingest_item"):
         response = auth_client.post(
             "/ingest/file",
             files={"file": _VALID_FILE},
         )
 
-    assert response.status_code == 502
-    assert "error" in response.json()["detail"].lower()
+    assert response.status_code == 500
+    assert "ingestion failed" in response.json()["detail"].lower()

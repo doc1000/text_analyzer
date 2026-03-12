@@ -76,42 +76,6 @@ class VaultListResponse(BaseModel):
     vaults: List[VaultResponse]
 
 
-# --- CanonicalDocument response from vbub-doc-ingestion ---
-
-class CanonicalExtractionResult(BaseModel):
-    """Extraction output from the doc-ingestion service."""
-    parserName: Optional[str] = None
-    parserVersion: Optional[str] = None
-    title: Optional[str] = None
-    cleanText: str
-    warnings: Optional[List[str]] = None
-
-
-class CanonicalBinaryRef(BaseModel):
-    """Binary storage reference returned by the doc-ingestion service."""
-    storageKey: Optional[str] = None
-    checksumSha256: Optional[str] = None
-    sizeBytes: Optional[int] = None
-
-
-class CanonicalDocumentResponse(BaseModel):
-    """
-    Response payload returned by the vbub-doc-ingestion service.
-
-    This is the only contract between VaultBubbles and the doc-ingestion service.
-    Do not change this model without a corresponding change in the ingestion service.
-    VaultBubbles maps this into its own internal payload; it does not persist this shape.
-    """
-    documentId: Optional[str] = None
-    sourceType: Optional[str] = None
-    displayName: str
-    canonicalMime: Optional[str] = None
-    extension: Optional[str] = None
-    binaryRef: Optional[CanonicalBinaryRef] = None
-    extraction: CanonicalExtractionResult
-    metadata: Optional[dict] = None
-
-
 # --- Ingest payload from extension or file upload ---
 class IngestPayload(BaseModel):
     url: str

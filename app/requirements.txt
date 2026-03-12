@@ -18,3 +18,4 @@ apscheduler
 pytest
 pytest-asyncio
 httpx
+vbub-doc-ingestion @ git+https://github.com/doc1000/vbub-doc-ingestion.git@2170127982df84b951e93cf948c1f4bafb0d39cb

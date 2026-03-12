@@ -59,8 +59,8 @@ from .auth import (
 from .email_service import send_verification_email
 from .ingest_worker import process_ingest_item
 from .models import IngestQueue
-from .ingestion_client import send_file, map_canonical_to_ingest_payload
-import requests
+from .ingestion_adapter import parse_file, map_canonical_to_ingest_payload
+from vbub_doc_ingestion.services.file_validation_service import FileValidationError
 
 
 
@@ -311,13 +311,15 @@ def ingest_file(
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
     """
-    Accept an uploaded file, parse it via the external doc-ingestion service,
-    and queue it for async processing through the standard VaultBubbles pipeline.
+    Accept an uploaded file, parse it in-process via the vbub-doc-ingestion
+    package, and queue it for async processing through the standard VaultBubbles
+    pipeline.
 
-    The file is forwarded to the doc-ingestion service; VaultBubbles never
-    parses the file directly. The CanonicalDocument response is translated into
-    an IngestPayload dict, stored in ingest_queue, and processed by the existing
-    async worker (chunking, embedding, topic modeling unchanged).
+    VaultBubbles never parses the file directly. All validation, type detection,
+    extraction, and normalization are delegated to the package. The returned
+    CanonicalDocument is translated into an IngestPayload dict, stored in
+    ingest_queue, and processed by the existing async worker (chunking,
+    embedding, topic modeling unchanged).
 
     File URL convention: uploaded files are identified as file://{filename}
     in the ingest payload and in the documents table.
@@ -327,16 +329,16 @@ def ingest_file(
     content_type = file.content_type or "application/octet-stream"
 
     try:
-        canonical = send_file(file_bytes, filename, content_type)
-    except requests.ConnectionError:
+        canonical = parse_file(file_bytes, filename, content_type)
+    except FileValidationError as exc:
         raise HTTPException(
-            status_code=503,
-            detail="Document ingestion service is unavailable.",
+            status_code=422,
+            detail=str(exc),
         )
-    except requests.HTTPError as exc:
+    except Exception as exc:
         raise HTTPException(
-            status_code=502,
-            detail=f"Document ingestion service returned an error: {exc}",
+            status_code=500,
+            detail=f"Document ingestion failed: {exc}",
         )
 
     payload_dict = map_canonical_to_ingest_payload(canonical)

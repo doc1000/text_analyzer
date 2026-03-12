@@ -5,10 +5,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Runtime deps only (psycopg2-binary needs libpq5)
+# Runtime deps only (psycopg2-binary needs libpq5; git required for pip GitHub installs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    git \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
