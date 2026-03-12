@@ -100,7 +100,9 @@ def process_ingest_item(queue_id: str) -> None:
         pdf_parsed = False
         pdf_to_parse = payload.pdf_to_parse
 
-        if not pdf_to_parse and payload.url:
+        if not pdf_to_parse and payload.url and not payload.url.startswith("file://"):
+            # file:// URLs are local file references from uploaded documents;
+            # they are not downloadable PDF URLs and must not trigger extraction.
             if _is_pdf_url(payload.url):
                 pdf_to_parse = payload.url
             elif 'arxiv.org/abs/' in payload.url:
