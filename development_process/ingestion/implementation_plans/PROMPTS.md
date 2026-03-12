@@ -155,3 +155,54 @@ After coding:
 - explain how local VaultBubbles will point to local doc-ingestion
 - show the exact config/env variable added for the ingestion service URL
 - identify the next integration seam for Phase 3 without implementing it
+
+
+
+
+## Phase 5 prompt
+Follow these repository guidance files before implementing anything:
+
+- development_process\ingestion\system_rules\ARCHITECTURE_RULES.md
+- development_process\ingestion\system_rules\CURSOR_CONSTITUTION.md
+- development_process\ingestion\system_rules\AI_CONTEXT.md
+
+Implement Phase 5 from:
+development_process\ingestion\INGESTION_INTEGRATION.md
+
+Critical Phase 5 rules:
+
+- Do not call the doc-ingestion service directly from the browser.
+- The browser must only call VaultBubbles backend.
+- Do not redesign or refactor the frontend.
+- Only make the existing Upload Files button functional.
+- Keep the upload flow limited to the currently supported backend behavior.
+- Do not add drag-and-drop, batching, or multi-file workflows unless explicitly required by the phase.
+- Reuse existing auth/session/request utilities already present in the frontend.
+- Do not modify unrelated UI components, pages, or styles.
+- Show only minimal upload state: idle, uploading, success, error.
+- Do not change backend response shape from this phase.
+- Do not add polling, progress bars, retry managers, or queue dashboards.
+
+
+Before coding:
+- summarize the phase goal
+- list the input files you will use
+- list the files you will create
+- list the files you will modify
+- list what is out of scope
+- explain where the ingestion service URL will be configured
+- explain where the ingestion client boundary will live
+
+During implementation:
+- modify only files listed in the phase
+- do not create extra modules unless explicitly required
+- keep the ingestion client thin and explicit
+- if the phase instructions conflict with existing code, stop and explain the conflict instead of guessing
+
+After coding:
+- summarize files changed
+- confirm definition of done
+- confirm out-of-scope items were not touched
+- explain how local VaultBubbles will point to local doc-ingestion
+- show the exact config/env variable added for the ingestion service URL
+- identify the next integration seam for Phase 3 without implementing it
