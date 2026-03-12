@@ -10,6 +10,10 @@ primary_region = 'sjc'
 
 [env]
   PORT = "8000"
+  # INGESTION_SERVICE_URL is intentionally omitted here so it is not committed to source control.
+  # Set it as a Fly secret before deploying:
+  #   fly secrets set INGESTION_SERVICE_URL=https://<your-ingestion-app>.fly.dev
+  # Local development default (http://127.0.0.1:8001) is set in app/ingestion_client.py.
 
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"

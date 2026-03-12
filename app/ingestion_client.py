@@ -16,6 +16,7 @@ Integration boundary:
     Response: CanonicalDocumentResponse
     Mapping: map_canonical_to_ingest_payload() -> dict (IngestPayload-compatible)
 """
+import json
 import os
 import logging
 
@@ -51,7 +52,12 @@ def send_file(file_bytes: bytes, filename: str, content_type: str) -> CanonicalD
     """
     url = f"{INGESTION_SERVICE_URL}/ingest/file"
     files = {"file": (filename, file_bytes, content_type)}
-    response = requests.post(url, files=files, timeout=60)
+    client_meta = json.dumps({
+        "original_filename": filename,
+        "browser_mime": content_type,
+        "size_bytes": len(file_bytes),
+    })
+    response = requests.post(url, files=files, data={"client_meta": client_meta}, timeout=60)
     response.raise_for_status()
     return CanonicalDocumentResponse.model_validate(response.json())
 
