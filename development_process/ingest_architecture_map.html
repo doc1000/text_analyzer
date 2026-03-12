@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document Ingestion Architecture Map</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #131a2e;
+      --panel-2: #0f1527;
+      --card: #18213a;
+      --line: #334264;
+      --text: #ecf2ff;
+      --muted: #a9b6d3;
+      --accent: #7cc7ff;
+      --accent-2: #9effc1;
+      --warn: #ffd27a;
+      --pink: #ff9ad7;
+      --shadow: 0 14px 35px rgba(0, 0, 0, 0.28);
+      --radius: 18px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #182344 0%, var(--bg) 45%, #070b16 100%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-inner { padding: 22px; }
+
+    h1, h2, h3, h4, p { margin: 0; }
+    h1 { font-size: 32px; line-height: 1.1; margin-bottom: 10px; }
+    h2 { font-size: 20px; margin-bottom: 12px; }
+    h3 { font-size: 16px; margin-bottom: 10px; }
+    p { color: var(--muted); line-height: 1.5; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .chip {
+      padding: 7px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.05);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .mini {
+      background: var(--panel-2);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 14px;
+    }
+
+    .mini .label {
+      font-size: 12px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(210px, 1fr));
+      gap: 18px;
+      overflow-x: auto;
+      padding-bottom: 6px;
+      margin-bottom: 22px;
+    }
+
+    .stage {
+      position: relative;
+      min-height: 560px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 22px;
+      padding: 16px;
+    }
+
+    .stage:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 16px;
+      right: -13px;
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+      font-weight: 700;
+      border-radius: 999px;
+      background: #0c1326;
+      border: 1px solid rgba(124,199,255,0.35);
+      box-shadow: var(--shadow);
+      z-index: 2;
+    }
+
+    .stage-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      gap: 12px;
+    }
+
+    .stage-index {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      background: rgba(124,199,255,0.14);
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(124,199,255,0.35);
+      color: var(--accent);
+      font-weight: 700;
+      flex: 0 0 auto;
+    }
+
+    .module {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .module h4 {
+      font-size: 14px;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .tag {
+      font-size: 11px;
+      line-height: 1;
+      padding: 6px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      color: var(--muted);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .tag.accent { color: #d9f2ff; border-color: rgba(124,199,255,0.35); }
+    .tag.green { color: #e8fff0; border-color: rgba(158,255,193,0.3); }
+    .tag.warn { color: #fff4da; border-color: rgba(255,210,122,0.3); }
+    .tag.pink { color: #ffe8f7; border-color: rgba(255,154,215,0.3); }
+
+    ul {
+      margin: 8px 0 0 18px;
+      padding: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 13px;
+    }
+
+    pre {
+      margin: 8px 0 0 0;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: #d9e6ff;
+      background: rgba(8, 12, 22, 0.7);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 12px;
+      overflow: auto;
+    }
+
+    .section-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: rgba(255,255,255,0.02);
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      vertical-align: top;
+      font-size: 13px;
+    }
+
+    th {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .foot {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 1100px) {
+      .hero, .section-grid { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: repeat(7, minmax(250px, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="panel">
+        <div class="panel-inner">
+          <h1>Document Ingestion Architecture Map</h1>
+          <p>
+            A single-ingestion-contract design for uploaded files, local-path context capture, validation,
+            parsing, normalization, storage, and downstream delivery into search, notes, topic modeling,
+            chunking, and RAG. Built to isolate complexity into small internal APIs.
+          </p>
+          <div class="chips">
+            <span class="chip">Single file upload first</span>
+            <span class="chip">Original binary preserved</span>
+            <span class="chip">Minimal-format text extraction</span>
+            <span class="chip">Parser chosen once</span>
+            <span class="chip">Audit-friendly boundaries</span>
+            <span class="chip">Future Tika fallback possible</span>
+          </div>
+          <div class="summary-grid">
+            <div class="mini">
+              <div class="label">Trigger points</div>
+              <p>Web file picker, drag/drop, browser extension handoff, later URL/webpage ingestion through the same contract.</p>
+            </div>
+            <div class="mini">
+              <div class="label">Core principle</div>
+              <p>All validation, type detection, extraction, cleanup, and binary prep happen once. Downstream systems consume one normalized payload.</p>
+            </div>
+            <div class="mini">
+              <div class="label">User value</div>
+              <p>Upload a work document, make notes on it, find it later, and keep a human-readable record of where the original file lived.</p>
+            </div>
+            <div class="mini">
+              <div class="label">Repo strategy</div>
+              <p>Strong candidate for a separate ingestion repo or service package so it can be tested locally and integrated only after payloads stabilize.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-inner">
+          <h2>Recommended first build</h2>
+          <div class="module">
+            <div class="tag-row">
+              <span class="tag accent">Repo A</span>
+              <span class="tag green">Internal API</span>
+            </div>
+            <h4>ingestion-service</h4>
+            <ul>
+              <li>POST /ingest/file</li>
+              <li>Stores original binary</li>
+              <li>Detects type, validates, extracts, cleans</li>
+              <li>Returns normalized document payload</li>
+            </ul>
+          </div>
+          <div class="module">
+            <div class="tag-row">
+              <span class="tag accent">Repo B</span>
+              <span class="tag warn">Existing app</span>
+            </div>
+            <h4>current-system</h4>
+            <ul>
+              <li>Calls ingestion-service</li>
+              <li>Receives normalized payload</li>
+              <li>Saves notes, visualizations, retrieval views</li>
+              <li>Feeds chunking/embedding/topic modeling</li>
+            </ul>
+          </div>
+          <pre>{
+  "boundary": "normalize once, consume everywhere",
+  "first_supported_types": ["pdf", "docx", "txt", "md", "csv", "xlsx"],
+  "later": ["pptx", "odt", "tika_fallback"]
+}</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="flow">
+      <div class="stage">
+        <div class="stage-title">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="stage-index">1</div>
+            <div>
+              <h2>Trigger / Intake</h2>
+              <p>Where ingestion starts</p>
+            </div>
+          </div>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag accent">UI Trigger</span>
+            <span class="tag green">User Action</span>
+          </div>
+          <h4>Web Tool Upload Entry</h4>
+          <ul>
+            <li>Button: “Upload document”</li>
+            <li>Optional drag-and-drop target</li>
+            <li>Single file only for V1</li>
+            <li>Optional user-entered label / source context</li>
+            <li>Optional user-supplied tags</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag warn">Captured Client Metadata</span>
+          </div>
+          <h4>Client-side metadata envelope</h4>
+          <ul>
+            <li>display filename</li>
+            <li>browser-reported MIME</li>
+            <li>size</li>
+            <li>lastModified</li>
+            <li>optional user-entered local path string</li>
+            <li>optional device label: “PersonalLaptop”</li>
+            <li>optional OS hint if available from app context</li>
+            <li>optional user tags: ["research", "client-a"]</li>
+          </ul>
+        </div>
+        <pre>Input to upload endpoint
+{
+  file: Binary,
+  clientMeta: {
+    originalFilename,
+    browserMime,
+    sizeBytes,
+    lastModified,
+    localPathHint?,
+    deviceLabel?,
+    sourceLabel?,
+    userTags?[]
+  }
+}</pre>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="stage-index">2</div>
+            <div>
+              <h2>Gateway / Validation</h2>
+              <p>Reject bad inputs early</p>
+            </div>
+          </div>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag accent">Module</span>
+            <span class="tag pink">Shared</span>
+          </div>
+          <h4>UploadGateway</h4>
+          <ul>
+            <li>Authenticates user</li>
+            <li>Confirms single-file policy</li>
+            <li>Checks size and allowed types policy</li>
+            <li>Validates user-supplied tags shape and limits</li>
+            <li>Creates ingestion job id</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag warn">Validation</span>
+          </div>
+          <h4>FileValidationService</h4>
+          <ul>
+            <li>Magic-byte sniffing</li>
+            <li>MIME reconciliation</li>
+            <li>Extension normalization</li>
+            <li>Hash calculation (sha256)</li>
+            <li>Duplicate/version check</li>
+          </ul>
+        </div>
+        <pre>Output
+{
+  ingestionId,
+  canonicalMime,
+  extension,
+  sha256,
+  validationStatus,
+  rejectionReason?
+}</pre>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="stage-index">3</div>
+            <div>
+              <h2>Original Binary Handling</h2>
+              <p>Store once, reference everywhere</p>
+            </div>
+          </div>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag accent">Storage</span>
+            <span class="tag green">Immutable</span>
+          </div>
+          <h4>BinaryStorageService</h4>
+          <ul>
+            <li>Saves original file bytes</li>
+            <li>Attaches user/account id</li>
+            <li>Returns storage key / blob URL</li>
+            <li>No editing responsibility</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag warn">Optional UX</span>
+          </div>
+          <h4>SourceLocator</h4>
+          <ul>
+            <li>Stores human-readable location hint only</li>
+            <li>Examples: PersonalLaptop, Windows 11, C:/docs/file.docx</li>
+            <li>Not relied on as a callable deep link</li>
+          </ul>
+        </div>
+        <pre>Stored source record
+{
+  binaryRef: {
+    storageKey,
+    contentLength,
+    checksum,
+    retainedOriginal: true
+  },
+  sourceLocator: {
+    deviceLabel?,
+    osLabel?,
+    localPathHint?
+  }
+}</pre>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="stage-index">4</div>
+            <div>
+              <h2>Parser Routing</h2>
+              <p>Choose parser exactly once</p>
+            </div>
+          </div>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag accent">Core Contract</span>
+          </div>
+          <h4>ParserRouter</h4>
+          <ul>
+            <li>Maps canonical MIME/extension to parser adapter</li>
+            <li>Keeps parser logic out of main ingestion flow</li>
+            <li>Optionally routes unknowns to Tika fallback later</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag warn">Phase 7 — Router Hardening</span>
+          </div>
+          <h4>Hybrid Routing Policy</h4>
+          <ul>
+            <li>Router no longer relies on suffix alone</li>
+            <li>Strong formats (PDF, DOCX, XLSX, CSV) route by extension first</li>
+            <li><code>BINARY_REJECT_EXTENSIONS</code> — explicit reject set (.xls, .exe, .dll, .bin, .dat); .xls returns clear 422 recommending .xlsx</li>
+            <li><code>TEXT_LIKE_EXTENSIONS</code> — aliases (.bat, .jsx, .ps1, .json, .yaml, …) route to TextExtractor only if <code>is_probably_text()</code> confirms content</li>
+            <li>Unknown/suffixless files accepted if <code>is_probably_text()</code> returns True</li>
+            <li>Binary content mislabeled with a text-like suffix is rejected, never reaches TextExtractor</li>
+          </ul>
+          <h4 style="margin-top:12px">content_classification_service.py</h4>
+          <ul>
+            <li>Lightweight, stdlib-only helper used exclusively by ParserRouter</li>
+            <li><code>is_probably_text(file_bytes)</code> — inspects first 8 KB; checks null-byte ratio, UTF-8 decode, printable-character ratio (≥ 0.85)</li>
+            <li>No external text-detection libraries</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag green">Adapters</span>
+          </div>
+          <h4>First adapters</h4>
+          <ul>
+            <li>PdfExtractor</li>
+            <li>DocxExtractor</li>
+            <li>TextExtractor</li>
+            <li>CsvExtractor</li>
+            <li>XlsxExtractor</li>
+          </ul>
+        </div>
+        <pre>Internal extractor contract
+extract(fileBytes, filename, canonicalMime) -> {
+  rawText,
+  extractedTitle?,
+  parserName,
+  parserVersion,
+  structuralHints?,
+  extractionWarnings[]
+}</pre>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="stage-index">5</div>
+            <div>
+              <h2>Cleanup / Normalization</h2>
+              <p>One shared cleanup pass</p>
+            </div>
+          </div>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag pink">Shared Tooling</span>
+          </div>
+          <h4>TextNormalizationService</h4>
+          <ul>
+            <li>Unicode normalization</li>
+            <li>Whitespace compression</li>
+            <li>Line-break harmonization</li>
+            <li>Smart quote and bullet normalization</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag pink">Shared Tooling</span>
+            <span class="tag warn">Type-aware</span>
+          </div>
+          <h4>BoilerplateCleanupService</h4>
+          <ul>
+            <li>Header/footer repetition removal</li>
+            <li>Page-number cleanup</li>
+            <li>Table flattening strategy</li>
+            <li>CSV/XLSX sheet labeling into readable text blocks</li>
+            <li>Suppresses low-semantic numeric-only rows/regions by policy</li>
+          </ul>
+        </div>
+        <pre>Normalized text payload
+{
+  cleanText,
+  title,
+  textStats: {
+    charCount,
+    wordCount,
+    approxPageCount?
+  },
+  cleanupWarnings[]
+}</pre>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="stage-index">6</div>
+            <div>
+              <h2>Canonical Document Assembly</h2>
+              <p>The one payload downstream sees</p>
+            </div>
+          </div>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag accent">Single Ingestion Contract</span>
+            <span class="tag green">Output</span>
+          </div>
+          <h4>CanonicalDocumentBuilder</h4>
+          <ul>
+            <li>Combines source, validation, binary, parser, cleanup, and user input outputs</li>
+            <li>Builds stable schema for your app</li>
+            <li>Prevents duplicate type checks downstream</li>
+          </ul>
+        </div>
+        <pre>{
+  "documentId": "doc_...",
+  "userId": "usr_...",
+  "sourceType": "upload",
+  "displayName": "mydoc.docx",
+  "canonicalMime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "extension": "docx",
+  "binaryRef": {
+    "storageKey": "blob/...",
+    "checksumSha256": "...",
+    "sizeBytes": 182334
+  },
+  "sourceLocator": {
+    "deviceLabel": "PersonalLaptop",
+    "osLabel": "Windows 11",
+    "localPathHint": "C:/documents/mydoc.docx"
+  },
+  "extraction": {
+    "parserName": "DocxExtractor",
+    "parserVersion": "0.1.0",
+    "title": "Quarterly Review",
+    "cleanText": "...",
+    "warnings": []
+  },
+  "metadata": {
+    "createdAt": "...",
+    "lastModifiedClient": "...",
+    "tags": ["research", "client-a"]
+  },
+  "status": "ready_for_indexing"
+}</pre>
+      </div>
+
+      <div class="stage">
+        <div class="stage-title">
+          <div style="display:flex; gap:10px; align-items:center;">
+            <div class="stage-index">7</div>
+            <div>
+              <h2>Downstream Consumers</h2>
+              <p>Read-only analysis and retrieval layers</p>
+            </div>
+          </div>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag accent">App Layer</span>
+          </div>
+          <h4>Notes + Visualization</h4>
+          <ul>
+            <li>Attach annotations and notes</li>
+            <li>Show source path hints to help find original files</li>
+            <li>Render document summaries and organizational views</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="tag-row">
+            <span class="tag green">ML / Retrieval</span>
+          </div>
+          <h4>Search, semantic modeling, RAG</h4>
+          <ul>
+            <li>Chunk cleanText</li>
+            <li>Build embeddings</li>
+            <li>Run semantic topic modeling</li>
+            <li>Link chunks back to documentId and binaryRef</li>
+          </ul>
+        </div>
+        <pre>Downstream handoff
+{
+  documentId,
+  displayName,
+  cleanText,
+  title,
+  sourceLocator,
+  binaryRef,
+  metadata
+}</pre>
+      </div>
+    </section>
+
+    <section class="section-grid">
+      <div class="panel">
+        <div class="panel-inner">
+          <h2>Suggested module map + Python tree</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Module</th>
+                  <th>Responsibility</th>
+                  <th>Input</th>
+                  <th>Output</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>TagPolicyService</td>
+                  <td>Validates and normalizes user-supplied tags at ingestion time</td>
+                  <td>Raw user tag list</td>
+                  <td>Canonical tag list</td>
+                </tr>
+                <tr>
+                  <td>UploadGateway</td>
+                  <td>Receives file + client metadata, enforces auth and single-file policy</td>
+                  <td>Multipart upload</td>
+                  <td>Ingestion job envelope</td>
+                </tr>
+                <tr>
+                  <td>FileValidationService</td>
+                  <td>Checks size, type, extension, hash, duplicate/version state</td>
+                  <td>Raw file bytes</td>
+                  <td>Validated file descriptor</td>
+                </tr>
+                <tr>
+                  <td>BinaryStorageService</td>
+                  <td>Stores original file as immutable binary</td>
+                  <td>Validated file descriptor</td>
+                  <td>storageKey, checksum, size</td>
+                </tr>
+                <tr>
+                  <td>ParserRouter</td>
+                  <td>Selects one extractor adapter</td>
+                  <td>canonicalMime + extension</td>
+                  <td>Extractor instance</td>
+                </tr>
+                <tr>
+                  <td>*Extractor adapters</td>
+                  <td>Produce raw text and type-specific hints</td>
+                  <td>File bytes</td>
+                  <td>Extraction result</td>
+                </tr>
+                <tr>
+                  <td>TextNormalizationService</td>
+                  <td>Normalizes whitespace, encoding, unicode, structure</td>
+                  <td>Raw extracted text</td>
+                  <td>Normalized text</td>
+                </tr>
+                <tr>
+                  <td>BoilerplateCleanupService</td>
+                  <td>Removes repeated garbage and makes output RAG-friendly</td>
+                  <td>Normalized text + hints</td>
+                  <td>Clean text</td>
+                </tr>
+                <tr>
+                  <td>CanonicalDocumentBuilder</td>
+                  <td>Assembles single ingestion contract payload</td>
+                  <td>All prior outputs</td>
+                  <td>CanonicalDocument</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="module" style="margin-top:14px;">
+            <div class="tag-row">
+              <span class="tag accent">Suggested Python package tree</span>
+              <span class="tag green">Interface-first</span>
+            </div>
+            <pre>ingestion_service/
+├── app/
+│   ├── api/
+│   │   ├── routes_ingest.py
+│   │   └── schemas.py
+│   ├── domain/
+│   │   ├── contracts.py
+│   │   ├── models.py
+│   │   └── enums.py
+│   ├── services/
+│   │   ├── upload_gateway.py
+│   │   ├── file_validation_service.py
+│   │   ├── tag_policy_service.py
+│   │   ├── binary_storage_service.py
+│   │   ├── parser_router.py
+│   │   ├── content_classification_service.py  ← Phase 7: text-like detection, binary reject
+│   │   ├── text_normalization_service.py
+│   │   ├── boilerplate_cleanup_service.py
+│   │   ├── tabular_text_policy_service.py
+│   │   └── canonical_document_builder.py
+│   ├── extractors/
+│   │   ├── base.py
+│   │   ├── pdf_extractor.py
+│   │   ├── docx_extractor.py
+│   │   ├── text_extractor.py
+│   │   ├── csv_extractor.py
+│   │   ├── xlsx_extractor.py
+│   │   └── tika_fallback_extractor.py
+│   ├── storage/
+│   │   ├── blob_store.py
+│   │   └── metadata_repo.py
+│   └── orchestration/
+│       └── ingest_file.py
+├── tests/
+│   ├── fixtures/
+│   ├── test_ingest_file.py
+│   ├── test_csv_extractor.py
+│   └── test_xlsx_extractor.py
+└── README.md</pre>
+          </div>
+          <div class="module">
+            <div class="tag-row">
+              <span class="tag pink">Core interfaces</span>
+            </div>
+            <pre>class DocumentExtractor(Protocol):
+    def extract(self, file_bytes: bytes, filename: str, canonical_mime: str) -> ExtractionResult: ...
+
+class StorageBackend(Protocol):
+    def put(self, *, user_id: str, filename: str, file_bytes: bytes, mime: str) -> BinaryRef: ...
+
+class TextCleaner(Protocol):
+    def clean(self, text: str, *, mime: str, hints: dict | None = None) -> CleanTextResult: ...
+
+class TabularTextPolicy(Protocol):
+    def filter_rows(self, rows: list[list[str]], *, source_type: str) -> list[list[str]]: ...
+
+class CanonicalDocumentBuilder(Protocol):
+    def build(self, *, source: SourceRecord, validation: ValidationResult, binary_ref: BinaryRef,
+              extraction: ExtractionResult, clean_text: CleanTextResult, metadata: dict) -> CanonicalDocument: ...</pre>
+          </div>
+          <div class="module">
+            <div class="tag-row">
+              <span class="tag accent">Recommended implementation candidates</span>
+              <span class="tag green">Lean-first</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Stage</th>
+                    <th>Primary candidate</th>
+                    <th>Why it fits</th>
+                    <th>Keep in reserve</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>API layer</td>
+                    <td>FastAPI + Pydantic</td>
+                    <td>Typed contracts, easy local dev, strong request/response validation</td>
+                    <td>None needed initially</td>
+                  </tr>
+                  <tr>
+                    <td>PDF extraction</td>
+                    <td>PyMuPDF (fitz)</td>
+                    <td>Fast, mature, strong text extraction for general document ingestion</td>
+                    <td>pdfplumber for table-heavy edge cases</td>
+                  </tr>
+                  <tr>
+                    <td>DOCX extraction</td>
+                    <td>python-docx</td>
+                    <td>Readable, controllable, Python-native, good for paragraph-oriented extraction</td>
+                    <td>docx2txt for ultra-simple text-only fallback</td>
+                  </tr>
+                  <tr>
+                    <td>TXT / Markdown</td>
+                    <td>stdlib open() + frontmatter-safe text handling</td>
+                    <td>Minimal latency and dependency cost</td>
+                    <td>markdown-it-py only if heading structure becomes important</td>
+                  </tr>
+                  <tr>
+                    <td>CSV extraction</td>
+                    <td>stdlib csv module</td>
+                    <td>Lightweight, predictable, enough for row filtering and text flattening</td>
+                    <td>pandas only if richer tabular inference becomes necessary</td>
+                  </tr>
+                  <tr>
+                    <td>XLSX extraction</td>
+                    <td>openpyxl</td>
+                    <td>Direct workbook access without adding a heavier dataframe dependency</td>
+                    <td>pandas for later analysis-oriented workflows</td>
+                  </tr>
+                  <tr>
+                    <td>HTML / webpage text</td>
+                    <td>BeautifulSoup4 + readability-lxml</td>
+                    <td>Good split between DOM parsing and boilerplate/article extraction</td>
+                    <td>trafilatura if you later want stronger article extraction</td>
+                  </tr>
+                  <tr>
+                    <td>MIME / type detection</td>
+                    <td>python-magic</td>
+                    <td>Useful for magic-byte sniffing and MIME reconciliation</td>
+                    <td>Tika fallback only if format coverage grows</td>
+                  </tr>
+                  <tr>
+                    <td>Storage</td>
+                    <td>Object/blob storage + thin metadata repo</td>
+                    <td>Keeps original binary immutable and separate from extracted text</td>
+                    <td>Local filesystem for dev fixtures</td>
+                  </tr>
+                  <tr>
+                    <td>Normalization / cleanup</td>
+                    <td>Custom shared services</td>
+                    <td>Your policy is specific to RAG and note-taking, so custom logic is cleaner than a magic dependency</td>
+                    <td>Unstructured/Tika only if you later need broad-format fallback</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="module">
+            <div class="tag-row">
+              <span class="tag warn">Package philosophy</span>
+            </div>
+            <ul>
+              <li>Prefer the lightest library that exposes the structure you need.</li>
+              <li>Keep pandas out of the critical path unless there is real analytical value.</li>
+              <li>Use custom normalization services for semantic quality instead of outsourcing policy.</li>
+              <li>Add Tika only as a fallback layer, not as the first parser for common formats.</li>
+            </ul>
+          </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-inner">
+          <h2>Repo split recommendation + flow chart</h2>
+          <div class="module">
+            <div class="tag-row">
+              <span class="tag green">Recommended</span>
+            </div>
+            <h4>Separate repo or clearly isolated package</h4>
+            <ul>
+              <li>Lets you run ingestion locally with fixture documents</li>
+              <li>Keeps parser experiments away from main app</li>
+              <li>Lets Cursor/Codex work on one module at a time</li>
+              <li>Makes payload stability the integration contract</li>
+            </ul>
+          </div>
+          <div class="module">
+            <div class="tag-row">
+              <span class="tag warn">Good first milestone</span>
+            </div>
+            <h4>Definition of done for isolation repo</h4>
+            <ul>
+              <li>POST endpoint accepts one file</li>
+              <li>Returns CanonicalDocument JSON</li>
+              <li>Stores original binary locally or in object storage</li>
+              <li>Parses at least PDF, DOCX, TXT</li>
+              <li>Fixture-based tests for each parser</li>
+            </ul>
+          </div>
+          <div class="legend">
+            <span><i class="dot" style="background: var(--accent)"></i> Core boundary</span>
+            <span><i class="dot" style="background: var(--accent-2)"></i> Good first implementation</span>
+            <span><i class="dot" style="background: var(--warn)"></i> User-facing or policy detail</span>
+            <span><i class="dot" style="background: var(--pink)"></i> Shared cleanup logic</span>
+          </div>
+          <div class="module" style="margin-top:14px;">
+            <div class="tag-row">
+              <span class="tag accent">Deployment direction</span>
+              <span class="tag green">Same Fly app</span>
+              <span class="tag warn">Separate process group</span>
+            </div>
+            <pre>Local dev:
+  browser/app -> localhost ingestion FastAPI service
+
+Production:
+  same Fly app
+    ├── backend process group -> existing backend machine(s)
+    └── ingestion process group -> ingestion machine(s)
+
+Call pattern:
+  backend -> internal HTTP call -> ingestion service
+
+Benefits:
+  - isolated scaling
+  - isolated logs and failures
+  - simpler than a fully separate Fly app at first
+  - same deployment umbrella, but clean process boundary</pre>
+          </div>
+          <div class="module" style="margin-top:14px;">
+            <div class="tag-row">
+              <span class="tag accent">Flow chart</span>
+              <span class="tag warn">Updated</span>
+            </div>
+            <pre>[User clicks Upload / drops file]
+                │
+                ▼
+      [Client metadata envelope]
+                │
+                ▼
+          [UploadGateway]
+                │
+                ├── validate tags ──► [TagPolicyService]
+                │
+                ├── validate bytes/type/hash ──► [FileValidationService]
+                │
+                └── store original binary ──► [BinaryStorageService]
+                                │
+                                ▼
+                          [ParserRouter]
+                                │
+        ┌───────────────┬──────────────┬──────────────┬──────────────┐
+        ▼               ▼              ▼              ▼              ▼
+ [PdfExtractor]  [DocxExtractor] [TextExtractor] [CsvExtractor] [XlsxExtractor]
+                                                        │              │
+                                                        └──────┬───────┘
+                                                               ▼
+                                                [TabularTextPolicyService]
+                                                               │
+                                                               ▼
+                                              [TextNormalizationService]
+                                                               │
+                                                               ▼
+                                              [BoilerplateCleanupService]
+                                                               │
+                                                               ▼
+                                             [CanonicalDocumentBuilder]
+                                                               │
+                                                               ▼
+                                    [CanonicalDocument JSON / ready_for_indexing]
+                                                               │
+                           ┌───────────────────────────┬────────┴────────────────────┐
+                           ▼                           ▼                             ▼
+                 [Notes / Visualization]      [Chunking / Embeddings]      [Semantic topic modeling / RAG]</pre>
+          </div>
+          <div class="module" style="margin-top:14px;">
+            <div class="tag-row">
+              <span class="tag accent">Recommended implementation order</span>
+              <span class="tag green">Thin slices</span>
+            </div>
+            <pre>Phase 1 — Skeleton + contracts
+  1. Create repo scaffold and package tree
+  2. Add Pydantic models for CanonicalDocument and core result types
+  3. Add FastAPI health route and POST /ingest/file stub
+  4. Add orchestration entrypoint with TODO-only internal calls
+  5. Add root README and folder READMEs
+
+Phase 2 — Validation + binary preservation
+  6. Implement TagPolicyService
+  7. Implement FileValidationService (size, extension, MIME, sha256)
+  8. Implement local-dev BinaryStorageService
+  9. Return a minimal CanonicalDocument with placeholder extraction text
+ 10. Add fixture-based tests for upload, validation, and binary save
+
+Phase 3 — First real parsing path
+ 11. Implement TextExtractor for txt/md
+ 12. Implement TextNormalizationService
+ 13. Implement BoilerplateCleanupService (minimal first pass)
+ 14. Implement CanonicalDocumentBuilder
+ 15. End-to-end test: txt upload -> canonical payload
+
+Phase 4 — Core business value formats
+ 16. Implement PdfExtractor with PyMuPDF
+ 17. Add PDF fixture tests
+ 18. Implement DocxExtractor with python-docx
+ 19. Add DOCX fixture tests
+ 20. Verify stable payload shape across txt/pdf/docx
+
+Phase 5 — Tabular documents
+ 21. Implement CsvExtractor with stdlib csv
+ 22. Implement XlsxExtractor with openpyxl
+ 23. Implement TabularTextPolicyService
+ 24. Add numeric-density suppression tests
+ 25. Verify flattened text is useful for retrieval, not raw numeric noise
+
+Phase 6 — Integration hardening
+ 26. Add backend-to-ingestion internal API contract notes
+ 27. Add structured logging and error response shapes
+ 28. Add basic config settings for dev/prod storage backends
+ 29. Add Fly process-group deployment notes
+ 30. Freeze v1 payload schema and stop expanding scope
+
+Phase 7 — Parser Router hardening
+ 31. Add content_classification_service.py (TEXT_LIKE_EXTENSIONS, BINARY_REJECT_EXTENSIONS, is_probably_text)
+ 32. Replace suffix-only routing with hybrid policy in parser_router.py
+ 33. Relax file_validation_service extension whitelist; router now owns routing decisions
+ 34. Explicit .xls rejection with clear 422 recommending .xlsx
+ 35. Binary content mislabeled with text-like suffix is rejected before TextExtractor
+ 36. Unknown/suffixless files accepted if content is text-like
+
+Later, not now
+  - HTML/webpage ingestion adapter
+  - Tika fallback
+  - NER/enrichment
+  - OCR
+  - PPTX/ODT
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
