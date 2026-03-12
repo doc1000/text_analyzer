@@ -13,6 +13,7 @@ umap-learn
 pdfplumber
 requests
 trafilatura
+python-multipart
 apscheduler
 pytest
 pytest-asyncio

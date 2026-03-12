@@ -1,6 +1,6 @@
 # save as app/main.py
 ## IMPORTS
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -59,6 +59,8 @@ from .auth import (
 from .email_service import send_verification_email
 from .ingest_worker import process_ingest_item
 from .models import IngestQueue
+from .ingestion_client import send_file, map_canonical_to_ingest_payload
+import requests
 
 
 
@@ -297,6 +299,65 @@ def ingest(
     if vault:
         result["vault_id"] = str(vault.id)
     return result
+
+
+@app.post("/ingest/file")
+def ingest_file(
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    vault: Vault = Depends(resolve_target_vault),
+    _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """
+    Accept an uploaded file, parse it via the external doc-ingestion service,
+    and queue it for async processing through the standard VaultBubbles pipeline.
+
+    The file is forwarded to the doc-ingestion service; VaultBubbles never
+    parses the file directly. The CanonicalDocument response is translated into
+    an IngestPayload dict, stored in ingest_queue, and processed by the existing
+    async worker (chunking, embedding, topic modeling unchanged).
+
+    File URL convention: uploaded files are identified as file://{filename}
+    in the ingest payload and in the documents table.
+    """
+    file_bytes = file.file.read()
+    filename = file.filename or "upload"
+    content_type = file.content_type or "application/octet-stream"
+
+    try:
+        canonical = send_file(file_bytes, filename, content_type)
+    except requests.ConnectionError:
+        raise HTTPException(
+            status_code=503,
+            detail="Document ingestion service is unavailable.",
+        )
+    except requests.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Document ingestion service returned an error: {exc}",
+        )
+
+    payload_dict = map_canonical_to_ingest_payload(canonical)
+
+    queue_row = IngestQueue(
+        user_id=user.id if user else None,
+        vault_id=vault.id if vault else None,
+        payload_json=payload_dict,
+        status="pending",
+    )
+    db.add(queue_row)
+    db.commit()
+    db.refresh(queue_row)
+
+    background_tasks.add_task(process_ingest_item, str(queue_row.id))
+
+    return {
+        "status": "queued",
+        "queue_id": str(queue_row.id),
+        "filename": filename,
+    }
 
 @app.get("/documents", response_model=List[DocumentOut])
 def list_documents(
