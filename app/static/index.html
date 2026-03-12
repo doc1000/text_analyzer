@@ -741,13 +741,15 @@
               <span class="dropdown-hint">Capture web pages as you browse</span>
             </div>
           </a>
-          <div class="dropdown-item disabled">
+          <div class="dropdown-item" id="uploadFilesItem" style="cursor: pointer;">
             <span class="dropdown-icon">📁</span>
             <div>
               <strong>Upload Files</strong>
-              <span class="dropdown-hint">Coming soon</span>
+              <span class="dropdown-hint" id="uploadFilesHint">Select a file to ingest</span>
             </div>
           </div>
+          <input type="file" id="uploadFileInput" style="display: none;"
+            accept=".txt,.md,.pdf,.docx,.csv,.xlsx" />
         </div>
       </div>
 
@@ -2178,6 +2180,76 @@
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
           addDocsDropdown.style.display = "none";
+        }
+      });
+    }
+
+    // -------- UPLOAD FILES --------
+    const uploadFilesItem = document.getElementById("uploadFilesItem");
+    const uploadFileInput = document.getElementById("uploadFileInput");
+    const uploadFilesHint = document.getElementById("uploadFilesHint");
+
+    function setUploadState(state, message) {
+      const states = {
+        idle: "Select a file to ingest",
+        uploading: "Uploading…",
+        success: message || "Uploaded successfully",
+        error: message || "Upload failed"
+      };
+      if (uploadFilesHint) {
+        uploadFilesHint.textContent = states[state] || states.idle;
+      }
+    }
+
+    if (uploadFilesItem && uploadFileInput) {
+      uploadFilesItem.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (uploadFilesHint && uploadFilesHint.textContent !== "Uploading…") {
+          setUploadState("idle");
+          uploadFileInput.value = "";
+          uploadFileInput.click();
+        }
+      });
+
+      uploadFileInput.addEventListener("change", async () => {
+        const file = uploadFileInput.files[0];
+        if (!file) return;
+
+        setUploadState("uploading");
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const headers = {};
+        if (currentVaultId) {
+          headers["X-Vault-Id"] = currentVaultId;
+        }
+
+        try {
+          const res = await authFetch(`${API_BASE}/ingest/file`, {
+            method: "POST",
+            headers,
+            body: formData,
+          });
+
+          if (res.ok) {
+            setUploadState("success", `"${file.name}" queued for processing`);
+            if (addDocsDropdown) {
+              setTimeout(() => {
+                addDocsDropdown.style.display = "none";
+                setUploadState("idle");
+              }, 2500);
+            }
+          } else {
+            let detail = "Upload failed";
+            try {
+              const body = await res.json();
+              if (body.detail) detail = body.detail;
+            } catch (_) {}
+            setUploadState("error", detail);
+          }
+        } catch (err) {
+          setUploadState("error", "Could not reach server");
         }
       });
     }
