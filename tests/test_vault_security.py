@@ -41,7 +41,7 @@ The quick brown fox jumps over the lazy dog.
 
 
 @dataclass
-class TestUser:
+class VaultUser:
     email: str
     api_key: Optional[str] = None
     user_id: Optional[str] = None
@@ -50,7 +50,7 @@ class TestUser:
 
 
 @dataclass
-class TestResult:
+class CheckResult:
     name: str
     passed: bool
     expected: str
@@ -60,9 +60,9 @@ class TestResult:
 
 class VaultSecurityTester:
     def __init__(self):
-        self.testuser = TestUser(email=TESTUSER_EMAIL)
-        self.wronguser = TestUser(email=WRONGUSER_EMAIL)
-        self.results: List[TestResult] = []
+        self.testuser = VaultUser(email=TESTUSER_EMAIL)
+        self.wronguser = VaultUser(email=WRONGUSER_EMAIL)
+        self.results: List[CheckResult] = []
         
     def _headers(self, api_key: Optional[str] = None, bootstrap: bool = False) -> dict:
         """Build request headers."""
@@ -73,7 +73,7 @@ class VaultSecurityTester:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
     
-    def _log_result(self, result: TestResult):
+    def _log_result(self, result: CheckResult):
         """Log and store test result."""
         self.results.append(result)
         status = "PASS" if result.passed else "FAIL"
@@ -117,7 +117,7 @@ class VaultSecurityTester:
         else:
             passed = False
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="Setup testuser",
             passed=passed,
             expected="200 with API key",
@@ -139,7 +139,7 @@ class VaultSecurityTester:
         else:
             passed = False
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="Setup wronguser",
             passed=passed,
             expected="200 with API key",
@@ -158,7 +158,7 @@ class VaultSecurityTester:
                             })
         
         if resp.status_code != 200:
-            self._log_result(TestResult(
+            self._log_result(CheckResult(
                 name="testuser ingests document",
                 passed=False,
                 expected="200 with document_id",
@@ -183,7 +183,7 @@ class VaultSecurityTester:
             time.sleep(1)
 
         passed = bool(self.testuser.document_id)
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="testuser ingests document",
             passed=passed,
             expected="200, document appears in list",
@@ -207,7 +207,7 @@ class VaultSecurityTester:
             passed = False
             data = []
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="testuser lists documents",
             passed=passed,
             expected=f"200 with document {self.testuser.document_id}",
@@ -229,7 +229,7 @@ class VaultSecurityTester:
             passed = False
             data = []
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser lists documents (should not see testuser's)",
             passed=passed,
             expected="200 with empty list or no testuser docs",
@@ -246,7 +246,7 @@ class VaultSecurityTester:
         # Expect 403 Forbidden
         passed = resp.status_code == 403
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser gets testuser document",
             passed=passed,
             expected="403 Forbidden",
@@ -263,7 +263,7 @@ class VaultSecurityTester:
         # Expect 403 Forbidden
         passed = resp.status_code == 403
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser edits testuser document",
             passed=passed,
             expected="403 Forbidden",
@@ -279,7 +279,7 @@ class VaultSecurityTester:
         # Expect 403 Forbidden
         passed = resp.status_code == 403
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser deletes testuser document",
             passed=passed,
             expected="403 Forbidden",
@@ -312,7 +312,7 @@ class VaultSecurityTester:
             passed = False
             hits = []
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser query (should not find testuser docs)",
             passed=passed,
             expected="200 with no testuser documents in results",
@@ -345,7 +345,7 @@ class VaultSecurityTester:
             passed = False
             testuser_doc_found = False
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser gets topics hierarchy",
             passed=passed,
             expected="200 with no testuser documents in hierarchy",
@@ -362,7 +362,7 @@ class VaultSecurityTester:
         # Expect 403 Forbidden
         passed = resp.status_code == 403
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser gets document topics",
             passed=passed,
             expected="403 Forbidden",
@@ -380,7 +380,7 @@ class VaultSecurityTester:
         # Expect 403 Forbidden
         passed = resp.status_code == 403
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser assigns topic to testuser document",
             passed=passed,
             expected="403 Forbidden",
@@ -406,7 +406,7 @@ class VaultSecurityTester:
             passed = False
             vaults = []
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="testuser lists vaults",
             passed=passed,
             expected="200 with at least 1 vault",
@@ -433,7 +433,7 @@ class VaultSecurityTester:
             vaults = []
             testuser_vault_visible = False
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser lists vaults (should not see testuser's)",
             passed=passed,
             expected="200 with only wronguser's vaults",
@@ -445,7 +445,7 @@ class VaultSecurityTester:
     def test_15_wronguser_gets_testuser_vault(self) -> bool:
         """wronguser should NOT be able to get testuser's vault details."""
         if not self.testuser.vault_id:
-            self._log_result(TestResult(
+            self._log_result(CheckResult(
                 name="wronguser gets testuser vault",
                 passed=False,
                 expected="403 Forbidden",
@@ -459,7 +459,7 @@ class VaultSecurityTester:
         # Expect 403 Forbidden
         passed = resp.status_code == 403
             
-        self._log_result(TestResult(
+        self._log_result(CheckResult(
             name="wronguser gets testuser vault",
             passed=passed,
             expected="403 Forbidden",

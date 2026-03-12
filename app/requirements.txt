@@ -14,3 +14,6 @@ pdfplumber
 requests
 trafilatura
 apscheduler
+pytest
+pytest-asyncio
+httpx
