@@ -5,18 +5,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Runtime deps only (psycopg2-binary needs libpq5; git required for pip GitHub installs)
+# Runtime deps only (psycopg2-binary needs libpq5; git required for pip GitHub installs;
+# libmagic1 required by python-magic used by vbub-doc-ingestion)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     git \
+    libmagic1 \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
 
-# Install Python deps first (layer caching)
+# Install Python deps first (layer caching).
+# Two-step install: requirements.txt first (includes all package dependencies
+# explicitly), then vbub-doc-ingestion with --no-deps to skip python-magic-bin
+# which is Windows-only and replaced here by python-magic + libmagic1.
 COPY app/requirements.txt /code/requirements.txt
-RUN pip install --no-cache-dir -r /code/requirements.txt
+RUN pip install --no-cache-dir -r /code/requirements.txt \
+ && pip install --no-cache-dir --no-deps \
+    "vbub-doc-ingestion @ git+https://github.com/doc1000/vbub-doc-ingestion.git@2170127982df84b951e93cf948c1f4bafb0d39cb"
 
 # Copy app
 COPY app /code/app

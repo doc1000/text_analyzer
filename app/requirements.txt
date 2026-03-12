@@ -18,4 +18,13 @@ apscheduler
 pytest
 pytest-asyncio
 httpx
-vbub-doc-ingestion @ git+https://github.com/doc1000/vbub-doc-ingestion.git@2170127982df84b951e93cf948c1f4bafb0d39cb
+# python-magic-bin (declared by vbub-doc-ingestion) is Windows-only and has no
+# Linux wheel. All other package dependencies are already listed above and will
+# be installed by the first pip invocation. The package itself is installed with
+# --no-deps to skip python-magic-bin; python-magic (above) provides the same
+# interface on Linux via libmagic1.
+python-magic
+pydantic-settings
+PyMuPDF
+python-docx
+openpyxl
