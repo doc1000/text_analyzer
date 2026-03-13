@@ -4,6 +4,8 @@ GraphBuilder — in-memory sparse kNN graph construction from document embedding
 Phase 1: builds a SparseGraph entirely in memory from embeddings.
 Phase 2: persists the SparseGraph to graph.vault_graph_edge and manages
          a graph version row in graph.vault_graph_version.
+Phase 8: replaces direct embedding access with FeatureFusionEngine so that
+         multiple weighted feature layers can contribute to graph construction.
 
 Design constraints (from architecture rules):
 - Dense distance/similarity matrices are ephemeral; never persisted.
@@ -24,6 +26,9 @@ from sqlalchemy.engine import Engine
 from graph_engine.db.models.graph_config import GraphConfigRow, get_graph_config
 from graph_engine.db.repositories.graph_edge_repo import GraphEdgeRepo
 from graph_engine.db.repositories.graph_version_repo import GraphVersionRepo
+from graph_engine.features.embedding_provider import EmbeddingFeatureProvider
+from graph_engine.features.fusion import FeatureFusionEngine
+from graph_engine.features.summary_embedding_provider import SummaryEmbeddingFeatureProvider
 from graph_engine.graph_core.types import SparseEdge, SparseGraph
 
 
@@ -37,6 +42,10 @@ class GraphBuilder:
     Phase 2 adds optional persistence: if built_by is supplied or
     persist=True (the default), the graph is saved to the database and a
     version row is created, finalised, and activated.
+
+    Phase 8 delegates similarity computation to FeatureFusionEngine so that
+    multiple weighted feature layers (embeddings, summary embeddings, …) can
+    contribute to graph construction via graph_config.feature_weights.
 
     The method always returns the SparseGraph regardless of persistence.
     """
@@ -59,8 +68,9 @@ class GraphBuilder:
         Steps:
         1. Load graph config.
         2. Fetch document IDs in the vault.
-        3. Fetch document embeddings (one vector per document).
-        4. Compute cosine similarity matrix in memory (ephemeral).
+        3. Build FeatureFusionEngine from config.feature_weights
+           (defaults to embeddings-only with weight 1.0 when empty).
+        4. Compute fused cosine similarity matrix in memory (ephemeral).
         5. For each document select top knn_k neighbors from candidate_k candidates.
         6. Build SparseEdge list with canonical ordering.
         7. Deduplicate symmetric edges.
@@ -68,7 +78,7 @@ class GraphBuilder:
         9. Return SparseGraph.
 
         Raises:
-            ValueError: if vault has no documents with embeddings.
+            ValueError: if vault has no documents or no embeddings are found.
 
         On persistence failure the version is marked as 'failed' and the
         exception is re-raised so the caller can decide how to handle it.
@@ -81,19 +91,18 @@ class GraphBuilder:
                 f"Vault {vault_id} has no documents. Cannot build graph."
             )
 
-        id_to_vec = self._fetch_embeddings(doc_ids, config)
-        if not id_to_vec:
+        fusion_engine = self._build_fusion_engine(config)
+        sim_matrix, ordered_ids = fusion_engine.compute_fused_similarities(doc_ids)
+
+        if not ordered_ids:
             raise ValueError(
-                f"No embeddings found for vault {vault_id} using source "
+                f"No feature vectors found for vault {vault_id} using source "
                 f"'{config.embedding_source}'. Cannot build graph."
             )
 
-        ordered_ids = list(id_to_vec.keys())
-        matrix = np.array([id_to_vec[d] for d in ordered_ids], dtype=np.float32)
-
         edges = self._build_knn_edges(
             ordered_ids=ordered_ids,
-            matrix=matrix,
+            similarity=sim_matrix,
             knn_k=config.knn_k,
             candidate_k=config.candidate_k,
         )
@@ -159,6 +168,66 @@ class GraphBuilder:
             raise
 
     # ------------------------------------------------------------------
+    # Feature fusion (Phase 8)
+    # ------------------------------------------------------------------
+
+    def _build_fusion_engine(self, config: GraphConfigRow) -> FeatureFusionEngine:
+        """
+        Construct a FeatureFusionEngine from graph config.
+
+        feature_weights is a JSONB dict of the form:
+            {"embedding": 0.7, "summary_embedding": 0.3}
+
+        If feature_weights is empty the engine defaults to embeddings-only
+        with weight 1.0 (backward compatibility with Phase 1/2 configs).
+        """
+        feature_weights: dict[str, float] = {
+            k: float(v) for k, v in (config.feature_weights or {}).items()
+        }
+
+        providers: list[tuple[object, float]] = []
+
+        if feature_weights:
+            emb_weight = feature_weights.get("embedding", 0.0)
+            if emb_weight > 0.0:
+                providers.append(
+                    (
+                        EmbeddingFeatureProvider(self._engine, config.embedding_source),
+                        emb_weight,
+                    )
+                )
+
+            summary_weight = feature_weights.get("summary_embedding", 0.0)
+            if summary_weight > 0.0 and config.summary_embedding_source:
+                providers.append(
+                    (
+                        SummaryEmbeddingFeatureProvider(
+                            self._engine, config.summary_embedding_source
+                        ),
+                        summary_weight,
+                    )
+                )
+        else:
+            # Default: embeddings-only, weight 1.0.
+            providers.append(
+                (
+                    EmbeddingFeatureProvider(self._engine, config.embedding_source),
+                    1.0,
+                )
+            )
+
+        if not providers:
+            # All configured weights were zero or sources missing; fall back.
+            providers.append(
+                (
+                    EmbeddingFeatureProvider(self._engine, config.embedding_source),
+                    1.0,
+                )
+            )
+
+        return FeatureFusionEngine(providers)
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -174,84 +243,36 @@ class GraphBuilder:
             rows = conn.execute(sql, {"vault_id": str(vault_id)}).fetchall()
         return [UUID(str(row[0])) for row in rows]
 
-    def _fetch_embeddings(
-        self,
-        doc_ids: list[UUID],
-        config: GraphConfigRow,
-    ) -> dict[UUID, np.ndarray]:
-        """
-        Fetch one embedding vector per document from the configured source table.
-
-        Uses chunk_index = 0 as the representative document-level embedding.
-        Documents without an embedding at chunk 0 are silently skipped.
-
-        The embedding_source column holds the table name within the 'embedding'
-        schema (e.g. 'all_minilm_v1_384').
-        """
-        table_name = config.embedding_source.strip()
-        # Qualify with schema if not already qualified.
-        if "." not in table_name:
-            qualified = f"embedding.{table_name}"
-        else:
-            qualified = table_name
-
-        # Pass document IDs as a PostgreSQL UUID array.
-        sql = text(
-            f"""
-            SELECT document_id, embedding
-            FROM {qualified}
-            WHERE document_id = ANY(:doc_ids)
-              AND chunk_index = 0
-            """
-        )
-        doc_id_strs = [str(d) for d in doc_ids]
-        with self._engine.connect() as conn:
-            rows = conn.execute(sql, {"doc_ids": doc_id_strs}).fetchall()
-
-        result: dict[UUID, np.ndarray] = {}
-        for doc_id_raw, embedding_raw in rows:
-            doc_uuid = UUID(str(doc_id_raw))
-            if embedding_raw is None:
-                continue
-            vec = np.array(embedding_raw, dtype=np.float32)
-            norm = np.linalg.norm(vec)
-            if norm > 0:
-                vec = vec / norm
-            result[doc_uuid] = vec
-        return result
-
     def _build_knn_edges(
         self,
         ordered_ids: list[UUID],
-        matrix: np.ndarray,
+        similarity: np.ndarray,
         knn_k: int,
         candidate_k: int,
     ) -> list[SparseEdge]:
         """
-        Compute kNN edges from an L2-normalised embedding matrix.
+        Compute kNN edges from a pre-computed cosine similarity matrix.
 
-        matrix shape: (n_docs, embedding_dim)
+        similarity shape: (n_docs, n_docs) — ephemeral, provided by
+        FeatureFusionEngine.compute_fused_similarities().
 
         Steps:
-        - Compute full cosine similarity matrix S = matrix @ matrix.T (ephemeral).
-        - For each row, select top (candidate_k + 1) candidates (excluding self).
+        - For each row, select top candidate_k candidates (excluding self).
         - From those, keep top knn_k by similarity.
         - Build SparseEdge list with canonical ordering and deduplication.
 
-        The similarity matrix is a local variable and is never persisted.
+        The similarity matrix is passed in as a local variable and is
+        never persisted.
         """
         n = len(ordered_ids)
         knn_k = min(knn_k, n - 1)
         candidate_k = min(candidate_k, n - 1)
 
-        # Ephemeral cosine similarity matrix. Shape: (n, n).
-        similarity = matrix @ matrix.T
-
         seen: set[tuple[UUID, UUID]] = set()
         edges: list[SparseEdge] = []
 
         for i in range(n):
-            sim_row = similarity[i]
+            sim_row = similarity[i].copy()
 
             # Exclude self (index i) from candidates.
             sim_row[i] = -np.inf

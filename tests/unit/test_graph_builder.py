@@ -156,16 +156,22 @@ class TestGraphBuilderKnn:
     def _builder(self) -> GraphBuilder:
         return GraphBuilder(engine=MagicMock())
 
+    def _sim_matrix(self, matrix: np.ndarray) -> np.ndarray:
+        """Compute cosine similarity matrix from L2-normalised vectors."""
+        sim = matrix @ matrix.T
+        return np.clip(sim, 0.0, 1.0).astype(np.float32)
+
     def test_node_count_matches_input(self) -> None:
         n = 10
         doc_ids = [_make_uuid(i) for i in range(n)]
         matrix = _random_embeddings(n, dim=64)
+        similarity = self._sim_matrix(matrix)
         config = _make_config(knn_k=3, candidate_k=5)
 
         builder = self._builder()
         edges = builder._build_knn_edges(
             ordered_ids=doc_ids,
-            matrix=matrix,
+            similarity=similarity,
             knn_k=config.knn_k,
             candidate_k=config.candidate_k,
         )
@@ -174,8 +180,6 @@ class TestGraphBuilderKnn:
         for e in edges:
             endpoint_ids.add(e.doc_lo)
             endpoint_ids.add(e.doc_hi)
-        # Every node that could form a pair should appear; at minimum node
-        # count covered by edges is <= n.
         assert len(endpoint_ids) <= n
 
     def test_canonical_ordering_all_edges(self) -> None:
@@ -183,12 +187,13 @@ class TestGraphBuilderKnn:
         n = 10
         doc_ids = [_make_uuid(i) for i in range(n)]
         matrix = _random_embeddings(n, dim=64)
+        similarity = self._sim_matrix(matrix)
         config = _make_config(knn_k=3, candidate_k=5)
 
         builder = self._builder()
         edges = builder._build_knn_edges(
             ordered_ids=doc_ids,
-            matrix=matrix,
+            similarity=similarity,
             knn_k=config.knn_k,
             candidate_k=config.candidate_k,
         )
@@ -203,12 +208,13 @@ class TestGraphBuilderKnn:
         n = 10
         doc_ids = [_make_uuid(i) for i in range(n)]
         matrix = _random_embeddings(n, dim=64)
+        similarity = self._sim_matrix(matrix)
         config = _make_config(knn_k=4, candidate_k=6)
 
         builder = self._builder()
         edges = builder._build_knn_edges(
             ordered_ids=doc_ids,
-            matrix=matrix,
+            similarity=similarity,
             knn_k=config.knn_k,
             candidate_k=config.candidate_k,
         )
@@ -225,16 +231,17 @@ class TestGraphBuilderKnn:
         knn_k = 3
         doc_ids = [_make_uuid(i) for i in range(n)]
         matrix = _random_embeddings(n, dim=64)
+        similarity = self._sim_matrix(matrix)
 
         builder = self._builder()
         edges = builder._build_knn_edges(
             ordered_ids=doc_ids,
-            matrix=matrix,
+            similarity=similarity,
             knn_k=knn_k,
             candidate_k=knn_k + 2,
         )
 
-        max_edges = n * knn_k  # loose upper bound before dedup
+        max_edges = n * knn_k
         assert len(edges) <= max_edges, (
             f"Edge count {len(edges)} exceeds loose upper bound {max_edges}"
         )
@@ -244,11 +251,12 @@ class TestGraphBuilderKnn:
         n = 10
         doc_ids = [_make_uuid(i) for i in range(n)]
         matrix = _random_embeddings(n, dim=64)
+        similarity = self._sim_matrix(matrix)
 
         builder = self._builder()
         edges = builder._build_knn_edges(
             ordered_ids=doc_ids,
-            matrix=matrix,
+            similarity=similarity,
             knn_k=3,
             candidate_k=5,
         )
@@ -261,24 +269,35 @@ class TestGraphBuilderKnn:
         n = 10
         doc_ids = [_make_uuid(i) for i in range(n)]
         matrix = _random_embeddings(n, dim=64, seed=7)
+        similarity = self._sim_matrix(matrix)
 
         builder = self._builder()
 
-        edges_k2 = builder._build_knn_edges(doc_ids, matrix.copy(), knn_k=2, candidate_k=5)
-        edges_k4 = builder._build_knn_edges(doc_ids, matrix.copy(), knn_k=4, candidate_k=6)
+        edges_k2 = builder._build_knn_edges(
+            ordered_ids=doc_ids,
+            similarity=similarity.copy(),
+            knn_k=2,
+            candidate_k=5,
+        )
+        edges_k4 = builder._build_knn_edges(
+            ordered_ids=doc_ids,
+            similarity=similarity.copy(),
+            knn_k=4,
+            candidate_k=6,
+        )
 
-        # Higher knn_k should generally produce more or equal edges.
         assert len(edges_k4) >= len(edges_k2)
 
     def test_two_documents_produce_one_edge(self) -> None:
         """Minimum viable vault: 2 documents produce exactly 1 edge."""
         doc_ids = [_make_uuid(0), _make_uuid(1)]
         matrix = _random_embeddings(2, dim=16)
+        similarity = self._sim_matrix(matrix)
 
         builder = self._builder()
         edges = builder._build_knn_edges(
             ordered_ids=doc_ids,
-            matrix=matrix,
+            similarity=similarity,
             knn_k=1,
             candidate_k=1,
         )
@@ -315,17 +334,20 @@ class TestGraphBuilderBuildVaultGraph:
 
         engine = MagicMock()
 
-        # Stub get_graph_config to return our config without DB.
+        # Pre-compute the cosine similarity matrix the fusion engine would return.
+        sim_matrix = np.clip(embeddings @ embeddings.T, 0.0, 1.0).astype(np.float32)
+
+        # Stub the fusion engine so no DB calls are made.
+        mock_fusion_engine = MagicMock()
+        mock_fusion_engine.compute_fused_similarities.return_value = (sim_matrix, doc_ids)
+
         with patch(
             "graph_engine.graph_core.builder.get_graph_config",
             return_value=config,
         ):
-            # Stub _fetch_vault_document_ids.
             builder = GraphBuilder(engine=engine)
             builder._fetch_vault_document_ids = MagicMock(return_value=doc_ids)
-            # Stub _fetch_embeddings.
-            id_to_vec = {doc_ids[i]: embeddings[i] for i in range(n)}
-            builder._fetch_embeddings = MagicMock(return_value=id_to_vec)
+            builder._build_fusion_engine = MagicMock(return_value=mock_fusion_engine)
 
             graph = builder.build_vault_graph(
                 vault_id=vault_id,
@@ -384,13 +406,19 @@ class TestGraphBuilderBuildVaultGraph:
         config = _make_config()
         engine = MagicMock()
 
+        mock_fusion_engine = MagicMock()
+        mock_fusion_engine.compute_fused_similarities.return_value = (
+            np.zeros((0, 0), dtype=np.float32),
+            [],
+        )
+
         with patch(
             "graph_engine.graph_core.builder.get_graph_config",
             return_value=config,
         ):
             builder = GraphBuilder(engine=engine)
             builder._fetch_vault_document_ids = MagicMock(return_value=doc_ids)
-            builder._fetch_embeddings = MagicMock(return_value={})
+            builder._build_fusion_engine = MagicMock(return_value=mock_fusion_engine)
 
-            with pytest.raises(ValueError, match="No embeddings"):
+            with pytest.raises(ValueError, match="No feature vectors found"):
                 builder.build_vault_graph(vault_id=vault_id, config_id=config_id)
