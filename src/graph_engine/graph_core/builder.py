@@ -2,13 +2,15 @@
 GraphBuilder — in-memory sparse kNN graph construction from document embeddings.
 
 Phase 1: builds a SparseGraph entirely in memory from embeddings.
-No graph state is persisted to the database in this phase (Phase 2 adds persistence).
+Phase 2: persists the SparseGraph to graph.vault_graph_edge and manages
+         a graph version row in graph.vault_graph_version.
 
 Design constraints (from architecture rules):
 - Dense distance/similarity matrices are ephemeral; never persisted.
 - Canonical edge ordering: doc_lo < doc_hi (enforced via SparseEdge.make()).
 - Each undirected pair stored exactly once.
 - Empty vault raises ValueError.
+- SparseGraph is still returned unchanged; persistence is additional behaviour.
 """
 
 from __future__ import annotations
@@ -20,24 +22,36 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from graph_engine.db.models.graph_config import GraphConfigRow, get_graph_config
+from graph_engine.db.repositories.graph_edge_repo import GraphEdgeRepo
+from graph_engine.db.repositories.graph_version_repo import GraphVersionRepo
 from graph_engine.graph_core.types import SparseEdge, SparseGraph
 
 
 class GraphBuilder:
     """
-    Constructs an in-memory sparse semantic graph for a vault.
+    Constructs an in-memory sparse semantic graph for a vault and persists it.
 
     The engine must point to the shared PostgreSQL database.
     All matrix operations are ephemeral and never written to the database.
+
+    Phase 2 adds optional persistence: if built_by is supplied or
+    persist=True (the default), the graph is saved to the database and a
+    version row is created, finalised, and activated.
+
+    The method always returns the SparseGraph regardless of persistence.
     """
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+        self._version_repo = GraphVersionRepo(engine)
+        self._edge_repo = GraphEdgeRepo(engine)
 
     def build_vault_graph(
         self,
         vault_id: UUID,
         config_id: UUID,
+        built_by: UUID | None = None,
+        persist: bool = True,
     ) -> SparseGraph:
         """
         Build a sparse kNN graph for all documents in a vault.
@@ -50,10 +64,14 @@ class GraphBuilder:
         5. For each document select top knn_k neighbors from candidate_k candidates.
         6. Build SparseEdge list with canonical ordering.
         7. Deduplicate symmetric edges.
-        8. Return SparseGraph.
+        8. (Phase 2) If persist=True: create version, save edges, finalise, activate.
+        9. Return SparseGraph.
 
         Raises:
             ValueError: if vault has no documents with embeddings.
+
+        On persistence failure the version is marked as 'failed' and the
+        exception is re-raised so the caller can decide how to handle it.
         """
         config = get_graph_config(self._engine, config_id)
 
@@ -80,12 +98,65 @@ class GraphBuilder:
             candidate_k=config.candidate_k,
         )
 
-        return SparseGraph(
+        sparse_graph = SparseGraph(
             nodes=ordered_ids,
             edges=edges,
             vault_id=vault_id,
             config_id=config_id,
         )
+
+        if persist:
+            self._persist_graph(
+                sparse_graph=sparse_graph,
+                vault_id=vault_id,
+                config_id=config_id,
+                built_by=built_by,
+            )
+
+        return sparse_graph
+
+    # ------------------------------------------------------------------
+    # Persistence helpers (Phase 2)
+    # ------------------------------------------------------------------
+
+    def _persist_graph(
+        self,
+        sparse_graph: SparseGraph,
+        vault_id: UUID,
+        config_id: UUID,
+        built_by: UUID | None,
+    ) -> None:
+        """
+        Create a graph version, save all edges, finalise, and activate it.
+
+        If any step fails the version is marked as 'failed' and the
+        original exception is re-raised.
+        """
+        version_row = self._version_repo.create_version(
+            vault_id=vault_id,
+            config_id=config_id,
+            built_by=built_by,
+        )
+        version_id = UUID(str(version_row["id"]))
+
+        try:
+            edge_count = self._edge_repo.save_graph(
+                graph_version_id=version_id,
+                vault_id=vault_id,
+                sparse_graph=sparse_graph,
+            )
+            self._version_repo.finalize_version(
+                version_id=version_id,
+                edge_count=edge_count,
+                doc_count=len(sparse_graph.nodes),
+            )
+            self._version_repo.activate_version(version_id=version_id)
+        except Exception as exc:
+            self._version_repo.fail_version(
+                version_id=version_id,
+                error_message=str(exc),
+            )
+            raise
 
     # ------------------------------------------------------------------
     # Internal helpers

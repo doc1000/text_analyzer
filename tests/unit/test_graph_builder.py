@@ -327,7 +327,11 @@ class TestGraphBuilderBuildVaultGraph:
             id_to_vec = {doc_ids[i]: embeddings[i] for i in range(n)}
             builder._fetch_embeddings = MagicMock(return_value=id_to_vec)
 
-            graph = builder.build_vault_graph(vault_id=vault_id, config_id=config_id)
+            graph = builder.build_vault_graph(
+                vault_id=vault_id,
+                config_id=config_id,
+                persist=False,
+            )
 
         return graph, doc_ids, vault_id, config_id
 
