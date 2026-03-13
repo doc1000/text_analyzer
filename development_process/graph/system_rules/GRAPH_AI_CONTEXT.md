@@ -1,10 +1,11 @@
-# AI Context — Graph / Topic Modeling Module
+# AI Context — Graph / Topic Modeling System
 
-When working in this module:
+When working in the graph-engine repository:
 
 Primary references:
 - development_process/implementation_plans/IP_GRAPH.md
-- development_process/graph_module/GRAPH_MODULE_SCOPE.md
+- development_process/system_rules/GRAPH_MODULE_SCOPE.md
+- development_process/GRAPH_SYSTEM_INTEGRATION_CONTRACT.md
 
 Architecture constraints:
 - development_process/system_rules/GRAPH_ARCHITECTURE_RULES.md
@@ -19,12 +20,30 @@ Rules:
 - Do not introduce new dependencies unless explicitly approved
 - Respect the boundaries defined in GRAPH_ARCHITECTURE_RULES.md
 - Use CURSOR_CONSTITUTION.md
+- All graph code lives in the graph-engine repository, not in the main application repository
+- The graph repo must not import or depend on main application code
+
+---
+
+# Repository Boundary
+
+The graph system is implemented in a **separate repository** (`graph-engine`).
+
+It is not an internal module of the main application. It interacts with the main system through a defined integration contract documented in `development_process/GRAPH_SYSTEM_INTEGRATION_CONTRACT.md`.
+
+The graph-engine repository:
+
+* is an importable Python package (`graph_engine`)
+* optionally exposes a lightweight API wrapper (service mode)
+* uses the same PostgreSQL database as the main application
+* writes only to the `graph` schema
+* reads from a narrow, approved contract in the main system
 
 ---
 
 # Core Graph System Assumptions
 
-This module implements a **vault-aware semantic graph subsystem**.
+The graph-engine repository implements a **vault-aware semantic graph subsystem**.
 
 It must:
 
@@ -35,7 +54,7 @@ It must:
 - support cross-vault graph composition
 - provide derived graph views for the UI
 
-This module **shares the primary PostgreSQL database**.
+The graph-engine repository **shares the primary PostgreSQL database** with the main application, writing only to `graph.*` and reading from approved upstream tables.
 
 ---
 
@@ -69,17 +88,19 @@ Normal queries must **never require rebuilding the full graph**.
 
 ---
 
-# Initial Feature Assumptions
+# Feature Contract
+
+Feature extraction occurs **outside** the graph repository (in the main application's enrichment pipelines).
+
+Feature fusion occurs **inside** the graph repository.
 
 Phase 1 should assume:
 
-- document embeddings exist
-- summary embeddings may exist
+- document embeddings exist (required initial layer)
+- summary embeddings may exist (optional initial layer)
 - no tags, categories, or NER are required
 
-Later phases may add feature layers.
-
-Graph core must support **pluggable feature layers**.
+Later phases may add feature layers. The graph system must support **pluggable feature layers** consumed through named references to approved source tables/views.
 
 ---
 
@@ -122,7 +143,7 @@ These artifacts are **derived and replaceable**.
 
 # Labeling
 
-Cluster/topic labels are handled by a separate labeling module.
+Cluster/topic labels are handled by a labeling module within the graph-engine repository.
 
 Graph rendering must **not block on label generation**.
 
@@ -155,7 +176,7 @@ PostgreSQL owns:
 - subgraph extraction
 - version management
 
-Python/application logic owns:
+Graph-engine Python code owns:
 
 - matrix math
 - graph construction

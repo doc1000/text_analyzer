@@ -29,14 +29,113 @@ Each phase must be:
 
 ---
 
+# Repository and Integration Model
+
+The graph/topic modeling system is implemented in a **separate repository** (`graph-engine`), not as an internal module of the main application.
+
+## Repo Ownership
+
+Main application repository owns:
+
+* `public.documents`
+* `public.vaults`
+* `public.vault_memberships`
+* users / auth / app permissions
+* ingestion, parsing, OCR
+* embedding generation and feature enrichment pipelines
+* UI and application workflows
+
+Graph repository (`graph-engine`) owns:
+
+* `graph.*` schema tables
+* graph build / update logic
+* feature fusion logic
+* sparse graph persistence
+* bridge edge persistence
+* subgraph extraction logic
+* graph versioning
+* hierarchy / Z derived caches
+* graph view payload builders
+* optional labeling subsystem
+
+The graph repository must not take over ingestion, OCR, parsing, authentication, user management, or generic enrichment pipelines.
+
+## Execution Modes
+
+Two execution modes are supported:
+
+**Import mode** (preferred initially)
+
+The graph repository is imported as a Python package:
+
+```python
+from graph_engine import GraphService
+```
+
+**Service mode** (added later or in parallel when useful)
+
+The graph repository exposes a lightweight internal API wrapper:
+
+```
+POST /graph/build-vault
+POST /graph/extract-subgraph
+POST /graph/compose-view
+POST /graph/rebuild-bridges
+```
+
+Import mode is the default. Do not redesign the system as a distributed microservice platform.
+
+## Database Contract
+
+The graph system uses the **same PostgreSQL database** as the main application.
+
+Write scope:
+
+* `graph.*` — all tables in the graph schema
+
+Read scope (narrow approved contract):
+
+* `public.documents`
+* `public.vaults`
+* `public.vault_memberships`
+* approved embedding tables or views
+* approved feature tables or views
+
+The graph system must not read arbitrary application tables. Reads should go through stable tables, dedicated views, or feature-provider adapters.
+
+Dense distance matrices, full graph tables, and per-pair candidate tables remain **prohibited**.
+
+## Feature Contract
+
+* Feature extraction occurs **outside** the graph repository (main application pipelines).
+* Feature fusion occurs **inside** the graph repository.
+* The graph repo consumes named feature layers through references to approved source tables/views/adapters.
+* Graph configuration describes: feature layer names, source locations, join keys, metrics, weights, pruning mode, and graph build parameters.
+
+Initial required layer: document embedding.
+Initial optional layer: summary embedding.
+
+Future optional layers (not required initially):
+
+* tags
+* category score vectors
+* NER / entity profiles
+* classifier outputs
+* user-intent signals
+
+The system must operate with **embeddings-only** in early phases.
+
+---
+
 # Global Implementation Rules
 
 All phases must follow:
 
-* `development_process/graph/system_rules/GRAPH_ARCHITECTURE_RULES.md`
-* `development_process/graph/system_rules/GRAPH_AI_CONTEXT.md`
-* `development_process/graph/system_rules/GRAPH_MODULE_SCOPE.md`
-* `development_process/CURSOR_CONSTITUTION.md`
+* `development_process/system_rules/GRAPH_ARCHITECTURE_RULES.md`
+* `development_process/system_rules/GRAPH_AI_CONTEXT.md`
+* `development_process/system_rules/GRAPH_MODULE_SCOPE.md`
+* `development_process/GRAPH_SYSTEM_INTEGRATION_CONTRACT.md`
+* `CURSOR_CONSTITUTION.md`
 
 ### Mandatory constraints
 
@@ -50,6 +149,8 @@ All phases must follow:
 8. All graph tables live in a dedicated `graph` schema, not `public`
 9. Dense distance matrices must **never** be persisted
 10. Subgraph extraction must happen in SQL
+11. All graph code lives in the `graph-engine` repository, not in the main application repository
+12. The graph repo must not import or depend on main application code; it reads from approved database tables/views only
 
 ---
 
@@ -77,7 +178,7 @@ Derived artifacts include:
 
 All database changes must follow:
 
-* `development_process/graph/graph_schema_plan.md`
+* `development_process/graph_schema_plan.md`
 
 Tables are introduced incrementally across phases.
 
@@ -112,18 +213,18 @@ After this phase the system can build a sparse graph in memory for any vault and
 ## Files in Scope
 
 ```
-graph_core/__init__.py
-graph_core/graph_types.py
-graph_core/graph_config.py
-graph_core/graph_builder.py
-migrations/008_create_graph_schema.sql
-tests/graph/__init__.py
-tests/graph/test_graph_builder.py
+src/graph_engine/__init__.py
+src/graph_engine/graph_core/types.py
+src/graph_engine/db/models/graph_config.py
+src/graph_engine/graph_core/builder.py
+migrations/versions/008_create_graph_schema.py
+tests/unit/__init__.py
+tests/unit/test_graph_builder.py
 ```
 
 ## Inputs
 
-* document embeddings from the `embedding` schema (via existing `app/helpers.py` infrastructure)
+* document embeddings from the `embedding` schema (via approved embedding tables/views in the shared database)
 * vault IDs from `public.vaults`
 * document IDs from `public.documents`
 
@@ -137,7 +238,7 @@ tests/graph/test_graph_builder.py
 
 ## Database Changes
 
-Migration file: `migrations/008_create_graph_schema.sql`
+Migration file: `migrations/versions/008_create_graph_schema.py`
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS graph;
@@ -160,27 +261,27 @@ CREATE TABLE graph.graph_config (
 );
 ```
 
-Run using `run_migration.py`.
+Run using Alembic within the graph-engine repo.
 
 ## Implementation Tasks
 
-1. Create migration `migrations/008_create_graph_schema.sql` with the DDL above. Run it.
+1. Create migration `migrations/versions/008_create_graph_schema.py` with the DDL above. Run it.
 
-2. Create `graph_core/__init__.py` as an empty package marker.
+2. Create `src/graph_engine/__init__.py` as the package root.
 
-3. Create `graph_core/graph_types.py`:
+3. Create `src/graph_engine/graph_core/types.py`:
    - Define `SparseEdge` dataclass with fields: `doc_lo: UUID`, `doc_hi: UUID`, `weight: float`, `distance: float | None`, `rank_lo: int | None`, `rank_hi: int | None`.
    - Define `SparseGraph` dataclass with fields: `nodes: list[UUID]`, `edges: list[SparseEdge]`, `vault_id: UUID`, `config_id: UUID`.
    - Enforce canonical edge ordering (`doc_lo < doc_hi`) via a factory or `__post_init__` check on `SparseEdge`.
 
-4. Create `graph_core/graph_config.py`:
+4. Create `src/graph_engine/db/models/graph_config.py`:
    - Define a `GraphConfigRow` dataclass matching the `graph.graph_config` columns.
    - Implement `get_graph_config(config_id: UUID) -> GraphConfigRow` to read a config by ID.
    - Implement `get_active_graph_config() -> GraphConfigRow | None` to fetch the active config.
    - Implement `create_graph_config(...) -> GraphConfigRow` to insert a new config row.
-   - Use raw SQL or SQLAlchemy core; do not create an ORM model in `app/models.py` yet.
+   - Use SQLAlchemy core within the graph-engine repo; models live in `src/graph_engine/db/models/`.
 
-5. Create `graph_core/graph_builder.py`:
+5. Create `src/graph_engine/graph_core/builder.py`:
    - Define `GraphBuilder` class.
    - Implement `build_vault_graph(vault_id: UUID, config_id: UUID) -> SparseGraph`:
      a. Load graph config from `graph.graph_config`.
@@ -193,7 +294,7 @@ Run using `run_migration.py`.
      h. Return `SparseGraph`.
    - The builder must reject an empty vault (no documents) with a clear error.
 
-6. Create `tests/graph/__init__.py` and `tests/graph/test_graph_builder.py`:
+6. Create `tests/unit/__init__.py` and `tests/unit/test_graph_builder.py`:
    - Test kNN construction with synthetic embeddings (small set, e.g. 10 documents).
    - Test canonical edge ordering: every edge satisfies `doc_lo < doc_hi`.
    - Test that node count matches input document count.
@@ -235,17 +336,17 @@ Persist sparse graph edges per vault and manage graph versions. After this phase
 ## Files in Scope
 
 ```
-graph_core/graph_repository.py
-graph_core/graph_version_manager.py
-migrations/009_graph_persistence.sql
-tests/graph/test_graph_repository.py
-tests/graph/test_graph_version_manager.py
+src/graph_engine/db/repositories/graph_edge_repo.py
+src/graph_engine/db/repositories/graph_version_repo.py
+migrations/versions/009_graph_persistence.py
+tests/unit/test_graph_repository.py
+tests/unit/test_graph_version_manager.py
 ```
 
 Files modified from Phase 1:
 
 ```
-graph_core/graph_builder.py (integrate persistence calls)
+src/graph_engine/graph_core/builder.py (integrate persistence calls)
 ```
 
 ## Inputs
@@ -258,13 +359,13 @@ graph_core/graph_builder.py (integrate persistence calls)
 
 * `graph.vault_graph_version` table with unique active-version index
 * `graph.vault_graph_edge` table with all required indexes
-* `GraphRepository` class for edge CRUD
-* `GraphVersionManager` class for version lifecycle
+* `GraphEdgeRepo` class for edge CRUD
+* `GraphVersionRepo` class for version lifecycle
 * `GraphBuilder` now persists edges and creates versions
 
 ## Database Changes
 
-Migration file: `migrations/009_graph_persistence.sql`
+Migration file: `migrations/versions/009_graph_persistence.py`
 
 ```sql
 CREATE TABLE graph.vault_graph_version (
@@ -326,9 +427,9 @@ Allowed version statuses: `building`, `active`, `superseded`, `failed`, `stale`.
 
 ## Implementation Tasks
 
-1. Create migration `migrations/009_graph_persistence.sql` with the DDL above. Run it.
+1. Create migration `migrations/versions/009_graph_persistence.py` with the DDL above. Run it.
 
-2. Create `graph_core/graph_repository.py`:
+2. Create `src/graph_engine/db/repositories/graph_edge_repo.py`:
    - Implement `save_graph(graph_version_id: UUID, vault_id: UUID, sparse_graph: SparseGraph) -> int`:
      a. Bulk insert all edges from `SparseGraph` into `graph.vault_graph_edge`.
      b. Use batch inserts (e.g. `executemany` or `COPY`) for performance on large graphs.
@@ -341,7 +442,7 @@ Allowed version statuses: `building`, `active`, `superseded`, `failed`, `stale`.
      a. Delete all edges for a graph version.
      b. Return count of deleted rows.
 
-3. Create `graph_core/graph_version_manager.py`:
+3. Create `src/graph_engine/db/repositories/graph_version_repo.py`:
    - Implement `create_version(vault_id: UUID, config_id: UUID, built_by: UUID | None = None) -> dict`:
      a. Compute `version_no` as `max(version_no) + 1` for the vault, defaulting to 1.
      b. Insert into `graph.vault_graph_version` with status `building`.
@@ -356,21 +457,21 @@ Allowed version statuses: `building`, `active`, `superseded`, `failed`, `stale`.
    - Implement `get_active_version(vault_id: UUID) -> dict | None`:
      a. Query for the row where `vault_id` matches and `is_active = true`.
 
-4. Update `graph_core/graph_builder.py`:
+4. Update `src/graph_engine/graph_core/builder.py`:
    - After `build_vault_graph()` constructs the in-memory graph:
-     a. Call `GraphVersionManager.create_version()`.
-     b. Call `GraphRepository.save_graph()`.
-     c. Call `GraphVersionManager.finalize_version()` with edge and doc counts.
-     d. Call `GraphVersionManager.activate_version()`.
-   - Wrap in try/except: on failure call `GraphVersionManager.fail_version()`.
+     a. Call `GraphVersionRepo.create_version()`.
+     b. Call `GraphEdgeRepo.save_graph()`.
+     c. Call `GraphVersionRepo.finalize_version()` with edge and doc counts.
+     d. Call `GraphVersionRepo.activate_version()`.
+   - Wrap in try/except: on failure call `GraphVersionRepo.fail_version()`.
 
 5. Create tests:
-   - `tests/graph/test_graph_repository.py`:
+   - `tests/unit/test_graph_repository.py`:
      a. Test save/load round-trip: edges match after persistence.
      b. Test bulk insert correctness: edge count in DB matches input.
      c. Test canonical ordering is preserved in DB.
      d. Test `delete_graph_edges` removes all edges for the version.
-   - `tests/graph/test_graph_version_manager.py`:
+   - `tests/unit/test_graph_version_manager.py`:
      a. Test version creation increments `version_no`.
      b. Test activation sets `is_active = true` and supersedes old version.
      c. Test only one active version exists per vault at any time.
@@ -407,8 +508,8 @@ Extract induced subgraphs from persisted vault graphs using SQL. Given a set of 
 ## Files in Scope
 
 ```
-graph_core/subgraph_service.py
-tests/graph/test_subgraph_service.py
+src/graph_engine/graph_core/subgraph.py
+tests/unit/test_subgraph_service.py
 ```
 
 ## Inputs
@@ -428,15 +529,15 @@ None. This phase queries tables from Phase 2.
 
 ## Implementation Tasks
 
-1. Create `graph_core/subgraph_service.py`:
+1. Create `src/graph_engine/graph_core/subgraph.py`:
    - Define `SubgraphResult` dataclass: `nodes: list[UUID]`, `edges: list[SparseEdge]`, `graph_version_id: UUID`, `vault_id: UUID`, `node_count: int`, `edge_count: int`.
    - Implement `extract_subgraph(vault_id: UUID, document_ids: list[UUID], graph_version_id: UUID | None = None) -> SubgraphResult`:
-     a. If `graph_version_id` is None, look up the active version for the vault via `GraphVersionManager.get_active_version()`.
+     a. If `graph_version_id` is None, look up the active version for the vault via `GraphVersionRepo.get_active_version()`.
      b. Execute SQL to select edges where **both** `doc_lo` and `doc_hi` are in the provided document ID set and `graph_version_id` matches.
      c. Collect distinct node IDs from the returned edges.
      d. Return `SubgraphResult`.
 
-   - SQL pattern for induced subgraph:
+   SQL pattern for induced subgraph:
      ```sql
      SELECT * FROM graph.vault_graph_edge
      WHERE graph_version_id = :version_id
@@ -460,7 +561,7 @@ None. This phase queries tables from Phase 2.
 
    - All graph slicing must happen in SQL. Application code only assembles the `SubgraphResult`.
 
-2. Create `tests/graph/test_subgraph_service.py`:
+2. Create `tests/unit/test_subgraph_service.py`:
    - Test induced subgraph returns only edges where both endpoints are in the requested set.
    - Test ego subgraph returns correct 1-hop neighborhood.
    - Test empty document set returns empty result (zero nodes, zero edges).
@@ -499,9 +600,9 @@ After this phase, single-document changes do not require a full vault graph rebu
 ## Files in Scope
 
 ```
-graph_core/graph_update_service.py
-migrations/010_graph_jobs.sql
-tests/graph/test_graph_update_service.py
+src/graph_engine/graph_core/updater.py
+migrations/versions/010_graph_jobs.py
+tests/unit/test_graph_update_service.py
 ```
 
 ## Inputs
@@ -519,7 +620,7 @@ tests/graph/test_graph_update_service.py
 
 ## Database Changes
 
-Migration file: `migrations/010_graph_jobs.sql`
+Migration file: `migrations/versions/010_graph_jobs.py`
 
 ```sql
 CREATE TABLE graph.graph_job (
@@ -557,9 +658,9 @@ Job types: `build_vault_graph`, `repair_local_graph`, `rebuild_bridges`, `derive
 
 ## Implementation Tasks
 
-1. Create migration `migrations/010_graph_jobs.sql` with the DDL above. Run it.
+1. Create migration `migrations/versions/010_graph_jobs.py` with the DDL above. Run it.
 
-2. Create `graph_core/graph_update_service.py`:
+2. Create `src/graph_engine/graph_core/updater.py`:
    - Implement `insert_document(vault_id: UUID, document_id: UUID, graph_version_id: UUID | None = None)`:
      a. Look up the active graph version if not provided.
      b. Load the graph config for the version.
@@ -585,7 +686,7 @@ Job types: `build_vault_graph`, `repair_local_graph`, `rebuild_bridges`, `derive
 
    - Full graph rebuild must **never** be triggered by these operations.
 
-3. Create `tests/graph/test_graph_update_service.py`:
+3. Create `tests/unit/test_graph_update_service.py`:
    - Test document insertion adds correct number of edges.
    - Test inserted edges satisfy canonical ordering.
    - Test document deletion removes all incident edges.
@@ -625,10 +726,10 @@ Convert graph slices into UI-ready payloads suitable for D3 force layouts and gr
 ## Files in Scope
 
 ```
-graph_views/__init__.py
-graph_views/graph_payload_builder.py
-graph_views/force_view_builder.py
-tests/graph/test_graph_views.py
+src/graph_engine/views/__init__.py
+src/graph_engine/views/graph_payload_builder.py
+src/graph_engine/views/force_payload.py
+tests/unit/test_graph_views.py
 ```
 
 ## Inputs
@@ -649,9 +750,9 @@ None.
 
 ## Implementation Tasks
 
-1. Create `graph_views/__init__.py` as an empty package marker.
+1. Create `src/graph_engine/views/__init__.py` as an empty package marker.
 
-2. Create `graph_views/graph_payload_builder.py`:
+2. Create `src/graph_engine/views/graph_payload_builder.py`:
    - Define `GraphNodePayload` dataclass: `id: str`, `title: str`, `url: str | None`, `vault_id: str`, `metadata: dict`.
    - Define `GraphEdgePayload` dataclass: `source: str`, `target: str`, `weight: float`, `edge_type: str`.
    - Define `GraphViewPayload` dataclass: `nodes: list[GraphNodePayload]`, `edges: list[GraphEdgePayload]`, `node_count: int`, `edge_count: int`, `metadata: dict`.
@@ -661,7 +762,7 @@ None.
      c. Return `GraphViewPayload`.
    - `document_metadata` is a dict keyed by document UUID with values containing at minimum `title`, `url`, `vault_id`.
 
-3. Create `graph_views/force_view_builder.py`:
+3. Create `src/graph_engine/views/force_payload.py`:
    - Implement `build_force_payload(graph_view_payload: GraphViewPayload) -> dict`:
      a. Convert `GraphViewPayload` into D3 force-simulation-compatible JSON:
         ```json
@@ -690,7 +791,7 @@ None.
      d. Nodes not in any group get `group = null`.
      e. Return the grouped payload structure.
 
-4. Create `tests/graph/test_graph_views.py`:
+4. Create `tests/unit/test_graph_views.py`:
    - Test force payload `nodes` and `links` counts match input.
    - Test every `source` and `target` in `links` references a valid node `id`.
    - Test grouped payload assigns group labels correctly.
@@ -730,9 +831,10 @@ Internal vault graph structure must never be modified by bridge operations.
 ## Files in Scope
 
 ```
-graph_core/graph_composition_service.py
-migrations/011_bridge_edges.sql
-tests/graph/test_graph_composition.py
+src/graph_engine/graph_core/composition.py
+src/graph_engine/graph_core/bridges.py
+migrations/versions/011_bridge_edges.py
+tests/unit/test_graph_composition.py
 ```
 
 ## Inputs
@@ -748,7 +850,7 @@ tests/graph/test_graph_composition.py
 
 ## Database Changes
 
-Migration file: `migrations/011_bridge_edges.sql`
+Migration file: `migrations/versions/011_bridge_edges.py`
 
 ```sql
 CREATE TABLE graph.bridge_graph_edge (
@@ -786,9 +888,9 @@ CREATE INDEX idx_bridge_graph_edge_target_doc
 
 ## Implementation Tasks
 
-1. Create migration `migrations/011_bridge_edges.sql` with the DDL above. Run it.
+1. Create migration `migrations/versions/011_bridge_edges.py` with the DDL above. Run it.
 
-2. Create `graph_core/graph_composition_service.py`:
+2. Create `src/graph_engine/graph_core/composition.py` and `src/graph_engine/graph_core/bridges.py`:
    - Implement `build_bridges(source_vault_id: UUID, target_vault_id: UUID, config_id: UUID, built_by: UUID | None = None) -> int`:
      a. Load graph config for `bridge_knn_k`.
      b. Retrieve document embeddings for both vaults.
@@ -813,7 +915,7 @@ CREATE INDEX idx_bridge_graph_edge_target_doc
 
    - Bridge edges must **never** modify internal vault graph edges.
 
-3. Create `tests/graph/test_graph_composition.py`:
+3. Create `tests/unit/test_graph_composition.py`:
    - Test bridge edge creation between two vaults produces expected edge count.
    - Test `load_bridges` returns edges for the requested vault pair regardless of source/target direction.
    - Test `compose_view` merges internal and bridge edges correctly.
@@ -852,9 +954,9 @@ These structures are **derived artifacts** and must never become canonical graph
 ## Files in Scope
 
 ```
-graph_views/hierarchy_builder.py
-migrations/012_graph_hierarchy_cache.sql
-tests/graph/test_hierarchy_builder.py
+src/graph_engine/graph_core/hierarchy.py
+migrations/versions/012_graph_hierarchy_cache.py
+tests/unit/test_hierarchy_builder.py
 ```
 
 ## Inputs
@@ -870,7 +972,7 @@ tests/graph/test_hierarchy_builder.py
 
 ## Database Changes
 
-Migration file: `migrations/012_graph_hierarchy_cache.sql`
+Migration file: `migrations/versions/012_graph_hierarchy_cache.py`
 
 ```sql
 CREATE TABLE graph.graph_hierarchy_cache (
@@ -890,9 +992,9 @@ Cache type values: `z_linkage`, `circle_pack_payload`, `local_hierarchy_payload`
 
 ## Implementation Tasks
 
-1. Create migration `migrations/012_graph_hierarchy_cache.sql` with the DDL above. Run it.
+1. Create migration `migrations/versions/012_graph_hierarchy_cache.py` with the DDL above. Run it.
 
-2. Create `graph_views/hierarchy_builder.py`:
+2. Create `src/graph_engine/graph_core/hierarchy.py`:
    - Implement `build_z_linkage(subgraph_result: SubgraphResult) -> dict`:
      a. Build a condensed distance vector from edge weights for the subgraph nodes. For node pairs without an edge, use a default large distance (e.g. 1.0 or the maximum observed distance).
      b. Compute hierarchical clustering using `scipy.cluster.hierarchy.linkage` with method `average` (configurable).
@@ -915,7 +1017,7 @@ Cache type values: `z_linkage`, `circle_pack_payload`, `local_hierarchy_payload`
    - Implement `invalidate_hierarchy_cache(graph_version_id: UUID, vault_id: UUID | None = None)`:
      a. Delete matching cache rows. If `vault_id` is None, delete all caches for the version.
 
-3. Create `tests/graph/test_hierarchy_builder.py`:
+3. Create `tests/unit/test_hierarchy_builder.py`:
    - Test `build_z_linkage` produces a valid linkage array (correct shape: `(n-1, 4)` for `n` nodes).
    - Test `build_hierarchy_payload` produces a valid nested tree with all documents as leaves.
    - Test cache round-trip: `cache_hierarchy` then `load_cached_hierarchy` returns the payload.
@@ -953,16 +1055,18 @@ Support multiple semantic feature layers beyond embeddings and weighted feature 
 ## Files in Scope
 
 ```
-graph_features/__init__.py
-graph_features/feature_provider.py
-graph_features/feature_fusion.py
-tests/graph/test_feature_fusion.py
+src/graph_engine/features/__init__.py
+src/graph_engine/features/base.py
+src/graph_engine/features/embedding_provider.py
+src/graph_engine/features/summary_embedding_provider.py
+src/graph_engine/features/fusion.py
+tests/unit/test_feature_fusion.py
 ```
 
 Files modified from Phase 1:
 
 ```
-graph_core/graph_builder.py (replace direct embedding access with FeatureFusionEngine)
+src/graph_engine/graph_core/builder.py (replace direct embedding access with FeatureFusionEngine)
 ```
 
 ## Inputs
@@ -984,9 +1088,9 @@ None. The `feature_weights` JSONB column already exists on `graph.graph_config` 
 
 ## Implementation Tasks
 
-1. Create `graph_features/__init__.py` as an empty package marker.
+1. Create `src/graph_engine/features/__init__.py` as an empty package marker.
 
-2. Create `graph_features/feature_provider.py`:
+2. Create `src/graph_engine/features/base.py` and `src/graph_engine/features/embedding_provider.py`:
    - Define `FeatureProvider` protocol (or ABC):
      ```python
      class FeatureProvider(Protocol):
@@ -998,12 +1102,13 @@ None. The `feature_weights` JSONB column already exists on `graph.graph_config` 
      b. `get_vectors()` reads document embeddings from the `embedding` schema.
      c. Returns L2-normalized vectors keyed by document UUID.
      d. Documents without embeddings are omitted from the result.
+   Create `src/graph_engine/features/summary_embedding_provider.py`:
    - Implement `SummaryEmbeddingFeatureProvider`:
      a. Accept summary embedding source name (matching `graph_config.summary_embedding_source`).
      b. `get_vectors()` reads summary embeddings.
      c. Returns L2-normalized vectors or empty dict if no summary embeddings exist.
 
-3. Create `graph_features/feature_fusion.py`:
+3. Create `src/graph_engine/features/fusion.py`:
    - Define `FeatureFusionEngine`:
      a. Accept a list of `(FeatureProvider, float)` tuples (provider + weight).
      b. Implement `compute_fused_similarities(document_ids: list[UUID]) -> tuple[np.ndarray, list[UUID]]`:
@@ -1016,13 +1121,13 @@ None. The `feature_weights` JSONB column already exists on `graph.graph_config` 
      c. Handle missing features: if a provider returns no vector for a document, that layer contributes zero similarity for pairs involving that document. Re-normalize the weights for those pairs.
      d. The fused similarity matrix is **ephemeral** and must never be persisted.
 
-4. Update `graph_core/graph_builder.py`:
+4. Update `src/graph_engine/graph_core/builder.py`:
    - Replace direct embedding retrieval with `FeatureFusionEngine`.
    - Read `feature_weights` from `graph.graph_config` to determine which providers and weights to use.
    - Construct provider list: always include `EmbeddingFeatureProvider`; include `SummaryEmbeddingFeatureProvider` if `summary_embedding_source` is set and weight > 0.
    - Maintain backward compatibility: if `feature_weights` is empty, default to embeddings-only with weight 1.0.
 
-5. Create `tests/graph/test_feature_fusion.py`:
+5. Create `tests/unit/test_feature_fusion.py`:
    - Test single-layer fusion equals raw cosine similarity.
    - Test two-layer weighted fusion with known weights produces correct result.
    - Test missing feature vectors for some documents are handled (those pairs use reduced weight set).
@@ -1061,11 +1166,11 @@ Generate human-readable labels for graph communities and groups. Labels attach t
 ## Files in Scope
 
 ```
-graph_labels/__init__.py
-graph_labels/label_service.py
-graph_labels/label_repository.py
-migrations/013_graph_labels.sql
-tests/graph/test_label_service.py
+src/graph_engine/labels/__init__.py
+src/graph_engine/labels/label_service.py
+src/graph_engine/labels/cache.py
+migrations/versions/013_graph_labels.py
+tests/unit/test_label_service.py
 ```
 
 ## Inputs
@@ -1082,7 +1187,7 @@ tests/graph/test_label_service.py
 
 ## Database Changes
 
-Migration file: `migrations/013_graph_labels.sql`
+Migration file: `migrations/versions/013_graph_labels.py`
 
 ```sql
 CREATE TABLE graph.graph_label (
@@ -1102,11 +1207,11 @@ CREATE TABLE graph.graph_label (
 
 ## Implementation Tasks
 
-1. Create migration `migrations/013_graph_labels.sql` with the DDL above. Run it.
+1. Create migration `migrations/versions/013_graph_labels.py` with the DDL above. Run it.
 
-2. Create `graph_labels/__init__.py` as an empty package marker.
+2. Create `src/graph_engine/labels/__init__.py` as an empty package marker.
 
-3. Create `graph_labels/label_repository.py`:
+3. Create `src/graph_engine/labels/cache.py`:
    - Implement `save_label(graph_version_id: UUID, vault_id: UUID, group_key: str, label: str, method: str = 'extractive', confidence: float | None = None)`:
      a. Upsert into `graph.graph_label` (insert or update on conflict of `(graph_version_id, group_key)`).
    - Implement `get_label(graph_version_id: UUID, group_key: str) -> str | None`:
@@ -1118,7 +1223,7 @@ CREATE TABLE graph.graph_label (
    - Implement `delete_labels(graph_version_id: UUID)`:
      a. Delete all labels for the version.
 
-4. Create `graph_labels/label_service.py`:
+4. Create `src/graph_engine/labels/label_service.py`:
    - Implement `generate_label(document_ids: list[UUID]) -> str`:
      a. Retrieve document titles from `public.documents` for the given IDs.
      b. Use extractive summarization: identify the most frequent significant terms across titles (strip stop words, find common n-grams or TF-IDF top terms).
@@ -1138,7 +1243,7 @@ CREATE TABLE graph.graph_label (
 
    - Label generation must be **non-blocking**: graph payloads must be returnable without waiting for label generation to complete.
 
-5. Create `tests/graph/test_label_service.py`:
+5. Create `tests/unit/test_label_service.py`:
    - Test `generate_label` produces a non-empty string from document titles.
    - Test `generate_label` returns fallback for empty document list.
    - Test label save/load round-trip via repository.
@@ -1178,11 +1283,13 @@ Each phase must include:
 * integration tests where database tables are involved
 * payload structure verification (for phases producing JSON payloads)
 
-Test files live in `tests/graph/` and follow the pattern `test_<module>.py`.
+Test files live in `tests/unit/` and `tests/integration/` within the `graph-engine` repo and follow the pattern `test_<module>.py`.
 
 ---
 
 # Deployment Strategy
+
+The graph-engine repository is deployed as an **importable Python package** initially (import mode). Service mode adds an optional lightweight API wrapper when needed.
 
 Graph rebuild operations must be:
 
@@ -1190,7 +1297,7 @@ Graph rebuild operations must be:
 * **vault-scoped** — each vault is rebuilt independently
 * **versioned** — new builds create new versions; old versions are superseded, not deleted
 
-Migration files follow the existing sequential numbering in `migrations/` and are run via `run_migration.py`.
+Migration files live in `migrations/versions/` within the graph-engine repo and are managed by **Alembic**.
 
 ---
 
@@ -1235,3 +1342,5 @@ When executing a phase:
 4. Confirm what is out of scope
 5. After coding, summarize files changed and confirm definition of done
 6. Do not proceed to the next phase without explicit approval
+7. All work for graph phases happens in the `graph-engine` repository
+8. Do not modify files in the main application repository during graph phase execution

@@ -1,8 +1,10 @@
-# Graph / Topic Modeling Module Scope
+# Graph / Topic Modeling System Scope
 
 ## Purpose
 
-Create a modular subsystem that builds and maintains semantic graphs over documents.
+The graph system is implemented as a **separate repository** (`graph-engine`), not as an internal module of the main application.
+
+It provides an importable Python package (`graph_engine`) that builds and maintains semantic graphs over documents.
 
 Graphs must support:
 
@@ -11,6 +13,17 @@ Graphs must support:
 - multi-vault composition
 - graph exploration in the UI
 - topic discovery
+
+---
+
+# Repository Boundary
+
+This scope document describes components within the **graph-engine repository**.
+
+* Feature extraction pipelines remain in the main application repository.
+* Feature fusion lives inside the graph-engine repository.
+* The graph system reads from approved upstream tables/views and writes only to `graph.*`.
+* See `development_process/GRAPH_SYSTEM_INTEGRATION_CONTRACT.md` for the full integration contract.
 
 ---
 
@@ -28,7 +41,9 @@ Canonical graph state consists of:
 
 # Core System Components
 
-## graph_core
+## graph_engine.graph_core
+
+Location: `src/graph_engine/graph_core/`
 
 Responsibilities:
 
@@ -41,29 +56,36 @@ Responsibilities:
 
 ---
 
-## graph_features
+## graph_engine.features
+
+Location: `src/graph_engine/features/`
 
 Responsibilities:
 
-- expose document feature vectors
+- consume named feature layers from approved source tables/views
 - normalize feature layers
+- perform feature fusion (weighted multi-layer similarity)
 - support pluggable semantic features
 
 Initial implementation:
 
-- document embeddings
-- summary embeddings
+- document embeddings (required)
+- summary embeddings (optional)
 
-Future layers:
+Future layers (consumed from main application pipelines):
 
 - tags
 - category distributions
 - NER/entity vectors
 - user feedback constraints
 
+Feature extraction remains in the main application. Feature fusion is owned by the graph-engine repository.
+
 ---
 
-## graph_views
+## graph_engine.views
+
+Location: `src/graph_engine/views/`
 
 Responsibilities:
 
@@ -77,7 +99,9 @@ Examples:
 
 ---
 
-## graph_labels
+## graph_engine.labels
+
+Location: `src/graph_engine/labels/`
 
 Responsibilities:
 
@@ -136,7 +160,7 @@ Avoid full rebuilds when possible.
 
 # UI Integration
 
-Graph module must support:
+The graph system must support:
 
 - vault graph retrieval
 - subgraph retrieval
@@ -147,12 +171,18 @@ Graph module must support:
 
 # Out of Scope
 
-This module does not initially implement:
+The graph-engine repository does not own or implement:
 
-- tag extraction
-- NER extraction
+- document ingestion
+- OCR
+- parsing
+- user authentication and management
+- general application orchestration
+- embedding generation
+- tag extraction pipelines
+- NER extraction pipelines
 - classifier pipelines
-- full semantic labeling
+- generic enrichment pipelines
 - semantic tree replacement
 
-These may be added later.
+Feature extraction pipelines remain in the main application repository. The graph system consumes their outputs through approved tables/views.
