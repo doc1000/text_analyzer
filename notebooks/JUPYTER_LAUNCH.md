@@ -18,3 +18,8 @@
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up jupyter
 ```
+
+
+to install new modules.  you have to execute this:
+%pip install pandas
+# then have to re-start the kernel potentially.  

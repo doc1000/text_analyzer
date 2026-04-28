@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "n_docs": 164,
+    "min_nodes": 3,
+    "max_nodes": 7,
+    "target_nodes": 5,
+    "num_splits": 10,
+    "max_depth": 4,
+    "top_cut": 0.965300570352803,
+    "candidate_cuts": [
+      0.0861236940447793,
+      0.245550430563241,
+      0.32878330362036,
+      0.394995796991593,
+      0.45901492079151,
+      0.505073779892266,
+      0.579181298525471,
+      0.681025724762683,
+      0.763084915875931,
+      0.965300570352803
+    ]
+  },
+  "messages": [
+    "Bottom cluster 1.3.1.1.2 has 9 docs, which is larger than max_nodes=7. Consider a larger target_nodes or larger max_depth."
+  ],
+  "clusters": [
+    {
+      "cluster_id": "1",
+      "level": 0,
+      "cut_value": 0.965300570352803,
+      "n_total_docs": 164,
+      "visible_n_docs": 19,
+      "documents": [
+        161,
+        162,
+        163
+      ],
+      "document_indices": [
+        161,
+        162,
+        163
+      ],
+      "children": [
+        {
+          "cluster_id": "1.1",
+          "level": 1,
+          "cut_value": 0.763084915875931,
+          "n_total_docs": 8,
+          "visible_n_docs": 4,
+          "documents": [
+            145,
+            156
+          ],
+          "document_indices": [
+            145,
+            156
+          ],
+          "children": [
+            {
+              "cluster_id": "1.1.1",
+              "level": 2,
+              "cut_value": 0.579181298525471,
+              "n_total_docs": 4,
+              "visible_n_docs": 4,
+              "documents": [
+                0,
+                1,
+                8,
+                42
+              ],
+              "document_indices": [
+                0,
+                1,
+                8,
+                42
+              ],
+              "children": []
+            },
+            {
+              "cluster_id": "1.1.2",
+              "level": 2,
+              "cut_value": 0.579181298525471,
+              "n_total_docs": 2,
+              "visible_n_docs": 2,
+              "documents": [
+                51,
+                52
+              ],
+              "document_indices": [
+                51,
+                52
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "cluster_id": "1.2",
+          "level": 1,
+          "cut_value": 0.763084915875931,
+          "n_total_docs": 5,
+          "visible_n_docs": 5,
+          "documents": [
+            2,
+            3,
+            38,
+            116,
+            159
+          ],
+          "document_indices": [
+            2,
+            3,
+            38,
+            116,
+            159
+          ],
+          "children": []
+        }
+      ]
+    }
+  ]
+}
