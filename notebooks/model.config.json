@@ -1,0 +1,29 @@
+{
+  "ContactInfo": {
+    "description": "Structured contact extraction",
+    "fields": {
+      "name": {
+        "type": "str",
+        "required": true,
+        "description": "Full name"
+      },
+      "email": {
+        "type": "str",
+        "required": false
+      },
+      "category": {
+        "type": "literal",
+        "choices": [
+          "lead",
+          "customer",
+          "partner"
+        ],
+        "required": true
+      },
+      "notes": {
+        "type": "list[str]",
+        "required": false
+      }
+    }
+  }
+}

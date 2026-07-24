@@ -1,0 +1,13 @@
+{
+  "ContactInfo_v1": {
+    "description": "structured contact extraction",
+    "text": "\ndocument text:\n{document_text}",
+    "components": [
+      "basic_extraction"
+    ]
+  },
+  "basic_extraction": {
+    "decription": "starting point for extractive",
+    "text": "you are a data extraction agent.  \nReturn a JSON object matching the schema exactly.\n\n"
+  }
+}
