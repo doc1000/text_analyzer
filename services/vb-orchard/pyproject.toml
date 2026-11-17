@@ -1,0 +1,48 @@
+[project]
+name = "vb-orchard"
+version = "0.1.0"
+description = "Vault Bubbles x Data Orchard: sync service (Postgres -> orchard-db), viewer, /do API and MCP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # orchard, treedb and orchard-harvest are private git dependencies (see [tool.uv.sources]),
+    # NOT the unrelated PyPI projects of those names.
+    "orchard[embeddings]",
+    "treedb",
+    "orchard-harvest[mcp]",
+    "duckdb>=1.1",
+    "numpy>=2.0,<3",
+    "scipy>=1.11,<2",
+    "scikit-learn>=1.4,<2",
+    "psycopg[binary]>=3.2",
+    "torch>=2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4,<9"]
+api = ["fastapi"]
+
+[project.scripts]
+vb-orchard = "vb_orchard.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vb_orchard"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv.sources]
+orchard = { git = "https://github.com/doc1000/orchard.git", rev = "611de1234a8501a659c1e1d4c6194d95e092e6b7" }
+treedb = { git = "https://github.com/doc1000/treeDB.git", rev = "a1e0a9324c0c68ebb8a0f8dbe86e56e820602d06" }
+orchard-harvest = { git = "https://github.com/doc1000/orchard-harvest.git", rev = "82c6b00b43ce18b08bf0b81b7cac354498dde8ab" }
+# CPU-only torch everywhere (the default Linux wheel pulls CUDA, several GB, which a cloud box does not need).
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

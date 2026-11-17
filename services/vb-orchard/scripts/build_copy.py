@@ -1,9 +1,9 @@
 """Build an orchard-db DuckDB file from the Forte copy (or a human-made PG CSV export).
 
-  python scripts/dataorchard_build_copy.py --out C:/.../data/vb/forte.duckdb [--pg-csv docs.csv]
+  python scripts/build_copy.py --out C:/.../data/vb/forte.duckdb [--pg-csv docs.csv]
 
 Refuses to overwrite an existing file unless --force. Never touches Postgres.
-Set HF_HUB_OFFLINE=1 and PYTHONPATH to the treedb, orchard and orchard_harvest src dirs.
+Run with the vb-orchard environment (uv run).
 """
 import argparse
 import os
@@ -13,7 +13,6 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 DEFAULT_FORTE = r"C:\Users\doste\projects\appworld-orchard-workspace\forte_second_brain_scraper\forte-building-a-second-brain"
 
@@ -29,7 +28,7 @@ def main(argv=None):
     ap.add_argument("--max-chars", type=int, default=0, help="embedding max_chars override (new vector space)")
     ap.add_argument("--fake-encoder", action="store_true", help="hashed bag-of-words instead of MiniLM (says so)")
     a = ap.parse_args(argv)
-    from app.dataorchard import copy, engine
+    from vb_orchard import copy, engine
 
     out = Path(a.out)
     if out.exists():
@@ -49,7 +48,7 @@ def main(argv=None):
             "space": (f"fake-hash384/{tag}" if a.fake_encoder else minilm_space_name(template_version=f"tt1{tag}")),
             **({"max_chars": a.max_chars} if a.max_chars else {})})
     if a.fake_encoder:
-        from app.dataorchard.fake_encoder import FakeEncoder
+        from vb_orchard.fake_encoder import FakeEncoder
 
         enc = FakeEncoder()
     t = time.time()

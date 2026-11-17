@@ -1,7 +1,7 @@
 """Success-bar measurements (spec 7 + A7 + A10). Measurement code only; no network, no LLM.
 
 Needs treedb, orchard and orchard_harvest on PYTHONPATH. Child-process roles are run with
-`python -m app.dataorchard.bars writer|reader|readback ...` from the repository root.
+`python -m vb_orchard.bars writer|reader|readback ...` (vb-orchard installed).
 """
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ from .ids import capture_item_id
 SEED = 20261116
 ALIAS = "vb/topic"
 WINDOWS = [7, 30, 90, 365, None]
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def get_encoder():
@@ -240,8 +239,8 @@ def readback(path) -> dict:
 def run_readback_subprocess(path) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "rb.json"
-        r = subprocess.run([sys.executable, "-m", "app.dataorchard.bars", "readback", str(path), str(out)],
-                           cwd=str(REPO_ROOT), capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-m", "vb_orchard.bars", "readback", str(path), str(out)],
+                           capture_output=True, text=True)
         if r.returncode:
             raise RuntimeError(r.stderr[-2000:])
         return json.loads(out.read_text(encoding="utf-8"))
@@ -363,8 +362,8 @@ def _child_reader(db, seconds):
 
 def two_process(db_path, *, seconds: float = 25, pause: float = 0.3) -> dict:
     env = dict(os.environ)
-    procs = [subprocess.Popen([sys.executable, "-m", "app.dataorchard.bars", role, str(db_path), str(seconds), str(pause)],
-                              cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    procs = [subprocess.Popen([sys.executable, "-m", "vb_orchard.bars", role, str(db_path), str(seconds), str(pause)],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
              for role in ("writer", "reader")]
     res = {}
     for p in procs:

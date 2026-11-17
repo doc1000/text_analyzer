@@ -1,7 +1,7 @@
 import threading
 
-from app.dataorchard.capture import CaptureWriter, merge, normalize_payload
-from app.dataorchard.ids import capture_item_id, normalize_url
+from vb_orchard.capture import CaptureWriter, merge, normalize_payload
+from vb_orchard.ids import capture_item_id, normalize_url
 
 
 def test_normalize_url_and_id():
@@ -132,7 +132,7 @@ def test_writer_flushes_at_exit_without_close(tmp_path):
     out = tmp_path / "written.txt"
     code = (
         "import time, sys\n"
-        "from app.dataorchard.capture import CaptureWriter\n"
+        "from vb_orchard.capture import CaptureWriter\n"
         "def wb(docs):\n"
         "    time.sleep(0.3)\n"
         "    open(sys.argv[1], 'a', encoding='utf-8').write(''.join(d['item_id'] + '\\n' for d in docs))\n"
@@ -141,8 +141,7 @@ def test_writer_flushes_at_exit_without_close(tmp_path):
         "    w.submit({'url': 'https://a.b/%d' % i, 'full_text': 't'})\n"
         "# exit without flush() or close()\n"
     )
-    root = Path(__file__).resolve().parents[2]
-    r = subprocess.run([sys.executable, "-c", code, str(out)], cwd=str(root), capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-c", code, str(out)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert len(out.read_text(encoding="utf-8").split()) == 5
 
