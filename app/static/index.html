@@ -517,6 +517,34 @@
       text-overflow: ellipsis;
     }
 
+    #tooltip.rich {
+      white-space: normal;
+      max-width: 360px;
+      line-height: 1.35;
+      padding: 0.45rem 0.6rem;
+    }
+    #tooltip.rich .tt-title { font-weight: 600; margin-bottom: 0.25rem; }
+    #tooltip.rich .tt-samples { color: #cbd5e1; }
+
+    .topic-samples {
+      margin: 0.5rem 0 0.25rem;
+      font-size: 0.82rem;
+      line-height: 1.4;
+      color: #cbd5e1;
+      max-height: 9.5em;
+      overflow-y: auto;
+    }
+    .panel-options {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin-bottom: 0.4rem;
+    }
+    .panel-options label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+
     a {
       color: #60a5fa;
       text-decoration: none;
@@ -962,6 +990,10 @@
       <aside id="info-panel">
         <div id="info-panel-resize-handle"></div>
         <p class="hint">Click big bubbles to zoom · click document bubbles to open</p>
+        <div class="panel-options">
+          <span id="topicSourceLabel"></span>
+          <label title="Show a topic's sample sentences when hovering a bubble"><input type="checkbox" id="hoverPreviewsToggle"> Hover previews</label>
+        </div>
         <div id="info-content"></div>
 
         <div id="scope-query-panel">
@@ -1201,16 +1233,22 @@
       title.style.margin = "0";
       titleRow.appendChild(title);
 
-      // Add question mark hover for topic/subtopic summary
-      if (data.summary && data.type === "topic") {
-        const infoIcon = document.createElement("span");
-        infoIcon.textContent = "?";
-        infoIcon.style.cssText = "display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #374151; color: #9ca3af; font-size: 0.75rem; cursor: help;";
-        infoIcon.title = data.summary;
-        titleRow.appendChild(infoIcon);
-      }
-
       el.appendChild(titleRow);
+
+      // Topic: item count and its sample sentences, shown at the top of the panel
+      if (data.type === "topic") {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const n = data.doc_count || collectDocIdsFromNode(d).length;
+        meta.textContent = `${n} saved page${n === 1 ? "" : "s"}`;
+        el.appendChild(meta);
+        if (data.summary) {
+          const samples = document.createElement("div");
+          samples.className = "topic-samples";
+          samples.textContent = data.summary;
+          el.appendChild(samples);
+        }
+      }
 
       if (data.url) {
         const meta = document.createElement("div");
@@ -1238,10 +1276,27 @@
       setScopeForNode(d);
     }
 
+    const hoverToggle = document.getElementById("hoverPreviewsToggle");
+    function hoverPreviewsOn() {
+      try { return localStorage.getItem("vb_hover_previews") === "1"; } catch (e) { return false; }
+    }
+    if (hoverToggle) {
+      hoverToggle.checked = hoverPreviewsOn();
+      hoverToggle.addEventListener("change", () => {
+        try { localStorage.setItem("vb_hover_previews", hoverToggle.checked ? "1" : "0"); } catch (e) {}
+      });
+    }
+
     function showTooltip(event, d) {
       const data = d.data;
       let line = data.name || "";
-      tooltip.text(line);
+      if (hoverPreviewsOn() && data.type === "topic" && data.summary) {
+        tooltip.classed("rich", true).html("");
+        tooltip.append("div").attr("class", "tt-title").text(line);
+        tooltip.append("div").attr("class", "tt-samples").text(data.summary.length > 320 ? data.summary.slice(0, 319) + "…" : data.summary);
+      } else {
+        tooltip.classed("rich", false).text(line);
+      }
       const [x, y] = d3.pointer(event);
       const containerRect = document.getElementById("bubble-container").getBoundingClientRect();
 
@@ -1404,6 +1459,8 @@
 
       const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}`);
       const data = await res.json();
+      const srcLabel = document.getElementById("topicSourceLabel");
+      if (srcLabel) srcLabel.textContent = data.source === "orchard" ? "Topics: Data Orchard" : "Topics: built-in";
 
       // Increase size for topics (depth 1) to make them bigger
       const root = d3.hierarchy(data)
