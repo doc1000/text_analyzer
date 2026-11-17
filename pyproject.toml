@@ -1,0 +1,43 @@
+# Native (no Docker) environment for the Vault Bubbles app. Not a package: `uv run` from this
+# folder runs `app.main:app`. The Docker image still installs app/requirements.txt.
+# Start it with services/vb-app/run.ps1 (reads ~/.vaultbubbles/config.env).
+[project]
+name = "vaultbubbles-app"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "pydantic",
+    "syntok",
+    "uvicorn",
+    "psycopg2-binary",
+    "SQLAlchemy",
+    "python-dotenv",
+    "pgvector",
+    "openai>=1.3.0",
+    "numpy",
+    "scikit-learn>=1.2.0",
+    "umap-learn",
+    "pdfplumber",
+    "requests",
+    "trafilatura",
+    "apscheduler",
+    # local embeddings (EMBEDDING_PROVIDER=local): the same MiniLM encoder as Data Orchard
+    "orchard[embeddings]",
+    "torch>=2.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.4,<9", "httpx"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+orchard = { git = "https://github.com/doc1000/orchard.git", rev = "611de1234a8501a659c1e1d4c6194d95e092e6b7" }
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

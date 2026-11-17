@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 # You can extend these later or load them from JSON if you want.
 # For now: one central place to tweak your internal tools.
-PROVIDERS = ("openai", "ollama", "huggingface")
+PROVIDERS = ("openai", "ollama", "huggingface", "local")  # local = in-process MiniLM (embeddings only)
 Provider = Literal[*PROVIDERS]
 # Model alias mapping: internal name -> provider-specific model IDs
 # This ensures the same underlying model is used regardless of provider
@@ -14,6 +14,7 @@ EMBEDDING_MODEL_ALIASES = {
     "all-minilm": {
         "ollama": "all-minilm",
         "huggingface": "all-MiniLM-L6-v2",  # Used with dedicated endpoint
+        "local": "sentence-transformers/all-MiniLM-L6-v2",  # in-process, same model as Data Orchard
         "dim": 384,
     },
     "bge-m3": {
@@ -226,8 +227,8 @@ class ModelConfig:
     
     def get_embedding_dim_default(self) -> int:
         """Sensible defaults per provider/model if EMBEDDING_DIM not set."""
-        if self.embedding_provider == "huggingface":
-            # BAAI/bge-small-en-v1.5 (most common for HF deployments)
+        if self.embedding_provider in ("huggingface", "local"):
+            # all-MiniLM-L6-v2 (HF dedicated endpoint, or in-process for "local")
             return 384
         elif self.embedding_provider == "openai":
             if "large" in str(self.embedding_model):
