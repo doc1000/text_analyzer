@@ -16,7 +16,7 @@ function Stop-TaskTree([string]$taskName, [string]$match) {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   }
   Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($match) -and $_.Name -in @("powershell.exe", "cmd.exe") -and $_.ProcessId -ne $PID } |
-    ForEach-Object { & taskkill.exe /T /F /PID $_.ProcessId 2>$null | Out-Null }
+    ForEach-Object { try { & cmd.exe /d /c "taskkill /T /F /PID $($_.ProcessId) >nul 2>&1" } catch {} }
   Start-Sleep -Milliseconds 500
 }
 
