@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from app.dataorchard.adapter import to_vb_hierarchy
-from app.dataorchard.copy import load_forte_copy, load_pg_csv, synthetic_scale
-from app.dataorchard.ids import capture_item_id
+from vb_orchard.adapter import to_vb_hierarchy
+from vb_orchard.copy import load_forte_copy, load_pg_csv, synthetic_scale
+from vb_orchard.ids import capture_item_id
 
 FORTE = Path(r"C:\Users\doste\projects\appworld-orchard-workspace\forte_second_brain_scraper\forte-building-a-second-brain")
 
@@ -80,5 +80,5 @@ def test_adapter():
 
 
 def test_routes_import_is_lazy():
-    import app.dataorchard.routes as r  # must import without fastapi
+    import vb_orchard.routes as r  # must import without fastapi
     assert callable(r.make_router)

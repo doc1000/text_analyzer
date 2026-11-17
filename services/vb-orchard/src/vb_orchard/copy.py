@@ -91,23 +91,29 @@ def load_pg_csv(path) -> list:
     docs = []
     with open(path, newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            url = (row.get("url") or "").strip()
-            captured = _pg_ts(row.get("captured_at"))
-            docs.append({
-                "item_id": "vb:" + str(row["id"]).strip(),
-                "title": (row.get("title") or "").strip(),
-                "text": row.get("full_text") or "",
-                "metadata": {
-                    "url": url,
-                    "captured_at": captured,
-                    "updated_at": captured,
-                    "highlights": [],
-                    "notes": "",
-                    "tags": [],
-                    "source": "vaultbubbles",
-                },
-            })
+            docs.append(pg_row_to_doc(row["id"], row.get("url"), row.get("title"), row.get("full_text"),
+                                      _pg_ts(row.get("captured_at"))))
     return docs
+
+
+def pg_row_to_doc(doc_id, url, title, full_text, captured_at) -> dict:
+    """One VB `documents` row -> orchard document (item_id ``vb:<uuid>``). ``captured_at`` may be a
+    datetime (psycopg) or an ISO string; naive values are taken as UTC."""
+    captured = to_utc_z(captured_at) if captured_at not in (None, "") else None
+    return {
+        "item_id": "vb:" + str(doc_id).strip(),
+        "title": (title or "").strip(),
+        "text": full_text or "",
+        "metadata": {
+            "url": (url or "").strip(),
+            "captured_at": captured,
+            "updated_at": captured,
+            "highlights": [],
+            "notes": "",
+            "tags": [],
+            "source": "vaultbubbles",
+        },
+    }
 
 
 def synthetic_scale(docs, n: int = 10000, seed: int = 20261116) -> list:

@@ -10,8 +10,8 @@ pytest.importorskip("treedb")
 pytest.importorskip("orchard.cultivate_db")
 pytest.importorskip("orchard_harvest")
 
-from app.dataorchard import bars, engine  # noqa: E402
-from app.dataorchard.fake_encoder import FakeEncoder  # noqa: E402
+from vb_orchard import bars, engine  # noqa: E402
+from vb_orchard.fake_encoder import FakeEncoder  # noqa: E402
 
 TOPICS = {
     "garden": "soil compost seeds tomato pruning greenhouse watering mulch harvest orchard",

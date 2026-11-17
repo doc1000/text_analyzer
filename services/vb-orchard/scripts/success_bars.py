@@ -1,6 +1,6 @@
 """Measure the Data Orchard success bars on DuckDB copies; write success_bars.json / .md.
 
-Needs PYTHONPATH = treedb, orchard, orchard_harvest src dirs; HF_HUB_OFFLINE=1.
+Run with the vb-orchard environment (uv run).
 Sections (--only a,b,...): tree279, tree10k, captures, twoproc, known, titles.
 Read-only on --forte-db / --synth-db (captures and twoproc work on temp copies).
 """
@@ -15,10 +15,7 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-EXP = Path(r"C:\Users\doste\projects\appworld-orchard-workspace\exp")
+EXP = Path(os.environ.get("VB_ORCHARD_EXP") or r"C:\Users\doste\projects\appworld-orchard-workspace\exp")
 
 
 def main(argv=None):
@@ -32,7 +29,7 @@ def main(argv=None):
     ap.add_argument("--seconds", type=float, default=25)
     ap.add_argument("--fresh", action="store_true", help="archive current results as run1 (once) and start a new result set")
     a = ap.parse_args(argv)
-    from app.dataorchard import bars
+    from vb_orchard import bars
 
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
