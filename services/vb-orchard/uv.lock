@@ -892,7 +892,7 @@ embeddings = [
 [[package]]
 name = "orchard-harvest"
 version = "0.0.1"
-source = { git = "https://github.com/doc1000/orchard-harvest.git?rev=82c6b00b43ce18b08bf0b81b7cac354498dde8ab#82c6b00b43ce18b08bf0b81b7cac354498dde8ab" }
+source = { git = "https://github.com/doc1000/orchard-harvest.git?rev=82ce65fb52a4d61322fcbe794d47c5f26943199e#82ce65fb52a4d61322fcbe794d47c5f26943199e" }
 dependencies = [
     { name = "duckdb" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -2134,7 +2134,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'api'" },
     { name = "numpy", specifier = ">=2.0,<3" },
     { name = "orchard", extras = ["embeddings"], git = "https://github.com/doc1000/orchard.git?rev=611de1234a8501a659c1e1d4c6194d95e092e6b7" },
-    { name = "orchard-harvest", extras = ["mcp"], git = "https://github.com/doc1000/orchard-harvest.git?rev=82c6b00b43ce18b08bf0b81b7cac354498dde8ab" },
+    { name = "orchard-harvest", extras = ["mcp"], git = "https://github.com/doc1000/orchard-harvest.git?rev=82ce65fb52a4d61322fcbe794d47c5f26943199e" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4,<9" },
     { name = "scikit-learn", specifier = ">=1.4,<2" },

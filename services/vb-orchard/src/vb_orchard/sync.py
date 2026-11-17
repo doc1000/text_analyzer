@@ -176,6 +176,12 @@ class Syncer:
         if not todo:
             return PassResult(total=len(fps), seconds=time.perf_counter() - t0)
         docs = pgsource.fetch_docs(pg, todo)
+        # an edit (e.g. tags) keeps captured_at; updated_at = now tells readers the item changed
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        changed_ids = {"vb:" + i for i in changed}
+        for d in docs:
+            if d["item_id"] in changed_ids:
+                d["metadata"]["updated_at"] = now
         res = engine.ingest_new(self.db, docs, alias=self.s.alias, encoder=self.encoder)
         write_state(self.db, {"vb:" + i: fps[i] for i in todo},
                     meta={"last_insert": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
