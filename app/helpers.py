@@ -707,6 +707,8 @@ def get_embedding(text: str) -> List[float]:
     """
     embedding_provider = getattr(PREFERENCES.models, "embedding_provider", "ollama")
     
+    if embedding_provider == "local":
+        return _local_embed_batch([text])[0]
     if embedding_provider == "ollama":
         vec = _ollama_embed(text)
     elif embedding_provider == "huggingface":
@@ -800,6 +802,34 @@ def _ollama_embed_batch(texts: List[str]) -> List[List[float]]:
         normalized.append(vec.tolist())
     
     return normalized
+
+
+_local_encoder = None
+_local_encoder_lock = __import__("threading").Lock()
+
+
+def warm_local_encoder() -> None:
+    """Load the in-process MiniLM once (about 15-20 s); later calls are fast."""
+    _local_embed_batch(["warm up"])
+
+
+def _local_embed_batch(texts: List[str]) -> List[List[float]]:
+    """In-process all-MiniLM-L6-v2 (provider "local"), the same revision-pinned encoder Data Orchard
+    uses (orchard.backends.minilm: mean pooling, max_length 256). L2-normalized, like the
+    other providers. Model files come from the local cache (HF_HUB_OFFLINE)."""
+    global _local_encoder
+    if not texts:
+        return []
+    with _local_encoder_lock:
+        if _local_encoder is None:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            from orchard.backends.minilm import MiniLMEmbeddingBackend
+
+            _local_encoder = MiniLMEmbeddingBackend(local_files_only=True)
+        vecs = _local_encoder.encode([_clean_embed_input(t) for t in texts])
+    from .mmr import l2_normalize_vector
+    return [l2_normalize_vector(normalize_embedding(v)).tolist() for v in vecs]
 
 
 def _huggingface_embed_batch(texts: List[str]) -> List[List[float]]:
@@ -936,6 +966,9 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     
     if embedding_provider == "huggingface":
         return _huggingface_embed_batch(texts)
+
+    if embedding_provider == "local":
+        return _local_embed_batch(texts)
     
     # OpenAI batch embedding
     model_name = PREFERENCES.models.embedding_model

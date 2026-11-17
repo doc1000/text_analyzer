@@ -72,7 +72,13 @@ async def lifespan(app: FastAPI):
     # Initialize scheduler (ingest queue always; deduplication when enabled)
     from .scheduler import init_scheduler, shutdown_scheduler
     init_scheduler(schedule_times=PREFERENCES.deduplication.schedule_times)
-    
+
+    # In-process MiniLM: load it in the background now, so the first capture is not slow.
+    if PREFERENCES.models.embedding_provider == "local":
+        import threading
+        from .helpers import warm_local_encoder
+        threading.Thread(target=warm_local_encoder, name="warm-minilm", daemon=True).start()
+
     yield
     
     # Shutdown scheduler gracefully

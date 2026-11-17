@@ -10,10 +10,19 @@ param([switch]$Remove)
 $ErrorActionPreference = "Stop"
 $names = @("vb-orchard sync", "vb-orchard serve")
 
+function Stop-TaskTree([string]$taskName, [string]$match) {
+  # Stop-ScheduledTask ends only the task's own process; kill the whole tree it started too.
+  if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  }
+  Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($match) -and $_.Name -eq "powershell.exe" } |
+    ForEach-Object { & taskkill.exe /T /F /PID $_.ProcessId 2>$null | Out-Null }
+}
+
 if ($Remove) {
   foreach ($n in $names) {
     if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
-      Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+      Stop-TaskTree $n ("run-" + $n.Split(" ")[1] + ".cmd")
       Unregister-ScheduledTask -TaskName $n -Confirm:$false
       Write-Host "removed $n"
     }
@@ -28,9 +37,13 @@ $user = "$env:USERDOMAIN\$env:USERNAME"
 
 foreach ($cmd in @("sync", "serve")) {
   $log = Join-Path $logs "$cmd.log"
-  $ps = "& '$exe' $cmd *>> '$log'"
+  # A .cmd wrapper does the redirect, so the log is plain UTF-8 (PowerShell 5's *>> writes UTF-16);
+  # powershell -WindowStyle Hidden only hides the console window.
+  $wrapper = Join-Path (Split-Path $logs -Parent) "run-$cmd.cmd"
+  Stop-TaskTree "vb-orchard $cmd" "run-$cmd.cmd"
+  Set-Content -Path $wrapper -Encoding ASCII -Value "@`"$exe`" $cmd >> `"$log`" 2>&1"
   $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$ps`""
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$wrapper'`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
