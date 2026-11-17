@@ -30,6 +30,7 @@ def main(argv=None):
     ap.add_argument("--runs", type=int, default=20)
     ap.add_argument("--m", type=int, default=500)
     ap.add_argument("--seconds", type=float, default=25)
+    ap.add_argument("--fresh", action="store_true", help="archive current results as run1 (once) and start a new result set")
     a = ap.parse_args(argv)
     from app.dataorchard import bars
 
@@ -37,6 +38,14 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     jp = out / "success_bars.json"
     res = json.loads(jp.read_text(encoding="utf-8")) if jp.exists() else {}
+    r1p = out / "success_bars_run1.json"
+    run1 = json.loads(r1p.read_text(encoding="utf-8")) if r1p.exists() else None
+    if a.fresh:
+        if jp.exists() and not r1p.exists():
+            shutil.copy(jp, r1p)
+            shutil.copy(out / "success_bars.md", out / "success_bars_run1.md")
+            run1 = res
+        res = {}
     want = set(a.only.split(","))
     work = Path(tempfile.mkdtemp(prefix="vb-bars-", dir=EXP / "data" / "vb"))
 
@@ -48,7 +57,7 @@ def main(argv=None):
     def save():
         res["generated_at"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         jp.write_text(json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8")
-        (out / "success_bars.md").write_text(bars.to_markdown(res), encoding="utf-8")
+        (out / "success_bars.md").write_text(bars.to_markdown(res, run1), encoding="utf-8")
 
     try:
         if "tree279" in want:

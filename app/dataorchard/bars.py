@@ -276,6 +276,10 @@ def captures(db_path, *, m: int = 500, threads: int = 8, insert_on_capture: bool
             saved += 1
         except Exception as e:  # noqa: BLE001
             errors.append(f"{type(e).__name__}: {e}")
+    locks = stats.pop("write_lock_seconds", [])
+    if locks:
+        stats["write_lock_p95_ms"] = round(pct(locks, 95) * 1000, 1)
+        stats["write_lock_max_ms"] = round(max(locks) * 1000, 1)
     exp = expected_docs(payloads)
     rb = run_readback_subprocess(db_path)
     mism = compare(exp, rb["docs"])
@@ -318,7 +322,10 @@ def _child_writer(db, seconds, pause=0.3):
         time.sleep(pause)
     w.close()
     return {"role": "writer", "submitted": n, "ok": ok, "failures": fail, "store_busy": busy,
-            "capture_latency_p95_ms": round(pct(lat, 95) * 1000, 1) if lat else None, "stats": stats}
+            "capture_latency_p95_ms": round(pct(lat, 95) * 1000, 1) if lat else None,
+            "write_lock_p95_ms": round(pct(stats.get("write_lock_seconds") or [0], 95) * 1000, 1),
+            "write_lock_max_ms": round(max(stats.get("write_lock_seconds") or [0]) * 1000, 1),
+            "stats": {k: v for k, v in stats.items() if k != "write_lock_seconds"}}
 
 
 def _child_reader(db, seconds):
@@ -347,6 +354,7 @@ def _child_reader(db, seconds):
         time.sleep(0.05)
     allv = lat["find"] + lat["packed_tree"]
     return {"role": "reader", "requests": n, "failures": fail, "store_busy": busy, "errors": errs,
+            "stale_served": getattr(s, "stale_served", None),
             "find_p95_ms": round(pct(lat["find"], 95) * 1000, 1) if lat["find"] else None,
             "packed_tree_p95_ms": round(pct(lat["packed_tree"], 95) * 1000, 1) if lat["packed_tree"] else None,
             "reader_p95_ms": round(pct(allv, 95) * 1000, 1) if allv else None,
@@ -487,9 +495,51 @@ def title_quality(db_path, *, sample: int = 30, seed: int = SEED) -> dict:
 
 
 # ------------------------------------------------------------------ markdown
-def to_markdown(r: dict) -> str:
+def delta_table(r1: dict, r2: dict) -> list:
+    def g(r, *path):
+        for p in path:
+            r = (r or {}).get(p) if isinstance(r, dict) else None
+        return r
+
+    def kn(r, t, m, k):
+        return g(r, "known_item", "types", t, m, k)
+
+    rows = [("tree 279 all, warm packed p50 ms", ("tree_open_279", "windows", "all", "warm_packed_tree", "p50_ms")),
+            ("tree 279 all, cold packed p50 ms", ("tree_open_279", "windows", "all", "cold_packed_tree", "p50_ms")),
+            ("tree 10k all, warm packed p50 ms", ("tree_open_10k", "windows", "all", "warm_packed_tree", "p50_ms")),
+            ("tree 10k all, cold packed p50 ms", ("tree_open_10k", "windows", "all", "cold_packed_tree", "p50_ms")),
+            ("tree 10k all, warm HTTP p50 ms", ("tree_open_10k", "windows", "all", "warm_http_api_tree", "p50_ms")),
+            ("captures saved", ("captures", "saved_over_submitted")),
+            ("capture field mismatches", ("captures", "field_mismatches")),
+            ("captures placed in tree", ("captures", "placed_in_tree")),
+            ("two-proc realistic reader failures", ("two_process", "reader", "failures")),
+            ("two-proc realistic reader p95 ms", ("two_process", "reader", "reader_p95_ms")),
+            ("two-proc stress reader failures", ("two_process_stress", "reader", "failures")),
+            ("two-proc stress reader p95 ms", ("two_process_stress", "reader", "reader_p95_ms")),
+            ("empty cluster titles", ("title_quality", "empty_title_share")),
+            ("duplicate sibling title share", ("title_quality", "duplicate_sibling_title_share"))]
+    for t in ("a_title", "b_mid_body_sentence", "c_key_terms_minus_title", "d_body_sentence_minus_title_terms", "e_highlight_or_notes"):
+        for m in ("hybrid", "keyword_only"):
+            rows.append((f"known {t} {m} top3 / MRR", None, t, m))
+    L = ["| measure | run 1 | run 2 |", "|---|---|---|"]
+    for row in rows:
+        if row[1] is None:
+            _, _, t, m = row
+            v1 = f"{kn(r1, t, m, 'top3')} / {kn(r1, t, m, 'mrr')}"
+            v2 = f"{kn(r2, t, m, 'top3')} / {kn(r2, t, m, 'mrr')}"
+        else:
+            v1, v2 = g(r1, *row[1]), g(r2, *row[1])
+        L.append(f"| {row[0]} | {v1} | {v2} |")
+    return L
+
+
+def to_markdown(r: dict, run1: Optional[dict] = None) -> str:
     L = ["# Vault Bubbles x Data Orchard: success bars", "",
          f"Generated {r.get('generated_at')}. Seed {SEED}. No LLM, no network, DuckDB temp copies only.", ""]
+    if run1:
+        L += ["## Run 1 to run 2", "", "Run 1 = first wiring (perspective v1, hybrid 0.65/0.35, one long write lock); run 2 = final code of all three packages "
+              "(perspective v2, short write lock, stale-snapshot reads, hybrid 0.5/0.5). Run 1 files: success_bars_run1.json / .md.", ""]
+        L += delta_table(run1, r) + [""]
     for key, label in (("tree_open_279", "Tree open, N=279 (Forte copy, real MiniLM)"),
                        ("tree_open_279_anchored", "Tree open, N=279, windows anchored at the newest item"),
                        ("tree_open_10k", "Tree open, N=10,000 (synthetic)")):
@@ -523,9 +573,9 @@ def to_markdown(r: dict) -> str:
         wr, rd = tp.get("writer", {}), tp.get("reader", {})
         L += [f"## Two processes (A7), {tlabel}", "",
               f"{tp['seconds']} s, writer pause {tp.get('writer_pause_s')} s between 3-capture batches. Writer: {wr.get('submitted')} captures submitted, {wr.get('ok')} ok, "
-              f"{wr.get('failures')} failures ({wr.get('store_busy')} StoreBusyError), capture latency p95 {wr.get('capture_latency_p95_ms')} ms. "
+              f"{wr.get('failures')} failures ({wr.get('store_busy')} StoreBusyError), capture latency p95 {wr.get('capture_latency_p95_ms')} ms, write lock p95 {wr.get('write_lock_p95_ms')} ms (max {wr.get('write_lock_max_ms')}). "
               f"Reader: {rd.get('requests')} requests, {rd.get('failures')} failures ({rd.get('store_busy')} StoreBusyError), "
-              f"p50 {rd.get('reader_p50_ms')} ms, p95 {rd.get('reader_p95_ms')} ms "
+              f"{rd.get('stale_served')} served from a stale snapshot, p50 {rd.get('reader_p50_ms')} ms, p95 {rd.get('reader_p95_ms')} ms "
               f"(find p95 {rd.get('find_p95_ms')}, packed_tree p95 {rd.get('packed_tree_p95_ms')}). Reader errors: {rd.get('errors')}", ""]
         if tp.get("child_error"):
             L += [f"Child error: {tp['child_error']}", ""]
