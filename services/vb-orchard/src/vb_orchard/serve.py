@@ -28,6 +28,16 @@ def _days(params, default=None):
     return float(v)
 
 
+def _synced_vaults(store) -> list:
+    """Vault ids the sync service last synced (vb_sync.meta 'vaults'); [] if unknown."""
+    try:
+        with store.connection() as con:
+            row = con.execute("SELECT value FROM vb_sync.meta WHERE key = 'vaults'").fetchone()
+        return [v for v in (row[0] if row else "").split(",") if v]
+    except Exception:  # noqa: BLE001 - no state table yet, or the file is busy
+        return []
+
+
 def make_server(settings, *, port=None, store=None) -> ThreadingHTTPServer:
     from orchard_harvest import queries
     from orchard_harvest.store import AliasNotFound, HarvestStore
@@ -47,7 +57,8 @@ def make_server(settings, *, port=None, store=None) -> ThreadingHTTPServer:
                 if url.path == "/do/health":
                     snap = store.snapshot(alias, CUT)
                     return self._json(200, {"ok": True, "alias": alias, "items": len(snap.items) if hasattr(snap, "items") else None,
-                                            "as_of": snap.as_of(), "stale": bool(snap.stale)})
+                                            "as_of": snap.as_of(), "stale": bool(snap.stale),
+                                            "vaults": _synced_vaults(store)})
                 if url.path == "/do/topics/hierarchy":
                     days = _days(params, 30)
                     return self._json(200, to_vb_hierarchy(queries.packed_tree(store, alias, CUT, days=days), days))

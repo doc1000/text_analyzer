@@ -16,6 +16,7 @@ function Stop-TaskTree([string]$taskName, [string]$match) {
 }
 if ($Remove) {
   if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
+    Stop-TaskTree $name "vb-app\supervise.ps1"
     Stop-TaskTree $name "run-app.cmd"
     Unregister-ScheduledTask -TaskName $name -Confirm:$false
     Write-Host "removed $name"
@@ -27,12 +28,12 @@ $logs = Join-Path $HOME ".vaultbubbles\logs"
 New-Item -ItemType Directory -Force $logs | Out-Null
 $log = Join-Path $logs "app.log"
 $user = "$env:USERDOMAIN\$env:USERNAME"
-# A .cmd wrapper does the redirect, so the log is plain UTF-8 (PowerShell 5's *>> writes UTF-16).
-$wrapper = Join-Path (Join-Path $HOME ".vaultbubbles") "run-app.cmd"
+# supervise.ps1 restarts run.ps1 whenever it exits and logs in plain UTF-8.
+$sup = Join-Path $PSScriptRoot "supervise.ps1"
+Stop-TaskTree $name "vb-app\supervise.ps1"
 Stop-TaskTree $name "run-app.cmd"
-Set-Content -Path $wrapper -Encoding ASCII -Value "@powershell -NoProfile -ExecutionPolicy Bypass -File `"$run`" >> `"$log`" 2>&1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-  -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$wrapper'`""
+  -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$sup`" -Command `"powershell -NoProfile -ExecutionPolicy Bypass -File \`"$run\`"`" -Log `"$log`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
   -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `

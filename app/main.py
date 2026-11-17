@@ -497,7 +497,14 @@ def get_topics_hierarchy(
     Only returns documents from vaults the user has access to.
     """
     from .topics import build_hierarchical_topics_for_d3
+    from . import orchard_bridge
     vault_ids = get_user_accessible_vault_ids(user, db)
+    # TOPIC_SOURCE=orchard: the Data Orchard tree (vb-orchard service), same shape; falls back
+    # to the built-in topics if orchard is off, unreachable or does not sync this user's vaults.
+    if orchard_bridge.covers(vault_ids):
+        tree = orchard_bridge.hierarchy(days)
+        if tree is not None:
+            return tree
     return build_hierarchical_topics_for_d3(db, days=days, vault_ids=vault_ids)
 
 @app.get("/topics/clear_cache")

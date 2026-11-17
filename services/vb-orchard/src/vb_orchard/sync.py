@@ -178,7 +178,8 @@ class Syncer:
         docs = pgsource.fetch_docs(pg, todo)
         res = engine.ingest_new(self.db, docs, alias=self.s.alias, encoder=self.encoder)
         write_state(self.db, {"vb:" + i: fps[i] for i in todo},
-                    meta={"last_insert": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+                    meta={"last_insert": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                          "vaults": ",".join(vaults)})
         self.since_recut += len(new)
         out = PassResult(action="insert", inserted=len(new), changed=len(changed), total=len(fps),
                          seconds=time.perf_counter() - t0,
