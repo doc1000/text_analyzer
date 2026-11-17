@@ -10,8 +10,10 @@ Extension field mapping (extension/background.js -> app/schemas.IngestPayload):
 """
 from __future__ import annotations
 
+import atexit
 import queue
 import threading
+import weakref
 from concurrent.futures import Future
 from datetime import datetime, timezone
 from typing import Callable, Optional, Sequence
@@ -138,6 +140,18 @@ def merge(existing_doc: Optional[dict], payload: dict, *, now: Optional[str] = N
 
 
 _STOP = object()
+_LIVE = weakref.WeakSet()
+
+
+def _flush_all_at_exit():
+    for w in list(_LIVE):
+        try:
+            w.close()  # drains the queue, then stops the thread
+        except Exception:  # noqa: BLE001
+            pass
+
+
+atexit.register(_flush_all_at_exit)
 
 
 class CaptureWriter:
@@ -146,7 +160,12 @@ class CaptureWriter:
     write_batch(docs) must be idempotent (at-least-once: a failing batch is retried
     `retries` times, then every future in it gets the exception). `lookup(norm_url, item_id)`
     optionally finds an existing doc not yet in the writer's own cache of written docs.
-    submit() returns a Future resolving to the item_id (also available as fut.item_id at once).
+    submit() returns a Future resolving to the item_id actually written: the id of an existing
+    (e.g. legacy vb:<uuid>) row when the url merged into it, else the new vb:<sha> id. fut.item_id
+    holds the new-style id until the future resolves, then the written id.
+
+    Queued captures are flushed by an atexit hook if the process exits without close(). A hard
+    kill (SIGKILL, power loss, os._exit) can still lose the in-memory queue.
     """
 
     def __init__(self, write_batch: Callable[[Sequence[dict]], None], *,
@@ -166,10 +185,12 @@ class CaptureWriter:
         self._pending = 0
         self._thread = threading.Thread(target=self._run, name="capture-writer", daemon=True)
         self._thread.start()
+        _LIVE.add(self)
 
     def seed(self, docs: Sequence[dict]) -> None:
         for d in docs:
-            self._cache[d["item_id"]] = d
+            url = (d.get("metadata") or {}).get("url")
+            self._cache[capture_item_id(url) if url else d["item_id"]] = d
 
     def submit(self, payload: dict) -> "Future":
         fut: Future = Future()
@@ -233,7 +254,9 @@ class CaptureWriter:
             self._cache.update(staged)
         for n, fut in batch:
             if err is None:
-                fut.set_result(capture_item_id(n["url"]))
+                real = staged[capture_item_id(n["url"])]["item_id"]
+                fut.item_id = real  # type: ignore[attr-defined]
+                fut.set_result(real)
             else:
                 fut.set_exception(err)
         with self._idle:

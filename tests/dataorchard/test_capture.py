@@ -106,6 +106,47 @@ def test_writer_500_captures_8_threads():
     assert sum(calls) >= 400
 
 
+def test_writer_returns_legacy_item_id_when_merged():
+    legacy = {"item_id": "vb:11111111-2222-3333-4444-555555555555", "title": "Old", "text": "short",
+              "metadata": {"url": "https://a.b/legacy", "captured_at": "2026-01-01T00:00:00.000000Z",
+                           "updated_at": "2026-01-01T00:00:00.000000Z", "highlights": [], "notes": "",
+                           "tags": [], "source": "vaultbubbles"}}
+    written = []
+    w = CaptureWriter(lambda docs: written.extend(docs),
+                      lookup=lambda nurl, iid: legacy if nurl == "https://a.b/legacy" else None)
+    f = w.submit({"url": "https://A.b/legacy#x", "full_text": "a longer body"})
+    assert f.result(5) == legacy["item_id"] and f.item_id == legacy["item_id"]
+    assert written[0]["item_id"] == legacy["item_id"] and written[0]["text"] == "a longer body"
+    g = w.submit({"url": "https://a.b/legacy", "highlight": "h"})  # cached: still the legacy id
+    assert g.result(5) == legacy["item_id"]
+    h = w.submit({"url": "https://a.b/fresh", "full_text": "x"})
+    assert h.result(5) == capture_item_id("https://a.b/fresh")
+    w.close()
+
+
+def test_writer_flushes_at_exit_without_close(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    out = tmp_path / "written.txt"
+    code = (
+        "import time, sys\n"
+        "from app.dataorchard.capture import CaptureWriter\n"
+        "def wb(docs):\n"
+        "    time.sleep(0.3)\n"
+        "    open(sys.argv[1], 'a', encoding='utf-8').write(''.join(d['item_id'] + '\\n' for d in docs))\n"
+        "w = CaptureWriter(wb, linger=0.01)\n"
+        "for i in range(5):\n"
+        "    w.submit({'url': 'https://a.b/%d' % i, 'full_text': 't'})\n"
+        "# exit without flush() or close()\n"
+    )
+    root = Path(__file__).resolve().parents[2]
+    r = subprocess.run([sys.executable, "-c", code, str(out)], cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert len(out.read_text(encoding="utf-8").split()) == 5
+
+
 def test_writer_retries_and_failure():
     n = {"c": 0}
 

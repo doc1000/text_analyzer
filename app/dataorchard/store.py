@@ -85,27 +85,30 @@ def make_write_batch(path, *, alias: str = "vb/topic", insert_on_capture: bool =
 
     def write_batch(docs: Sequence[dict]) -> None:
         docs = list(docs)
-        with connection(path) as con:
-            placed = False
-            if insert_on_capture:
-                from treedb import registry
+        have_alias = False
+        if insert_on_capture:
+            from treedb import registry
 
-                try:
+            try:
+                with connection(path) as con:  # short open, closed before insert_items
                     registry.resolve(con, alias)
-                    have_alias = True
-                except Exception:  # noqa: BLE001
-                    have_alias = False
-                if have_alias:
-                    from orchard.cultivate_db import insert_items
+                have_alias = True
+            except Exception:  # noqa: BLE001
+                have_alias = False
+        if have_alias:
+            from orchard.cultivate_db import insert_items
 
-                    res = insert_items(con, alias, docs, encoder=encoder, attach=attach)
-                    stats["placed"] = stats.get("placed", 0) + len(res.new_item_ids)
-                    stats["recaptured"] = stats.get("recaptured", 0) + len(res.recaptured_item_ids)
-                    stats["attach_failed"] = stats.get("attach_failed", 0) + sum(
-                        1 for v in res.attach.values() if v is not None)
-                    placed = True
-            if not placed:
+            # pass the PATH, not a connection: insert_items then embeds outside the write lock
+            res = insert_items(str(path), alias, docs, encoder=encoder, attach=attach)
+            stats["placed"] = stats.get("placed", 0) + len(res.new_item_ids)
+            if getattr(res, "write_lock_seconds", None) is not None:
+                stats.setdefault("write_lock_seconds", []).append(res.write_lock_seconds)
+            stats["recaptured"] = stats.get("recaptured", 0) + len(res.recaptured_item_ids)
+            stats["attach_failed"] = stats.get("attach_failed", 0) + sum(
+                1 for v in res.attach.values() if v is not None)
+        else:
+            with connection(path) as con:  # open only for the document upsert
                 upsert_documents(con, docs)
-                stats["upserted_only"] = stats.get("upserted_only", 0) + len(docs)
+            stats["upserted_only"] = stats.get("upserted_only", 0) + len(docs)
 
     return write_batch
