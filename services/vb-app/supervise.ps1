@@ -3,6 +3,7 @@
 # Ctrl+C does not stop this loop; stop the scheduled task (or kill this process tree) instead.
 param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][string]$Log)
 try { [Console]::TreatControlCAsInput = $true } catch {}
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"  # Python output to the log as UTF-8
 New-Item -ItemType Directory -Force (Split-Path $Log -Parent) | Out-Null
 while ($true) {
   Add-Content -Path $Log -Encoding UTF8 -Value ("[{0}] supervise: starting {1}" -f (Get-Date -Format s), $Command)

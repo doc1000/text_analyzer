@@ -75,6 +75,46 @@
       border-color: #60a5fa;
     }
 
+    /* Topic assign / rename / move is switched off for now (batch25): tags replace it. */
+    #topicBadge, #topicRibbon { display: none !important; }
+
+    .tags-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      margin: -0.25rem 0 1rem;
+      font-size: 0.85rem;
+    }
+    .tags-label { color: #9ca3af; }
+    .tag-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+    }
+    .tag-chip button {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      padding: 0;
+      font-size: 0.9rem;
+      line-height: 1;
+    }
+    .tag-chip button:hover { color: #C66A32; }
+    #tagInput {
+      flex: 0 1 12rem;
+      min-width: 8rem;
+      padding: 0.2rem 0.45rem;
+      font-size: 0.85rem;
+    }
+    #tagStatus { color: #9ca3af; font-size: 0.75rem; }
+
     .topic-meta-row {
       display: flex;
       justify-content: space-between;
@@ -495,6 +535,13 @@
         <span class="topic-badge-icon">▼</span>
       </div>
       <div id="documentMeta" class="document-meta"></div>
+    </div>
+
+    <div class="tags-row" id="tagsRow">
+      <span class="tags-label">Tags:</span>
+      <span id="tagList"></span>
+      <input type="text" id="tagInput" placeholder="Add tag, press Enter" maxlength="60" aria-label="Add tag" />
+      <span id="tagStatus"></span>
     </div>
 
     <div id="topicRibbon" class="topic-ribbon">
@@ -1201,6 +1248,59 @@ ${content}
 
     // Modify loadDocument to also store topic info (topics load lazily when ribbon opens)
     const originalLoadDocument = loadDocument;
+    // -------- TAGS (saved immediately; topic editing is switched off for now) --------
+    const tagList = document.getElementById("tagList");
+    const tagInput = document.getElementById("tagInput");
+    const tagStatus = document.getElementById("tagStatus");
+    let currentTags = [];
+
+    function setTags(tags) {
+      currentTags = Array.isArray(tags) ? tags.slice() : [];
+      tagList.innerHTML = "";
+      currentTags.forEach((t, i) => {
+        const chip = document.createElement("span");
+        chip.className = "tag-chip";
+        chip.appendChild(document.createTextNode(t));
+        const x = document.createElement("button");
+        x.type = "button";
+        x.title = `Remove tag ${t}`;
+        x.textContent = "×";
+        x.addEventListener("click", () => saveTags(currentTags.filter((_, j) => j !== i)));
+        chip.appendChild(x);
+        tagList.appendChild(chip);
+      });
+    }
+
+    async function saveTags(tags) {
+      if (!docId) return;
+      tagStatus.textContent = "Saving…";
+      try {
+        const res = await authFetch(`${API_BASE}/documents/${encodeURIComponent(docId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tags }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const doc = await res.json();
+        setTags(doc.tags || []);
+        tagStatus.textContent = "Saved";
+        setTimeout(() => { if (tagStatus.textContent === "Saved") tagStatus.textContent = ""; }, 1500);
+      } catch (err) {
+        console.error("Tag save error:", err);
+        tagStatus.textContent = "Could not save tags";
+      }
+    }
+
+    tagInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === ",") {
+        e.preventDefault();
+        const t = tagInput.value.trim();
+        if (!t) return;
+        if (!currentTags.some(x => x.toLowerCase() === t.toLowerCase())) saveTags([...currentTags, t]);
+        tagInput.value = "";
+      }
+    });
+
     loadDocument = async function(docId) {
       documentTitle.value = "Loading…";
       documentBody.value = "";
@@ -1224,6 +1324,7 @@ ${content}
 
         documentTitle.value = originalTitle;
         documentBody.value = capturedContent;
+        setTags(doc.tags || []);
 
         // Store topic info and update badge display
         currentAssignedTopicId = doc.assigned_topic_id;

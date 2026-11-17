@@ -330,6 +330,19 @@ def list_documents(
     return docs
 
 
+ORCHARD_TOP_DOCS = 8  # documents taken from orchard's ranking for /query
+
+
+def clean_tags(tags) -> list:
+    out, seen = [], set()
+    for t in tags or []:
+        t = " ".join(str(t).split())[:60]
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out[:50]
+
+
 @app.post("/query", response_model=QueryResponse)
 def query_docs(
     payload: QueryRequest, 
@@ -401,12 +414,42 @@ def query_docs(
         if uuid_list:
             base_query = base_query.filter(Document.id.in_(uuid_list))
 
+    # 2c) TOPIC_SOURCE=orchard: rank documents with Data Orchard's hybrid search (keyword +
+    # embedding, the same index as the bubble view), restricted to the scope above, then take
+    # the best sentences from the top documents. Falls back to sentence search on its own.
+    doc_rank = None
+    from . import orchard_bridge
+    if vault_ids and orchard_bridge.covers(vault_ids):
+        found = orchard_bridge.find(payload.query, k=200)
+        if found:
+            scope = set(payload.doc_ids) if payload.doc_ids else None
+            ranked = []
+            for h in found:
+                did = str(h.get("item_id") or "")
+                did = did[3:] if did.startswith("vb:") else did
+                if did and (h.get("score") or 0) > 0 and (scope is None or did in scope) and did not in ranked:
+                    ranked.append(did)
+            if ranked:
+                from uuid import UUID as _UUID
+                doc_rank = {d: i for i, d in enumerate(ranked[:ORCHARD_TOP_DOCS])}
+                base_query = base_query.filter(Document.id.in_([_UUID(d) for d in doc_rank]))
+
     rows = (
         base_query
         .order_by(similarity_expr.desc())
-        .limit(payload.top_k)
+        .limit(max(300, payload.top_k * 20) if doc_rank else payload.top_k)
         .all()
     )
+    if doc_rank:
+        # document order from orchard, best sentences first within a document, at most 3 each
+        rows.sort(key=lambda r: (doc_rank.get(str(r[2].id), len(doc_rank)), -float(r[3])))
+        per_doc, kept = {}, []
+        for r in rows:
+            k = str(r[2].id)
+            if per_doc.get(k, 0) < 3:
+                per_doc[k] = per_doc.get(k, 0) + 1
+                kept.append(r)
+        rows = kept[:payload.top_k]
 
     hits: List[ChunkHit] = []
     seen_sentence_texts = set()
@@ -449,7 +492,13 @@ def query_docs(
 
     answer = None
     if payload.with_answer and hits:
-        answer = _answer_from_hits(payload.query, hits)
+        try:
+            answer = _answer_from_hits(payload.query, hits)
+        except Exception as exc:  # e.g. the chat provider rejects the API key: still return hits
+            import logging
+            logging.getLogger(__name__).warning("answer generation failed: %s", type(exc).__name__)
+            answer = (f"(No AI answer: the chat provider failed with {type(exc).__name__}. "
+                      "The matching passages are below.)")
 
     return QueryResponse(answer=answer, hits=hits)
 
@@ -744,6 +793,7 @@ def get_document_detail(
         assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
         assigned_topic_title=doc.assigned_topic_title,
         created_by=str(doc.created_by) if doc.created_by else None,
+        tags=list(doc.user_tags or []),
     )
 
 @app.put("/documents/{document_id}", response_model=DocumentDetailResponse)
@@ -765,6 +815,10 @@ def update_document(
     # Update title if provided
     if payload.title is not None:
         doc.title = payload.title
+
+    # Replace tags if provided (trimmed, de-duplicated case-insensitively, order kept)
+    if payload.tags is not None:
+        doc.user_tags = clean_tags(payload.tags)
 
     # Update text if provided - need to re-chunk and re-embed
     if payload.text is not None:
@@ -799,6 +853,7 @@ def update_document(
         assigned_topic_id=str(doc.assigned_topic_id) if doc.assigned_topic_id else None,
         assigned_topic_title=doc.assigned_topic_title,
         created_by=str(doc.created_by) if doc.created_by else None,
+        tags=list(doc.user_tags or []),
     )
 
 @app.delete("/documents/{document_id}")

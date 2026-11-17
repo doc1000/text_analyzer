@@ -1461,6 +1461,9 @@
       const data = await res.json();
       const srcLabel = document.getElementById("topicSourceLabel");
       if (srcLabel) srcLabel.textContent = data.source === "orchard" ? "Topics: Data Orchard" : "Topics: built-in";
+      // Recluster belongs to the built-in topics; the orchard tree rebuilds itself
+      const reclusterBtnEl = document.getElementById("reclusterBtn");
+      if (reclusterBtnEl) reclusterBtnEl.style.display = data.source === "orchard" ? "none" : "";
 
       // Increase size for topics (depth 1) to make them bigger
       const root = d3.hierarchy(data)

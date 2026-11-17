@@ -197,10 +197,12 @@ class DocumentDetailResponse(BaseModel):
     assigned_topic_title: Optional[str] = None
     topic_manually_assigned: Optional[bool] = None
     created_by: Optional[str] = None
+    tags: List[str] = []
 
 class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None
     text: Optional[str] = None
+    tags: Optional[List[str]] = None  # replaces the document's tags when given
 
 
 # ---------- Clustering Settings (consolidated) ----------

@@ -15,5 +15,7 @@ if (Test-Path $cfg) {
   }
 }
 $env:HF_HUB_OFFLINE = "1"; $env:TRANSFORMERS_OFFLINE = "1"; $env:PYTHONUNBUFFERED = "1"
+# UTF-8 stdout: the app prints non-ASCII (e.g. a check mark) and cp1252 would raise mid-insert
+$env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
 Set-Location $repo
 & uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port $Port

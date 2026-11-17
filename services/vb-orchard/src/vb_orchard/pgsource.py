@@ -12,7 +12,8 @@ from .copy import pg_row_to_doc
 CHANNEL = "vb_documents"
 
 _FINGERPRINT = ("md5(coalesce(url,'') || chr(31) || coalesce(title,'') || chr(31) || coalesce(full_text,'') "
-                "|| chr(31) || coalesce(extract(epoch FROM captured_at)::text,''))")
+                "|| chr(31) || coalesce(extract(epoch FROM captured_at)::text,'') "
+                "|| chr(31) || coalesce(array_to_string(user_tags, chr(30)),''))")
 
 TRIGGER_SQL = f"""
 CREATE OR REPLACE FUNCTION vb_orchard_notify() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -60,7 +61,7 @@ def fetch_docs(con, ids: Iterable[str]) -> list:
     ids = list(ids)
     if not ids:
         return []
-    rows = con.execute("SELECT id::text, url, title, full_text, captured_at FROM documents "
+    rows = con.execute("SELECT id::text, url, title, full_text, captured_at, user_tags FROM documents "
                        "WHERE id = ANY(%s::uuid[]) ORDER BY captured_at NULLS FIRST, id", [ids]).fetchall()
     return [pg_row_to_doc(*r) for r in rows]
 
