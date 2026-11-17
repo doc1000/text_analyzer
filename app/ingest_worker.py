@@ -175,6 +175,7 @@ def process_ingest_item(queue_id: str) -> None:
             extracted_text=extracted_text,
             full_text=captured_text,
             captured_at=captured_at,
+            user_tags=[t for t in dict.fromkeys(" ".join(str(x).split()) for x in (getattr(payload, "tags", None) or [])) if t][:50],
         )
         db.add(doc)
         db.commit()

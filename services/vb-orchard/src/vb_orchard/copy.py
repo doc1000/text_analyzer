@@ -96,7 +96,7 @@ def load_pg_csv(path) -> list:
     return docs
 
 
-def pg_row_to_doc(doc_id, url, title, full_text, captured_at) -> dict:
+def pg_row_to_doc(doc_id, url, title, full_text, captured_at, tags=None) -> dict:
     """One VB `documents` row -> orchard document (item_id ``vb:<uuid>``). ``captured_at`` may be a
     datetime (psycopg) or an ISO string; naive values are taken as UTC."""
     captured = to_utc_z(captured_at) if captured_at not in (None, "") else None
@@ -110,7 +110,7 @@ def pg_row_to_doc(doc_id, url, title, full_text, captured_at) -> dict:
             "updated_at": captured,
             "highlights": [],
             "notes": "",
-            "tags": [],
+            "tags": [str(t) for t in (tags or []) if str(t).strip()],
             "source": "vaultbubbles",
         },
     }

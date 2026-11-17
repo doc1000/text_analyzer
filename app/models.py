@@ -5,7 +5,7 @@ from sqlalchemy import (
     ForeignKey, Integer, Index, BigInteger,
     String, text, Boolean, UniqueConstraint,
     )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import Session, declared_attr
@@ -142,6 +142,8 @@ class Document(BaseModel):
     assigned_topic_title = Column(Text, nullable=True)
     # Flag indicating if topic was manually assigned by user (vs auto-assigned by clustering)
     topic_manually_assigned = Column(Boolean, nullable=True, default=False)
+    # Free-form tags on the item card (the existing documents.user_tags column; NOT NULL, default '{}')
+    user_tags = Column(ARRAY(Text), nullable=False, server_default="{}", default=list)
 
 
 class IngestQueue(BaseModel):
