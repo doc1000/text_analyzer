@@ -30,7 +30,7 @@ class FakePG:
         did = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{topic}-{i}"))
         text = f"{topic} note {i}. " + " ".join([WORDS[topic]] * 3) + text_extra
         self.rows[did] = (did, f"https://ex.com/{topic}/{i}", f"{topic.title()} note {i}", text,
-                          f"2026-11-{1 + i % 28:02d}T10:00:00Z")
+                          f"2026-11-{1 + i % 28:02d}T10:00:00Z", [])
         return did
 
     def fp(self):
@@ -136,3 +136,16 @@ def test_serve_do_routes(env):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_tag_edit_is_synced_and_searchable(env):
+    pg, s, sy = env
+    sy.sync_once(None)
+    did = next(iter(pg.rows))
+    pg.rows[did] = pg.rows[did][:5] + (["zzqx-tag"],)
+    r = sy.sync_once(None)
+    assert (r.action, r.changed) == ("insert", 1)
+    from orchard_harvest import HarvestStore, find
+
+    hits = find(HarvestStore(str(s.db_path), encoder=FakeEncoder()), s.alias, "zzqx-tag", k=3)
+    assert hits[0]["item_id"] == "vb:" + did and hits[0]["tags"] == ["zzqx-tag"]
