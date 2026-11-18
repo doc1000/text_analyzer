@@ -5,7 +5,7 @@ Precedence: real environment > config file > defaults. The config file is
 Postgres URL, so never commit it).
 
     VB_DATABASE_URL        postgresql://user:pass@host:port/db   (required for sync)
-    ORCHARD_DB_PATH        orchard-db DuckDB file      (default ~/.vb-orchard/vb.duckdb)
+    ORCHARD_DB_DIR         folder of orchard-db files, one <vault_id>.duckdb per vault (default ~/.vb-orchard)
     ORCHARD_ALIAS          cultivar alias              (default vb/topic)
     VB_OWNER_EMAIL         sync the vaults this user belongs to
     VB_VAULT_ROLES         membership roles that count (default owner)
@@ -53,7 +53,8 @@ def _csv(v: Optional[str]) -> list:
 @dataclass
 class Settings:
     database_url: Optional[str] = None
-    db_path: Path = HOME / "vb.duckdb"
+    db_dir: Path = HOME
+    db_path: Optional[Path] = None  # tests only; the service uses db_for(vault_id)
     alias: str = "vb/topic"
     owner_email: Optional[str] = None
     vault_roles: list = field(default_factory=lambda: ["owner"])
@@ -69,8 +70,8 @@ class Settings:
         e.update(os.environ if env is None else env)
         s = cls()
         s.database_url = e.get("VB_DATABASE_URL") or None
-        if e.get("ORCHARD_DB_PATH"):
-            s.db_path = Path(e["ORCHARD_DB_PATH"]).expanduser()
+        if e.get("ORCHARD_DB_DIR"):
+            s.db_dir = Path(e["ORCHARD_DB_DIR"]).expanduser()
         s.alias = e.get("ORCHARD_ALIAS") or s.alias
         s.owner_email = e.get("VB_OWNER_EMAIL") or None
         s.vault_roles = _csv(e.get("VB_VAULT_ROLES")) or s.vault_roles
@@ -81,6 +82,15 @@ class Settings:
         s.encoder = (e.get("ORCHARD_ENCODER") or s.encoder).lower()
         return s
 
+    def db_for(self, vault_id: str) -> Path:
+        """The orchard-db file of one vault (one tree per vault, never merged)."""
+        return Path(self.db_dir) / f"{vault_id}.duckdb"
+
+    @property
+    def lock_path(self) -> Path:
+        """One sync process writes all of this folder's files."""
+        return Path(self.db_dir) / "sync"
+
     def require_database(self) -> str:
         if not self.database_url:
             raise SystemExit(f"VB_DATABASE_URL is not set (environment or {config_file()})")
@@ -90,7 +100,7 @@ class Settings:
 
     def describe(self) -> dict:
         """Settings without the database URL (safe to print)."""
-        return {"db_path": str(self.db_path), "alias": self.alias, "owner_email": self.owner_email,
+        return {"db_dir": str(self.db_dir), "alias": self.alias, "owner_email": self.owner_email,
                 "vault_roles": self.vault_roles, "vault_ids": self.vault_ids, "poll_seconds": self.poll_seconds,
                 "recut_after": self.recut_after, "port": self.port, "encoder": self.encoder,
                 "database_url_set": bool(self.database_url), "config_file": str(config_file())}

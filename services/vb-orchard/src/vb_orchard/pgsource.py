@@ -39,15 +39,27 @@ def connect(url: str, *, read_only: bool = True):
     return psycopg.connect(url, autocommit=True, options=opts, application_name="vb-orchard")
 
 
+def _kind_sql(con) -> str:
+    """vaults.kind if migration 008 ran, else derived from is_personal."""
+    has = con.execute("SELECT 1 FROM information_schema.columns WHERE table_name = 'vaults' "
+                      "AND column_name = 'kind'").fetchone()
+    return "v.kind" if has else "CASE WHEN v.is_personal THEN 'personal' ELSE 'shared' END"
+
+
 def resolve_vaults(con, settings) -> list:
+    """Vaults to sync, each {"id", "kind", "name"}: explicit VB_VAULT_IDS, else the vaults where
+    VB_OWNER_EMAIL holds one of VB_VAULT_ROLES. Each gets its own orchard-db file."""
+    kind = _kind_sql(con)
     if settings.vault_ids:
-        return list(settings.vault_ids)
-    rows = con.execute(
-        "SELECT DISTINCT v.id::text FROM vaults v JOIN vault_memberships vm ON vm.vault_id = v.id "
-        "JOIN users u ON u.id = vm.user_id WHERE lower(u.email) = lower(%s) AND vm.role = ANY(%s) "
-        "AND v.archived_at IS NULL ORDER BY 1",
-        [settings.owner_email, list(settings.vault_roles)]).fetchall()
-    return [r[0] for r in rows]
+        rows = con.execute(f"SELECT v.id::text, {kind}, v.name FROM vaults v WHERE v.id = ANY(%s::uuid[]) "
+                           "ORDER BY 1", [list(settings.vault_ids)]).fetchall()
+    else:
+        rows = con.execute(
+            f"SELECT DISTINCT v.id::text, {kind}, v.name FROM vaults v JOIN vault_memberships vm ON vm.vault_id = v.id "
+            "JOIN users u ON u.id = vm.user_id WHERE lower(u.email) = lower(%s) AND vm.role = ANY(%s) "
+            "AND v.archived_at IS NULL ORDER BY 1",
+            [settings.owner_email, list(settings.vault_roles)]).fetchall()
+    return [{"id": r[0], "kind": r[1], "name": r[2]} for r in rows]
 
 
 def fingerprints(con, vault_ids: Iterable[str]) -> dict:

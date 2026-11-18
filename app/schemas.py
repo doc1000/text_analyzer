@@ -44,6 +44,7 @@ class VaultResponse(BaseModel):
     name: str
     owner_id: Optional[str] = None
     is_personal: bool = True
+    kind: str = "personal"  # personal | collection | shared
     created_at: datetime
     archived_at: Optional[datetime] = None
     role: Optional[str] = None  # The current user's role in this vault (from membership)
@@ -198,6 +199,10 @@ class DocumentDetailResponse(BaseModel):
     topic_manually_assigned: Optional[bool] = None
     created_by: Optional[str] = None
     tags: List[str] = []
+    vault_kind: Optional[str] = None
+    read_only: bool = False          # collection documents: tags only, no title/text edits
+    source_kind: Optional[str] = None
+    source_ref: Optional[str] = None
 
 class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None

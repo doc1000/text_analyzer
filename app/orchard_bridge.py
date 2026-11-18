@@ -15,7 +15,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from typing import Iterable, Optional
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -53,26 +53,29 @@ def synced_vaults(max_age_s: float = 30.0) -> Optional[set]:
     return vaults
 
 
-def covers(vault_ids: Iterable) -> bool:
-    if not enabled():
+def covers(vault_id) -> bool:
+    """True if orchard serves a tree for this vault (one tree per vault, never merged)."""
+    if not enabled() or not vault_id:
         return False
     vs = synced_vaults()
-    return bool(vs) and any(str(v) in vs for v in vault_ids)
+    return bool(vs) and str(vault_id).lower() in {v.lower() for v in vs}
 
 
-def hierarchy(days) -> Optional[dict]:
+def hierarchy(days, vault_id) -> Optional[dict]:
     try:
-        tree = _get("/do/topics/hierarchy", {"days": "all" if not days else days}, timeout=10.0)
+        tree = _get("/do/topics/hierarchy", {"days": "all" if not days else days, "vault": str(vault_id)},
+                    timeout=10.0)
         tree["source"] = "orchard"
+        tree["vault_id"] = str(vault_id)
         return tree
     except Exception as exc:  # noqa: BLE001
         log.warning("orchard hierarchy failed, using built-in topics: %s", exc)
         return None
 
 
-def find(query: str, k: int = 10, days=None) -> Optional[list]:
-    """Hybrid search hits [{item_id, title, url, score, snippet?...}] or None on failure."""
-    params = {"q": query, "k": k}
+def find(query: str, vault_id, k: int = 10, days=None) -> Optional[list]:
+    """Hybrid search hits [{item_id, title, url, score, ...}] in ONE vault's tree, or None on failure."""
+    params = {"q": query, "k": k, "vault": str(vault_id)}
     if days:
         params["days"] = days
     try:

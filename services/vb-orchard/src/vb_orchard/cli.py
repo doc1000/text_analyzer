@@ -28,10 +28,12 @@ def main(argv=None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sp = sub.add_parser("sync")
     sp.add_argument("--once", action="store_true", help="one pass, then exit")
-    sub.add_parser("rebuild")
+    rb = sub.add_parser("rebuild")
+    rb.add_argument("--vault", default=None, help="one vault id (default: every synced vault)")
     sv = sub.add_parser("serve")
     sv.add_argument("--port", type=int, default=None)
-    sub.add_parser("mcp")
+    mc = sub.add_parser("mcp")
+    mc.add_argument("--vault", default=None, help="vault id (default: the personal vault)")
     sub.add_parser("status")
     sub.add_parser("install-trigger")
     sub.add_parser("uninstall-trigger")
@@ -50,16 +52,18 @@ def main(argv=None) -> None:
         from .sync import Syncer, get_encoder
 
         url = s.require_database()
-        with WriterLock(s.db_path), pgsource.connect(url) as pg:
-            vaults = pgsource.resolve_vaults(pg, s)
-            r = Syncer(s, encoder=get_encoder(s.encoder)).rebuild(pg, vaults, pgsource.fingerprints(pg, vaults),
-                                                                   "manual")
-            print(r.line())
+        with WriterLock(s.lock_path), pgsource.connect(url) as pg:
+            enc = get_encoder(s.encoder)
+            for v in pgsource.resolve_vaults(pg, s):
+                if a.vault and v["id"] != a.vault:
+                    continue
+                r = Syncer(s, v, encoder=enc).rebuild(pg, pgsource.fingerprints(pg, [v["id"]]), "manual")
+                print(f"{v['kind']} {v['name']} {v['id']}: {r.line()}")
     elif a.cmd == "serve":
         from .serve import make_server
 
         srv = make_server(s, port=a.port)
-        print(f"serving http://127.0.0.1:{srv.server_address[1]}/ for {s.db_path}", flush=True)
+        print(f"serving http://127.0.0.1:{srv.server_address[1]}/ for the vault files in {s.db_dir}", flush=True)
         try:
             srv.serve_forever()
         except KeyboardInterrupt:
@@ -69,23 +73,29 @@ def main(argv=None) -> None:
     elif a.cmd == "mcp":
         from orchard_harvest.mcp.server import main as mcp_main
 
-        mcp_main(["--db", str(s.db_path), "--alias", s.alias])
-    elif a.cmd == "status":
-        out = {"settings": s.describe(), "orchard_db_exists": s.db_path.exists()}
-        if s.db_path.exists():
-            from .sync import read_state
+        from .serve import VaultStores
 
+        vault = a.vault or VaultStores(s.db_dir).default_vault()
+        if not vault:
+            raise SystemExit(f"no orchard-db files in {s.db_dir}")
+        mcp_main(["--db", str(s.db_for(vault)), "--alias", s.alias])
+    elif a.cmd == "status":
+        from .serve import VaultStores
+        from .sync import read_state
+
+        out = {"settings": s.describe(), "orchard_db_files": {}}
+        for vid, path in VaultStores(s.db_dir).files().items():
             try:
-                out["orchard_db_items"] = len(read_state(s.db_path))
+                out["orchard_db_files"][vid] = len(read_state(path))
             except Exception as exc:  # noqa: BLE001
-                out["orchard_db_items"] = f"busy: {type(exc).__name__}"
+                out["orchard_db_files"][vid] = f"busy: {type(exc).__name__}"
         if s.database_url:
             from . import pgsource
 
             with pgsource.connect(s.database_url) as pg:
                 vaults = pgsource.resolve_vaults(pg, s)
-                out["vaults"] = vaults
-                out["postgres_documents"] = len(pgsource.fingerprints(pg, vaults))
+                out["vaults"] = [{**v, "postgres_documents": len(pgsource.fingerprints(pg, [v["id"]]))}
+                                 for v in vaults]
                 out["notify_trigger"] = pgsource.trigger_installed(pg)
         print(json.dumps(out, indent=2))
     elif a.cmd == "install-trigger":

@@ -100,6 +100,8 @@ class Vault(BaseModel):
     name = Column(Text  , nullable=False)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     is_personal = Column(Boolean, nullable=False, default=True)
+    # personal | collection (isolated, read-only content) | shared  (migration 008)
+    kind = Column(Text, nullable=False, default="personal", server_default="personal")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     archived_at = Column(DateTime, nullable=True)
 
@@ -144,6 +146,12 @@ class Document(BaseModel):
     topic_manually_assigned = Column(Boolean, nullable=True, default=False)
     # Free-form tags on the item card (the existing documents.user_tags column; NOT NULL, default '{}')
     user_tags = Column(ARRAY(Text), nullable=False, server_default="{}", default=list)
+    # Provenance (migration 008): extension | import | promoted | email | vault_file | todo
+    source_kind = Column(Text, nullable=True, default="extension", server_default="extension")
+    source_ref = Column(Text, nullable=True)
+    source_vault_id = Column(UUID(as_uuid=True), nullable=True)
+    source_document_id = Column(UUID(as_uuid=True), nullable=True)
+    imported_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class IngestQueue(BaseModel):

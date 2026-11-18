@@ -517,6 +517,9 @@
       text-overflow: ellipsis;
     }
 
+    #vaultSelect { margin-left: 0.5rem; max-width: 16rem; }
+    .vault-kind-badge { font-size: 0.75rem; color: #C66A32; margin-left: 0.35rem; }
+
     #tooltip.rich {
       white-space: normal;
       max-width: 360px;
@@ -756,6 +759,8 @@
       <span>Days:</span>
       <input type="number" id="daysInput" value="30" min="1" max="365" />
       <button id="reloadBtn">Reload</button>
+      <select id="vaultSelect" title="Vault or collection to show" aria-label="Vault or collection"></select>
+      <span id="vaultKindBadge" class="vault-kind-badge"></span>
 
       <div style="flex: 1;"></div>
 
@@ -1072,22 +1077,60 @@
       updateAuthUI();
     }
 
-    // Fetch user's vaults and set the current (personal) vault
+    // Fetch user's vaults, fill the vault picker, and set the current vault
+    // (remembered per browser; default: the user's own personal vault, which the API lists first).
+    let vaultsById = {};
+    let renderedVaultId = undefined;
+    function vaultLabel(v) {
+      const kind = v.kind || (v.is_personal ? "personal" : "shared");
+      const suffix = kind === "collection" ? " · collection" : (v.role && v.role !== "owner" ? ` · ${v.role}` : "");
+      const n = v.document_count != null ? ` (${v.document_count})` : "";
+      return `${v.name}${suffix}${n}`;
+    }
+    function updateVaultBadge() {
+      const badge = document.getElementById("vaultKindBadge");
+      const v = vaultsById[currentVaultId];
+      if (badge) badge.textContent = v && v.kind === "collection" ? "read-only collection" : "";
+    }
     async function fetchCurrentVault() {
       try {
         const res = await authFetch(`${API_BASE}/vaults`);
         if (res.ok) {
           const data = await res.json();
-          // Use first vault (personal vault is sorted first)
-          if (data.vaults && data.vaults.length > 0) {
-            currentVaultId = data.vaults[0].id;
-            console.log('Current vault:', currentVaultId);
+          const vaults = data.vaults || [];
+          vaultsById = {};
+          vaults.forEach(v => { vaultsById[v.id] = v; });
+          let saved = null;
+          try { saved = localStorage.getItem("vb_vault_id"); } catch (e) {}
+          currentVaultId = (saved && vaultsById[saved]) ? saved : (vaults[0] ? vaults[0].id : null);
+          const sel = document.getElementById("vaultSelect");
+          if (sel) {
+            sel.innerHTML = "";
+            vaults.forEach(v => {
+              const o = document.createElement("option");
+              o.value = v.id;
+              o.textContent = vaultLabel(v);
+              sel.appendChild(o);
+            });
+            sel.value = currentVaultId || "";
+          }
+          updateVaultBadge();
+          console.log('Current vault:', currentVaultId);
+          if (renderedVaultId !== undefined && renderedVaultId !== currentVaultId) {
+            renderBubbleMap(parseInt(daysInput.value, 10) || 30);
           }
         }
       } catch (e) {
         console.error('Failed to fetch vaults:', e);
       }
     }
+    document.getElementById("vaultSelect").addEventListener("change", (e) => {
+      currentVaultId = e.target.value || null;
+      try { localStorage.setItem("vb_vault_id", currentVaultId || ""); } catch (err) {}
+      updateVaultBadge();
+      setScopeForNode(null);
+      renderBubbleMap(parseInt(daysInput.value, 10) || 30);
+    });
 
     // Check if user is authenticated and get their info
     async function checkAuthStatus() {
@@ -1457,7 +1500,9 @@
       tooltip.style("opacity", 0);
       infoContent.innerHTML = "<p>Loading topics…</p>";
 
-      const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}`);
+      renderedVaultId = currentVaultId;
+      const vaultParam = currentVaultId ? `&vault_id=${encodeURIComponent(currentVaultId)}` : "";
+      const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}${vaultParam}`);
       const data = await res.json();
       const srcLabel = document.getElementById("topicSourceLabel");
       if (srcLabel) srcLabel.textContent = data.source === "orchard" ? "Topics: Data Orchard" : "Topics: built-in";
@@ -1822,11 +1867,10 @@
         with_answer: true
       };
 
+      // Always the selected vault (one vault or collection at a time), plus the bubble's documents
+      if (currentVaultId) body.vault_id = currentVaultId;
       if (currentScope.docIds && currentScope.docIds.length > 0) {
         body.doc_ids = currentScope.docIds;
-      } else if (currentVaultId) {
-        // When not scoped to specific docs, limit to current vault
-        body.vault_id = currentVaultId;
       }
 
       try {
