@@ -829,14 +829,11 @@ def update_document(
         db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).delete()
         db.commit()
         
-        # Re-chunk and re-embed
+        # Re-chunk and re-embed. embed_doc_chunks(chunk_type="chunk") also embeds each new
+        # chunk's sentences and refreshes the document record; embedding sentences again here
+        # stored every sentence twice.
         from .helpers import embed_doc_chunks
         embed_doc_chunks(doc, chunk_type="chunk")
-        
-        # Re-embed sentences for each chunk
-        chunks = db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).all()
-        for chunk in chunks:
-            embed_doc_chunks(chunk, chunk_type="sent")
 
     db.commit()
     
