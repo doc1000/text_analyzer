@@ -63,6 +63,9 @@ def test_first_pass_builds_then_idle(env):
     assert r.action == "rebuild" and r.total == 24
     assert len(sync.read_state(s.db_path)) == 24
     assert sy.sync_once(None).action == "none"
+    from vb_orchard.serve import VaultStores
+
+    assert VaultStores(s.db_dir).info()[0]["kind"] == "personal"
 
 
 def test_new_and_changed_docs_are_inserted_without_rebuild(env):

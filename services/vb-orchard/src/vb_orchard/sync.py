@@ -140,6 +140,7 @@ class Syncer:
         self.db = Path(settings.db_for(self.vault["id"]))
         self.encoder = encoder
         self.since_recut = 0
+        self._meta_checked = False
 
     def _meta(self, **extra) -> dict:
         v = self.vault
@@ -184,6 +185,9 @@ class Syncer:
             return r
         todo = new + changed
         if not todo:
+            if not self._meta_checked:  # files from before per-vault sync lack kind/name: record them once
+                write_state(self.db, {}, meta=self._meta())
+                self._meta_checked = True
             return PassResult(total=len(fps), seconds=time.perf_counter() - t0)
         docs = pgsource.fetch_docs(pg, todo)
         # an edit (e.g. tags) keeps captured_at; updated_at = now tells readers the item changed
