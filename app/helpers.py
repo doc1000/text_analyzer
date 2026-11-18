@@ -1154,12 +1154,17 @@ def embed_doc_chunks(
             batch_num = i // batch_size + 1
             try:
                 batch_embeddings = get_embeddings_batch(batch)
-                all_embeddings.extend(batch_embeddings)
-                print(f"  ✓ Batch {batch_num}: {len(batch)} {chunk_type}s embedded")
+                if len(batch_embeddings) != len(batch):
+                    raise RuntimeError(f"got {len(batch_embeddings)} embeddings for {len(batch)} texts")
             except Exception as e:
                 print(f"  [WARN] Batch {batch_num} failed: {e}")
                 # Fill with None for failed batches
-                all_embeddings.extend([None] * len(batch))
+                batch_embeddings = [None] * len(batch)
+            # Outside the try: a failing print must not add a second block for this batch
+            # (that shifted later batches out of line with their texts).
+            all_embeddings.extend(batch_embeddings)
+            if batch_embeddings and batch_embeddings[0] is not None:
+                print(f"  ✓ Batch {batch_num}: {len(batch)} {chunk_type}s embedded")
         
         # 3. Generate chunk summaries if enabled (only for chunk type)
         chunk_summaries = []
@@ -1201,6 +1206,7 @@ def embed_doc_chunks(
         # 5. Bulk insert
         success_count = 0
         if objects_to_insert:
+            committed = False
             try:
                 # Create ORM objects for bulk insert
                 orm_objects = []
@@ -1214,13 +1220,20 @@ def embed_doc_chunks(
                 # Bulk save objects (faster than individual commits)
                 db.bulk_save_objects(orm_objects)
                 db.commit()
+                committed = True
                 success_count = len(orm_objects)
                 print(f"✓ Inserted {success_count}/{len(chunks)} {chunk_type}s")
             except Exception as e:
+                if committed:
+                    # The rows are saved; something after the commit failed (e.g. printing a
+                    # non-ASCII character to a cp1252 console). Re-inserting would duplicate them.
+                    print(f"[WARN] after a successful insert: {type(e).__name__}: {e}")
+                    objects_to_insert = []
                 db.rollback()
                 print(f"[ERROR] Bulk insert failed: {e}")
-                # Fallback: try individual inserts
-                print("  Falling back to individual inserts...")
+                # Fallback: try individual inserts (only when the bulk insert itself failed)
+                if objects_to_insert:
+                    print("  Falling back to individual inserts...")
                 for obj_data in objects_to_insert:
                     try:
                         if chunk_type == "chunk":
@@ -1244,8 +1257,16 @@ def embed_doc_chunks(
                 .all()
             )
             
+            # Only chunks without sentence rows: a document that already had chunks (backfill,
+            # retries) must not get its existing chunks' sentences a second time.
+            have_sentences = {
+                row[0] for row in db.query(SENTENCE_TABLE.chunk_id)
+                .filter(SENTENCE_TABLE.chunk_id.in_([c.id for c in inserted_chunks]))
+                .distinct().all()
+            } if inserted_chunks else set()
             for chunk in inserted_chunks:
-                embed_doc_chunks(chunk, chunk_type="sent", batch_size=batch_size)
+                if chunk.id not in have_sentences:
+                    embed_doc_chunks(chunk, chunk_type="sent", batch_size=batch_size)
             
             # 7. Create document-level record with average embedding and summary
             _create_document_embedding_record(
