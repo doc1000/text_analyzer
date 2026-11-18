@@ -35,12 +35,17 @@ commit that file. See `src/vb_orchard/config.py` for the full list.
 | `VB_DATABASE_URL` | Postgres URL (sync opens it read-only) |
 | `VB_OWNER_EMAIL` / `VB_VAULT_ROLES` | sync the vaults this user holds with these roles (default `owner`) |
 | `VB_VAULT_IDS` | explicit vault ids instead |
-| `ORCHARD_DB_PATH` | orchard-db file (default `~/.vb-orchard/vb.duckdb`) |
+| `ORCHARD_DB_DIR` | folder of orchard-db files, one `<vault_id>.duckdb` per vault (default `~/.vb-orchard`) |
 | `VB_ORCHARD_POLL_S` | fallback poll (default 60 s; NOTIFY wakes it at once) |
 | `VB_ORCHARD_RECUT_AFTER` | full re-cut after N incremental inserts, when idle (default 25) |
 | `VB_ORCHARD_PORT` | viewer / API port (default 8766) |
 
 ## How a sync pass works
+
+One sync process keeps one orchard-db file per selected vault (the personal vault and each
+collection); trees are never merged. A vault that disappears (a deleted collection) loses its file.
+`serve` and the `/do` routes take `?vault=<id>`; without it they use the personal vault.
+
 
 Fingerprint every document in the chosen vaults (md5 of url, title, text, captured_at) and compare
 with `vb_sync.items` in orchard-db. New or changed documents are embedded and placed in the current
