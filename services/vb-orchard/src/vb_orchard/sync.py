@@ -29,6 +29,23 @@ STATE_DDL = ("CREATE SCHEMA IF NOT EXISTS vb_sync; "
              "CREATE TABLE IF NOT EXISTS vb_sync.meta (key VARCHAR PRIMARY KEY, value VARCHAR)")
 
 
+MIN_TREE_DOCS = 2  # a linkage tree needs at least two leaves
+
+
+def perspective_for(n_docs: int) -> dict:
+    """The topic perspective with each cut's cluster_count capped at the number of documents
+    (the default asks for 8 top clusters, which fails for a vault of fewer than 8 items)."""
+    import copy
+
+    from orchard.perspectives import topic_perspective
+
+    p = copy.deepcopy(topic_perspective())
+    for cut in p.get("cuts") or []:
+        if cut.get("top_criterion") == "cluster_count" and cut.get("cluster_count"):
+            cut["cluster_count"] = max(1, min(int(cut["cluster_count"]), n_docs))
+    return p
+
+
 def get_encoder(kind: str = "minilm"):
     if kind == "fake":
         from .fake_encoder import FakeEncoder
@@ -154,14 +171,15 @@ class Syncer:
     def rebuild(self, pg, fps: dict, reason: str) -> PassResult:
         t0 = time.perf_counter()
         docs = pgsource.fetch_docs(pg, list(fps))
-        if not docs:
-            return PassResult(action="empty", total=0, reason="no documents in this vault")
+        if len(docs) < MIN_TREE_DOCS:
+            return PassResult(action="empty", total=len(docs),
+                              reason=f"a tree needs at least {MIN_TREE_DOCS} documents")
         self.db.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.db.with_name(self.db.stem + ".rebuild" + self.db.suffix)
         for p in (tmp, Path(str(tmp) + ".wal")):
             if p.exists():
                 p.unlink()
-        engine.rebuild(tmp, docs, alias=self.s.alias, encoder=self.encoder)
+        engine.rebuild(tmp, docs, alias=self.s.alias, encoder=self.encoder, perspective=perspective_for(len(docs)))
         write_state(tmp, {"vb:" + i: f for i, f in fps.items()}, replace=True,
                     meta=self._meta(last_rebuild=self._now()))
         _swap_in(tmp, self.db)
@@ -172,6 +190,8 @@ class Syncer:
         t0 = time.perf_counter()
         fps = pgsource.fingerprints(pg, [self.vault["id"]])
         if not self.db.exists() or not alias_exists(self.db, self.s.alias):
+            if len(fps) < MIN_TREE_DOCS:
+                return PassResult(action="none", total=len(fps))  # too small for a tree yet; quiet
             return self.rebuild(pg, fps, "no orchard-db yet")
         known = read_state(self.db)
         if not known:
@@ -218,6 +238,7 @@ class MultiSyncer:
         self.s = settings
         self.encoder = encoder
         self.syncers: dict = {}
+        self.failing: dict = {}  # vault id -> (next attempt monotonic time, back-off seconds)
 
     def _refresh(self, pg) -> list:
         vaults = pgsource.resolve_vaults(pg, self.s)
@@ -243,9 +264,27 @@ class MultiSyncer:
                 log.warning("could not remove %s: %s", p, exc)
 
     def sync_all(self, pg) -> list:
+        """One pass over every vault. A vault that raises is logged and retried later with its own
+        back-off (5 s doubling to 10 min); the other vaults are not held up by it."""
         out = []
         for v in self._refresh(pg):
-            out.append((v, self.syncers[v["id"]].sync_once(pg)))
+            nxt, wait = self.failing.get(v["id"], (0.0, 0.0))
+            if time.monotonic() < nxt:
+                continue
+            try:
+                r = self.syncers[v["id"]].sync_once(pg)
+            except Exception as exc:  # noqa: BLE001 - e.g. a perspective the vault cannot satisfy
+                wait = min(max(wait * 2, 5.0), 600.0)
+                self.failing[v["id"]] = (time.monotonic() + wait, wait)
+                log.warning("%s: sync failed (%s: %s); retrying this vault in %.0f s",
+                            _label(v), type(exc).__name__, exc, wait)
+                try:
+                    pg.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+            self.failing.pop(v["id"], None)
+            out.append((v, r))
         return out
 
     def maybe_recut_all(self, pg) -> list:
@@ -289,9 +328,10 @@ def run(settings, *, once: bool = False, encoder=None, on_pass=None) -> None:
                     log.info("connected; %s, fallback poll %.0f s",
                              "LISTEN on vb_documents" if fast else "no NOTIFY trigger, polling only",
                              settings.poll_seconds)
-                    backoff = 1.0
                     while True:
-                        for v, r in multi.sync_all(pg):
+                        results = multi.sync_all(pg)
+                        backoff = 1.0  # a pass completed
+                        for v, r in results:
                             if r.action != "none":
                                 log.info("%s: %s", _label(v), r.line())
                             if on_pass:
