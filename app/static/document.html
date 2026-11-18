@@ -543,6 +543,9 @@
       <input type="text" id="tagInput" placeholder="Add tag, press Enter" maxlength="60" aria-label="Add tag" />
       <span id="tagStatus"></span>
     </div>
+    <div id="readOnlyNote" class="meta" style="display: none; color: #C66A32; margin: -0.5rem 0 0.75rem; font-size: 0.8rem;">
+      Read-only collection document: tags can be edited, the title and text cannot.
+    </div>
 
     <div id="topicRibbon" class="topic-ribbon">
       <div class="topic-ribbon-row">
@@ -737,6 +740,7 @@
 
         documentTitle.value = originalTitle;
         documentBody.value = capturedContent;
+        applyDocExtras(doc);
 
         const captured = doc.captured_at ? new Date(doc.captured_at).toLocaleString() : "n/a";
 
@@ -1248,6 +1252,21 @@ ${content}
 
     // Modify loadDocument to also store topic info (topics load lazily when ribbon opens)
     const originalLoadDocument = loadDocument;
+    let isReadOnly = false;
+
+    // Tags and the read-only state; called by both loadDocument versions (the first page load runs
+    // the original declaration, later reloads the replacement below).
+    function applyDocExtras(doc) {
+      setTags(doc.tags || []);
+      // Collection documents are read-only (tags can still change)
+      isReadOnly = !!doc.read_only;
+      documentTitle.readOnly = isReadOnly;
+      documentBody.readOnly = isReadOnly;
+      saveBtn.style.display = isReadOnly ? "none" : "";
+      const roNote = document.getElementById("readOnlyNote");
+      if (roNote) roNote.style.display = isReadOnly ? "" : "none";
+    }
+
     // -------- TAGS (saved immediately; topic editing is switched off for now) --------
     const tagList = document.getElementById("tagList");
     const tagInput = document.getElementById("tagInput");
@@ -1324,7 +1343,7 @@ ${content}
 
         documentTitle.value = originalTitle;
         documentBody.value = capturedContent;
-        setTags(doc.tags || []);
+        applyDocExtras(doc);
 
         // Store topic info and update badge display
         currentAssignedTopicId = doc.assigned_topic_id;

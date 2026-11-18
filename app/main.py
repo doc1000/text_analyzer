@@ -333,6 +333,19 @@ def list_documents(
 ORCHARD_TOP_DOCS = 8  # documents taken from orchard's ranking for /query
 
 
+def _vault_kind(db, vault_id) -> str | None:
+    if not vault_id:
+        return None
+    v = db.query(Vault).filter(Vault.id == vault_id).first()
+    return (v.kind or ("personal" if v.is_personal else "shared")) if v else None
+
+
+def _doc_vault_fields(db, doc) -> dict:
+    kind = _vault_kind(db, doc.vault_id)
+    return {"vault_kind": kind, "read_only": kind == "collection",
+            "source_kind": doc.source_kind, "source_ref": doc.source_ref}
+
+
 def clean_tags(tags) -> list:
     out, seen = [], set()
     for t in tags or []:
@@ -419,8 +432,16 @@ def query_docs(
     # the best sentences from the top documents. Falls back to sentence search on its own.
     doc_rank = None
     from . import orchard_bridge
-    if vault_ids and orchard_bridge.covers(vault_ids):
-        found = orchard_bridge.find(payload.query, k=200)
+    target_vault = None
+    if vault_ids:
+        if payload.vault_id:
+            target_vault = payload.vault_id  # access checked above
+        else:
+            target_vault = _personal_vault_id(user, db)
+            if target_vault is not None:
+                base_query = base_query.filter(Document.vault_id == target_vault)
+    if target_vault is not None and orchard_bridge.covers(target_vault):
+        found = orchard_bridge.find(payload.query, target_vault, k=200)
         if found:
             scope = set(payload.doc_ids) if payload.doc_ids else None
             ranked = []
@@ -527,9 +548,21 @@ def get_topics(
     vault_ids = get_user_accessible_vault_ids(user, db)
     return get_topics_with_cache(db, days=days, vault_ids=vault_ids)
 
+def _personal_vault_id(user, db):
+    """The user's own personal vault (owner membership, kind personal), or None."""
+    if not user:
+        return None
+    v = (db.query(Vault).join(VaultMembership, VaultMembership.vault_id == Vault.id)
+         .filter(VaultMembership.user_id == user.id, VaultMembership.role == "owner",
+                 Vault.kind == "personal", Vault.archived_at == None)  # noqa: E711
+         .order_by(Vault.created_at.asc()).first())
+    return v.id if v else None
+
+
 @app.get("/topics/hierarchy")
 def get_topics_hierarchy(
     days: int = 30, 
+    vault_id: str | None = None,
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
@@ -547,13 +580,24 @@ def get_topics_hierarchy(
     """
     from .topics import build_hierarchical_topics_for_d3
     from . import orchard_bridge
-    vault_ids = get_user_accessible_vault_ids(user, db)
-    # TOPIC_SOURCE=orchard: the Data Orchard tree (vb-orchard service), same shape; falls back
-    # to the built-in topics if orchard is off, unreachable or does not sync this user's vaults.
-    if orchard_bridge.covers(vault_ids):
-        tree = orchard_bridge.hierarchy(days)
+    # One vault's tree at a time (personal vault or a collection; trees are never merged).
+    # vault_id given: that vault, after an access check. Not given: the user's personal vault.
+    if vault_id:
+        from uuid import UUID as _UUID
+        try:
+            target = _UUID(vault_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid vault_id")
+        require_vault_access(user, target, db, min_role="viewer")
+    else:
+        target = _personal_vault_id(user, db)
+    # TOPIC_SOURCE=orchard: the Data Orchard tree for that vault (vb-orchard service), same shape;
+    # falls back to the built-in topics if orchard is off, unreachable or has no tree for it.
+    if target is not None and orchard_bridge.covers(target):
+        tree = orchard_bridge.hierarchy(days, target)
         if tree is not None:
             return tree
+    vault_ids = [target] if vault_id else get_user_accessible_vault_ids(user, db)
     return build_hierarchical_topics_for_d3(db, days=days, vault_ids=vault_ids)
 
 @app.get("/topics/clear_cache")
@@ -794,6 +838,7 @@ def get_document_detail(
         assigned_topic_title=doc.assigned_topic_title,
         created_by=str(doc.created_by) if doc.created_by else None,
         tags=list(doc.user_tags or []),
+        **_doc_vault_fields(db, doc),
     )
 
 @app.put("/documents/{document_id}", response_model=DocumentDetailResponse)
@@ -811,6 +856,9 @@ def update_document(
     # Check vault access - need editor role to modify
     if doc.vault_id:
         require_vault_access(user, doc.vault_id, db, min_role="editor")
+    # Collection documents are read-only: tags may change, title and text may not
+    if (payload.title is not None or payload.text is not None) and _vault_kind(db, doc.vault_id) == "collection":
+        raise HTTPException(status_code=403, detail="Collection documents are read-only (tags can still be edited)")
 
     # Update title if provided
     if payload.title is not None:
@@ -851,6 +899,7 @@ def update_document(
         assigned_topic_title=doc.assigned_topic_title,
         created_by=str(doc.created_by) if doc.created_by else None,
         tags=list(doc.user_tags or []),
+        **_doc_vault_fields(db, doc),
     )
 
 @app.delete("/documents/{document_id}")
@@ -1343,9 +1392,13 @@ def list_vaults(
         .filter(VaultMembership.user_id == user.id)
         .filter(Vault.archived_at == None)  # noqa: E711
         .group_by(Vault.id, VaultMembership.role)
-        .order_by(Vault.is_personal.desc(), Vault.created_at.asc())
         .all()
     )
+    # Own personal vault first, then own collections, then shared/viewer vaults; oldest first within
+    _rank = {"personal": 0, "collection": 1, "shared": 2}
+    results.sort(key=lambda r: (0 if r[1] == "owner" else 1,
+                                _rank.get(getattr(r[0], "kind", None) or ("personal" if r[0].is_personal else "shared"), 3),
+                                r[0].created_at))
     
     vaults = [
         VaultResponse(
@@ -1353,6 +1406,7 @@ def list_vaults(
             name=vault.name,
             owner_id=str(vault.owner_id) if vault.owner_id else None,
             is_personal=vault.is_personal,
+            kind=getattr(vault, "kind", None) or ("personal" if vault.is_personal else "shared"),
             created_at=vault.created_at,
             archived_at=vault.archived_at,
             role=role,
@@ -1400,6 +1454,7 @@ def create_vault(
         name=vault.name,
         owner_id=str(vault.owner_id) if vault.owner_id else None,
         is_personal=vault.is_personal,
+        kind=getattr(vault, "kind", None) or ("personal" if vault.is_personal else "shared"),
         created_at=vault.created_at,
         archived_at=vault.archived_at,
         role="owner",
@@ -1452,6 +1507,7 @@ def get_vault(
         name=vault.name,
         owner_id=str(vault.owner_id) if vault.owner_id else None,
         is_personal=vault.is_personal,
+        kind=getattr(vault, "kind", None) or ("personal" if vault.is_personal else "shared"),
         created_at=vault.created_at,
         archived_at=vault.archived_at,
         role=membership.role if membership else None,

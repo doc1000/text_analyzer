@@ -2,6 +2,7 @@
 import hashlib
 import json
 import threading
+import urllib.error
 import urllib.request
 import uuid
 
@@ -37,18 +38,23 @@ class FakePG:
         return {k: hashlib.md5(json.dumps(v).encode()).hexdigest() for k, v in self.rows.items()}
 
 
+VAULT = {"id": "11111111-1111-1111-1111-111111111111", "kind": "personal", "name": "Personal Vault"}
+COLL = {"id": "22222222-2222-2222-2222-222222222222", "kind": "collection", "name": "Forte"}
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     pg = FakePG()
     for t in WORDS:
         for i in range(8):
             pg.add(t, i)
-    monkeypatch.setattr(pgsource, "resolve_vaults", lambda con, s: ["v1"])
+    monkeypatch.setattr(pgsource, "resolve_vaults", lambda con, s: [VAULT])
     monkeypatch.setattr(pgsource, "fingerprints", lambda con, v: pg.fp())
     monkeypatch.setattr(pgsource, "fetch_docs", lambda con, ids: [pg_row_to_doc(*pg.rows[i]) for i in ids])
-    s = Settings(database_url="postgresql://unused", db_path=tmp_path / "vb.duckdb", owner_email="a@b.c",
+    s = Settings(database_url="postgresql://unused", db_dir=tmp_path, owner_email="a@b.c",
                  recut_after=5, encoder="fake")
-    return pg, s, sync.Syncer(s, encoder=FakeEncoder())
+    s.db_path = s.db_for(VAULT["id"])  # the personal vault's file, used by the tests below
+    return pg, s, sync.Syncer(s, VAULT, encoder=FakeEncoder())
 
 
 def test_first_pass_builds_then_idle(env):
@@ -149,3 +155,86 @@ def test_tag_edit_is_synced_and_searchable(env):
 
     hits = find(HarvestStore(str(s.db_path), encoder=FakeEncoder()), s.alias, "zzqx-tag", k=3)
     assert hits[0]["item_id"] == "vb:" + did and hits[0]["tags"] == ["zzqx-tag"]
+
+
+def test_one_tree_per_vault_never_mixed(tmp_path, monkeypatch):
+    """Two vaults -> two files with only their own items; a vault that disappears loses its file."""
+    a, b = FakePG(), FakePG()
+    for i in range(8):
+        a.add("garden", i)
+        a.add("kernel", i)
+        b.add("music", i)
+        b.add("garden", 100 + i)
+    by_vault = {VAULT["id"]: a, COLL["id"]: b}
+    present = [VAULT, COLL]
+    monkeypatch.setattr(pgsource, "resolve_vaults", lambda con, s: list(present))
+    monkeypatch.setattr(pgsource, "fingerprints", lambda con, v: by_vault[v[0]].fp())
+    rows = {**a.rows, **b.rows}
+    monkeypatch.setattr(pgsource, "fetch_docs", lambda con, ids: [pg_row_to_doc(*rows[i]) for i in ids])
+    s = Settings(database_url="postgresql://unused", db_dir=tmp_path, owner_email="a@b.c", encoder="fake")
+    multi = sync.MultiSyncer(s, encoder=FakeEncoder())
+    res = dict((v["id"], r) for v, r in multi.sync_all(None))
+    assert res[VAULT["id"]].total == 16 and res[COLL["id"]].total == 16
+    sa, sb = sync.read_state(s.db_for(VAULT["id"])), sync.read_state(s.db_for(COLL["id"]))
+    assert set(sa) == {"vb:" + k for k in a.rows} and set(sb) == {"vb:" + k for k in b.rows}
+    assert not set(sa) & set(sb)
+    from vb_orchard.serve import VaultStores
+
+    vs = VaultStores(tmp_path)
+    info = {v["id"]: v for v in vs.info()}
+    assert info[COLL["id"]]["kind"] == "collection" and info[COLL["id"]]["name"] == "Forte"
+    assert vs.default_vault() == VAULT["id"]
+    present.remove(COLL)  # the collection was deleted in Postgres
+    multi.sync_all(None)
+    assert not s.db_for(COLL["id"]).exists() and s.db_for(VAULT["id"]).exists()
+
+
+def test_serve_routes_per_vault(tmp_path, monkeypatch):
+    a, b = FakePG(), FakePG()
+    for i in range(8):
+        a.add("kernel", i)
+        b.add("music", i)
+    by_vault = {VAULT["id"]: a, COLL["id"]: b}
+    monkeypatch.setattr(pgsource, "resolve_vaults", lambda con, s: [VAULT, COLL])
+    monkeypatch.setattr(pgsource, "fingerprints", lambda con, v: by_vault[v[0]].fp())
+    rows = {**a.rows, **b.rows}
+    monkeypatch.setattr(pgsource, "fetch_docs", lambda con, ids: [pg_row_to_doc(*rows[i]) for i in ids])
+    s = Settings(database_url="postgresql://unused", db_dir=tmp_path, owner_email="a@b.c", encoder="fake")
+    sync.MultiSyncer(s, encoder=FakeEncoder()).sync_all(None)
+    from vb_orchard.serve import make_server
+
+    srv = make_server(s, port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    get = lambda p: json.loads(urllib.request.urlopen(base + p, timeout=120).read())  # noqa: E731
+
+    def titles(tree):
+        out = []
+
+        def walk(n):
+            if n.get("type") == "document":
+                out.append(n["name"])
+            for c in n.get("children") or []:
+                walk(c)
+        walk(tree)
+        return out
+
+    try:
+        h = get("/do/health")
+        assert sorted(h["vaults"]) == sorted([VAULT["id"], COLL["id"]]) and h["default_vault"] == VAULT["id"]
+        mine = titles(get("/do/topics/hierarchy?days=all"))
+        coll = titles(get(f"/do/topics/hierarchy?days=all&vault={COLL['id']}"))
+        assert mine and all(t.startswith("Kernel") for t in mine)
+        assert coll and all(t.startswith("Music") for t in coll)
+        hits = get(f"/do/find?vault={COLL['id']}&q=melody+chord&k=3")
+        hits = hits if isinstance(hits, list) else hits["results"]
+        assert hits and all(h["title"].startswith("Music") for h in hits)
+        assert get(f"/api/tree?days=all&vault={COLL['id']}")["item_count"] == 8
+        try:
+            get("/do/find?vault=33333333-3333-3333-3333-333333333333&q=x")
+            raise AssertionError("unknown vault must 404")
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+    finally:
+        srv.shutdown()
+        srv.server_close()
