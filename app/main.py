@@ -89,6 +89,8 @@ app = FastAPI(lifespan=lifespan)
 
 from .hopper import router as hopper_router  # noqa: E402  (batch28)
 app.include_router(hopper_router)
+from .passwords import router as passwords_router  # noqa: E402  (batch29)
+app.include_router(passwords_router)
 
 # Security scheme for Swagger UI (shows Authorize button)
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -192,7 +194,7 @@ def whoami(
     user: models.User = Depends(get_current_user),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ):
-    return WhoAmIResponse(user_id=str(user.id), email=user.email)
+    return WhoAmIResponse(user_id=str(user.id), email=user.email, has_password=bool(getattr(user, "password_hash", None)))
 
 
 @app.get("/auth/api-keys", response_model=ListApiKeysResponse)

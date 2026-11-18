@@ -191,6 +191,19 @@
 
       <!-- Step 1: Email entry -->
       <div id="step-email" class="step active">
+        <form id="password-form" style="margin-bottom: 1.25rem;">
+          <div class="form-group">
+            <label for="pw-email">Email</label>
+            <input type="email" id="pw-email" autocomplete="username" required>
+          </div>
+          <div class="form-group">
+            <label for="pw-password">Password</label>
+            <input type="password" id="pw-password" autocomplete="current-password" required>
+            <div class="error" id="pw-error"></div>
+          </div>
+          <button type="submit" id="pw-btn">Sign in with password</button>
+          <p style="margin-top: 0.75rem; text-align: center; color: #9ca3af; font-size: 0.85rem;">or get an emailed code:</p>
+        </form>
         <form id="email-form">
           <div class="form-group">
             <label for="email">Email address</label>
@@ -352,6 +365,32 @@
     // Only allow digits in code input
     codeInput.addEventListener('input', (e) => {
       e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+    });
+  
+    // Password sign-in (batch29): same success URL as the code flow, which the extension watches
+    document.getElementById('password-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('pw-error');
+      const btn = document.getElementById('pw-btn');
+      err.textContent = '';
+      err.classList.remove('show');
+      btn.disabled = true;
+      try {
+        const response = await fetch('/extension/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: document.getElementById('pw-email').value.trim(),
+                                 password: document.getElementById('pw-password').value })
+        });
+        if (response.redirected) { window.location.href = response.url; return; }
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || 'Sign-in failed');
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.classList.add('show');
+      } finally {
+        btn.disabled = false;
+      }
     });
   </script>
 </body>

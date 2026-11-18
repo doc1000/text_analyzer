@@ -20,6 +20,7 @@ class CreateApiKeyResponse(BaseModel):
 class WhoAmIResponse(BaseModel):
     user_id: str
     email: str
+    has_password: bool = False
 
 
 class ApiKeyInfo(BaseModel):
