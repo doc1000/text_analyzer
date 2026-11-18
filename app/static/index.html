@@ -1571,7 +1571,9 @@
       });
     }
 
+    let renderSeq = 0;  // only the newest render may draw (a slower, older one would draw on top of it)
     async function renderBubbleMap(days = 30) {
+      const mySeq = ++renderSeq;
       svg.selectAll("*").remove(); // clear
       tooltip.style("opacity", 0);
       infoContent.innerHTML = "<p>Loading topics…</p>";
@@ -1580,6 +1582,8 @@
       const vaultParam = currentVaultId ? `&vault_id=${encodeURIComponent(currentVaultId)}` : "";
       const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}${vaultParam}`);
       const data = await res.json();
+      if (mySeq !== renderSeq) return;  // a newer render (e.g. the saved vault after sign-in) took over
+      svg.selectAll("*").remove();      // clear again: nothing older may remain under this drawing
       const srcLabel = document.getElementById("topicSourceLabel");
       // How many items the window shows out of the vault's total, so a short window is not a silent blank
       const shownIds = new Set();
