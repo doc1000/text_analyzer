@@ -12,7 +12,8 @@ Push-Location $repo
 try {
   & uv sync
   if ($LASTEXITCODE) { throw "uv sync failed" }
-  & uv tool install --force (Join-Path $PSScriptRoot "vb-orchard")
+  # --reinstall: rebuild even when the version number is unchanged (uv caches the built wheel)
+  & uv tool install --force --reinstall (Join-Path $PSScriptRoot "vb-orchard")
   if ($LASTEXITCODE) { throw "uv tool install failed" }
 } finally { Pop-Location }
 & $orchardTasks
