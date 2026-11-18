@@ -238,6 +238,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             or path == "/redoc"
             or path.startswith("/static")
             or path.startswith("/auth/bootstrap")
+            or path == "/auth/login"  # password sign-in (batch29); /auth/password needs a token
             or path.startswith("/admin/")
             or path.startswith("/extension/")  # Extension OAuth flow endpoints
             or path.startswith("/download/")  # Extension ZIP downloads

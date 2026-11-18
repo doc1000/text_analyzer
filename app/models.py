@@ -37,6 +37,8 @@ class User(BaseModel):
     #id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(Text, nullable=False, unique=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    password_hash = Column(Text, nullable=True)       # migration 009; PBKDF2-SHA256, see app/passwords.py
+    password_set_at = Column(DateTime, nullable=True)
 
 
 class ApiKey(BaseModel):

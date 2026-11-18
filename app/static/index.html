@@ -938,7 +938,7 @@
             <!-- Logged out state -->
             <div id="loggedOutState">
               <p class="hint">Sign in to sync your documents across devices.</p>
-              <button id="openLoginBtn" class="save-btn">Sign In with Email</button>
+              <button id="openLoginBtn" class="save-btn">Sign In</button>
             </div>
             <!-- Logged in state -->
             <div id="loggedInState" style="display: none;">
@@ -947,6 +947,14 @@
                   <span class="model-label">Signed in as:</span>
                   <span class="model-value" id="userEmail">-</span>
                 </div>
+              </div>
+              <div id="setPasswordBox" style="margin-bottom: 1rem;">
+                <p class="hint" id="passwordStateHint">Set a password to sign in without an emailed code.</p>
+                <input type="password" id="currentPasswordInput" placeholder="Current password" autocomplete="current-password" style="display: none; margin-bottom: 0.4rem;" />
+                <input type="password" id="newPasswordInput" placeholder="New password (8+ characters)" autocomplete="new-password" style="margin-bottom: 0.4rem;" />
+                <input type="password" id="newPassword2Input" placeholder="Repeat new password" autocomplete="new-password" />
+                <button id="setPasswordBtn" class="save-btn" style="margin-top: 0.5rem;">Set password</button>
+                <p id="setPasswordMsg" class="hint" style="display: none;"></p>
               </div>
               <button id="signOutBtn" class="cancel-btn">Sign Out</button>
             </div>
@@ -987,8 +995,19 @@
         <button id="closeLoginBtn" class="close-btn">&times;</button>
       </div>
       <div class="modal-body">
+        <!-- Step 0: Email + password (batch29) -->
+        <div id="loginStep0">
+          <label for="loginPwEmail">Email Address:</label>
+          <input type="email" id="loginPwEmail" placeholder="you@example.com" autocomplete="username" />
+          <label for="loginPassword" style="margin-top: 0.5rem; display: block;">Password:</label>
+          <input type="password" id="loginPassword" autocomplete="current-password" />
+          <p id="loginPwError" class="hint" style="color: #ef4444; display: none;"></p>
+          <button id="passwordLoginBtn" class="save-btn" style="margin-top: 1rem; width: 100%;">Sign In</button>
+          <button id="useCodeBtn" class="cancel-btn" style="margin-top: 0.5rem; width: 100%;">Email me a code instead</button>
+          <p class="hint" style="margin-top: 0.5rem;">No password yet? Sign in with a code once, then set one in Settings → Account.</p>
+        </div>
         <!-- Step 1: Email -->
-        <div id="loginStep1">
+        <div id="loginStep1" style="display: none;">
           <p class="hint" style="margin-bottom: 1rem;">Enter your email to receive a verification code.</p>
           <label for="loginEmailInput">Email Address:</label>
           <input type="email" id="loginEmailInput" placeholder="you@example.com" />
@@ -1079,6 +1098,7 @@
     // Support both vb_ext_ (OAuth tokens) and vb_live_ (API keys) for backward compatibility
     let AUTH_TOKEN = localStorage.getItem('vb_auth_token') || localStorage.getItem('vb_api_key') || '';
     let currentUserEmail = null;
+    let currentUserHasPassword = false;
     let currentVaultId = null;  // Track current vault for query scoping
 
     // Helper for authenticated fetch with retry logic for cold starts
@@ -1193,6 +1213,8 @@
         if (res.ok) {
           const data = await res.json();
           currentUserEmail = data.email;
+          currentUserHasPassword = !!data.has_password;
+          if (typeof updatePasswordBox === "function") updatePasswordBox();
           // Fetch vault info after successful auth
           await fetchCurrentVault();
         } else {
@@ -2666,7 +2688,10 @@
 
     function openLoginModal() {
       loginModal.style.display = "flex";
-      loginStep1.style.display = "block";
+      document.getElementById("loginStep0").style.display = "block";
+      document.getElementById("loginPwError").style.display = "none";
+      document.getElementById("loginPassword").value = "";
+      loginStep1.style.display = "none";
       loginStep2.style.display = "none";
       loginSuccess.style.display = "none";
       loginEmailInput.value = "";
@@ -2678,6 +2703,89 @@
     function closeLoginModal() {
       loginModal.style.display = "none";
     }
+
+    // -------- PASSWORD SIGN-IN (batch29) --------
+    const loginStep0 = document.getElementById("loginStep0");
+    const loginPwEmail = document.getElementById("loginPwEmail");
+    const loginPassword = document.getElementById("loginPassword");
+    const loginPwError = document.getElementById("loginPwError");
+    const passwordLoginBtn = document.getElementById("passwordLoginBtn");
+    async function passwordSignIn() {
+      const email = loginPwEmail.value.trim();
+      const password = loginPassword.value;
+      if (!email || !password) {
+        loginPwError.textContent = "Enter your email and password.";
+        loginPwError.style.display = "block";
+        return;
+      }
+      passwordLoginBtn.disabled = true;
+      passwordLoginBtn.textContent = "Signing in…";
+      loginPwError.style.display = "none";
+      try {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.token) throw new Error(data.detail || `HTTP ${res.status}`);
+        AUTH_TOKEN = data.token;
+        localStorage.setItem("vb_auth_token", data.token);
+        loginStep0.style.display = "none";
+        loginSuccess.style.display = "block";
+        setTimeout(() => location.reload(), 800);
+      } catch (e) {
+        loginPwError.textContent = e.message;
+        loginPwError.style.display = "block";
+      } finally {
+        passwordLoginBtn.disabled = false;
+        passwordLoginBtn.textContent = "Sign In";
+      }
+    }
+    passwordLoginBtn.addEventListener("click", passwordSignIn);
+    loginPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") passwordSignIn(); });
+    document.getElementById("useCodeBtn").addEventListener("click", () => {
+      loginStep0.style.display = "none";
+      loginStep1.style.display = "block";
+      loginEmailInput.value = loginPwEmail.value.trim();
+      loginEmailInput.focus();
+    });
+
+    function updatePasswordBox() {
+      const hint = document.getElementById("passwordStateHint");
+      const cur = document.getElementById("currentPasswordInput");
+      const btn = document.getElementById("setPasswordBtn");
+      if (!hint) return;
+      hint.textContent = currentUserHasPassword ? "Password sign-in is on. Change your password:" : "Set a password to sign in without an emailed code.";
+      cur.style.display = currentUserHasPassword ? "" : "none";
+      btn.textContent = currentUserHasPassword ? "Change password" : "Set password";
+    }
+    document.getElementById("setPasswordBtn").addEventListener("click", async () => {
+      const msg = document.getElementById("setPasswordMsg");
+      const p1 = document.getElementById("newPasswordInput").value;
+      const p2 = document.getElementById("newPassword2Input").value;
+      const cur = document.getElementById("currentPasswordInput").value;
+      msg.style.display = "block";
+      msg.style.color = "#ef4444";
+      if (p1.length < 8) { msg.textContent = "Use at least 8 characters."; return; }
+      if (p1 !== p2) { msg.textContent = "The two passwords differ."; return; }
+      try {
+        const res = await authFetch(`${API_BASE}/auth/password`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ new_password: p1, current_password: cur || null }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        ["newPasswordInput", "newPassword2Input", "currentPasswordInput"].forEach(id => { document.getElementById(id).value = ""; });
+        currentUserHasPassword = true;
+        updatePasswordBox();
+        msg.style.color = "#9ca3af";
+        msg.textContent = "Password saved. Next time, sign in with your email and password.";
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    });
 
     if (openLoginBtn) {
       openLoginBtn.addEventListener("click", openLoginModal);
