@@ -87,6 +87,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+from .hopper import router as hopper_router  # noqa: E402  (batch28)
+app.include_router(hopper_router)
+
 # Security scheme for Swagger UI (shows Authorize button)
 bearer_scheme = HTTPBearer(auto_error=False)
 

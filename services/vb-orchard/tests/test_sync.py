@@ -241,3 +241,39 @@ def test_serve_routes_per_vault(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_small_vaults_and_failure_isolation(tmp_path, monkeypatch):
+    """3 docs -> a tree (cluster_count capped); 1 doc -> no tree, no error; a vault that raises
+    does not stop the others."""
+    small, tiny, good = FakePG(), FakePG(), FakePG()
+    for i in range(3):
+        small.add("garden", i)
+    tiny.add("music", 0)
+    for i in range(8):
+        good.add("kernel", i)
+    V3 = {"id": "33333333-3333-3333-3333-333333333333", "kind": "collection", "name": "small"}
+    V4 = {"id": "44444444-4444-4444-4444-444444444444", "kind": "collection", "name": "tiny"}
+    V5 = {"id": "55555555-5555-5555-5555-555555555555", "kind": "collection", "name": "broken"}
+    by_vault = {V3["id"]: small, V4["id"]: tiny, VAULT["id"]: good, V5["id"]: good}
+    rows = {**small.rows, **tiny.rows, **good.rows}
+
+    def fps(con, v):
+        if v[0] == V5["id"]:
+            raise RuntimeError("boom")
+        return by_vault[v[0]].fp()
+    monkeypatch.setattr(pgsource, "resolve_vaults", lambda con, s: [V5, V3, V4, VAULT])
+    monkeypatch.setattr(pgsource, "fingerprints", fps)
+    monkeypatch.setattr(pgsource, "fetch_docs", lambda con, ids: [pg_row_to_doc(*rows[i]) for i in ids])
+    s = Settings(database_url="postgresql://unused", db_dir=tmp_path, owner_email="a@b.c", encoder="fake")
+    multi = sync.MultiSyncer(s, encoder=FakeEncoder())
+
+    class PG:
+        def rollback(self):
+            pass
+    res = {v["id"]: r for v, r in multi.sync_all(PG())}
+    assert res[V3["id"]].action == "rebuild" and res[V3["id"]].total == 3
+    assert res[V4["id"]].action == "none" and not s.db_for(V4["id"]).exists()
+    assert res[VAULT["id"]].action == "rebuild" and res[VAULT["id"]].total == 8
+    assert V5["id"] not in res and V5["id"] in multi.failing
+    assert sync.perspective_for(3)["cuts"][0]["cluster_count"] == 3
