@@ -500,7 +500,7 @@
     /* Tooltip */
 
     #tooltip {
-      position: absolute;
+      position: fixed;
       pointer-events: none;
       background: rgba(15,23,42,0.95);
       color: #e5e7eb;
@@ -756,8 +756,17 @@
   <header>
     <h1><img src="/static/icon.svg" alt="V" style="height: 2.6rem; vertical-align: middle; margin-right: -0.3rem; margin-left: -0.2rem;">aultBubbles</h1>
     <div class="controls">
-      <span>Days:</span>
-      <input type="number" id="daysInput" value="30" min="1" max="365" />
+      <span>Look back:</span>
+      <select id="daysSelect" aria-label="Look back">
+        <option value="36500">All time</option>
+        <option value="365">1 year</option>
+        <option value="90">90 days</option>
+        <option value="30">30 days</option>
+        <option value="7">1 week</option>
+        <option value="1">1 day</option>
+        <option value="custom">Custom days…</option>
+      </select>
+      <input type="number" id="daysInput" value="36500" min="1" max="36500" style="display: none; width: 5rem;" aria-label="Days back" />
       <button id="reloadBtn">Reload</button>
       <select id="vaultSelect" title="Vault or collection to show" aria-label="Vault or collection"></select>
       <span id="vaultKindBadge" class="vault-kind-badge"></span>
@@ -1117,7 +1126,7 @@
           updateVaultBadge();
           console.log('Current vault:', currentVaultId);
           if (renderedVaultId !== undefined && renderedVaultId !== currentVaultId) {
-            renderBubbleMap(parseInt(daysInput.value, 10) || 30);
+            renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
           }
         }
       } catch (e) {
@@ -1129,7 +1138,7 @@
       try { localStorage.setItem("vb_vault_id", currentVaultId || ""); } catch (err) {}
       updateVaultBadge();
       setScopeForNode(null);
-      renderBubbleMap(parseInt(daysInput.value, 10) || 30);
+      renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
     });
 
     // Check if user is authenticated and get their info
@@ -1340,13 +1349,19 @@
       } else {
         tooltip.classed("rich", false).text(line);
       }
-      const [x, y] = d3.pointer(event);
-      const containerRect = document.getElementById("bubble-container").getBoundingClientRect();
+      positionTooltip(event);
+      tooltip.style("opacity", 1);
+    }
 
-      tooltip
-        .style("left", (containerRect.left + x + 16) + "px")
-        .style("top", (containerRect.top + y + 16) + "px")
-        .style("opacity", 1);
+    // Next to the cursor, in screen coordinates (d3.pointer is relative to the hovered circle,
+    // whose own transform made the tooltip jump), flipped to stay inside the window.
+    function positionTooltip(event) {
+      const node = tooltip.node();
+      const w = node.offsetWidth || 200, h = node.offsetHeight || 40, gap = 14;
+      let left = event.clientX + gap, top = event.clientY + gap;
+      if (left + w > window.innerWidth - 8) left = event.clientX - w - gap;
+      if (top + h > window.innerHeight - 8) top = event.clientY - h - gap;
+      tooltip.style("left", Math.max(8, left) + "px").style("top", Math.max(8, top) + "px");
     }
 
     function hideTooltip() {
@@ -1505,7 +1520,23 @@
       const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}${vaultParam}`);
       const data = await res.json();
       const srcLabel = document.getElementById("topicSourceLabel");
-      if (srcLabel) srcLabel.textContent = data.source === "orchard" ? "Topics: Data Orchard" : "Topics: built-in";
+      // How many items the window shows out of the vault's total, so a short window is not a silent blank
+      const shownIds = new Set();
+      (function walk(n) { if (!n) return; if (n.type === "document" && n.doc_id) shownIds.add(n.doc_id); (n.children || []).forEach(walk); })(data);
+      const vInfo = vaultsById[currentVaultId];
+      const total = vInfo && vInfo.document_count != null ? vInfo.document_count : null;
+      const src = data.source === "orchard" ? "Topics: Data Orchard" : "Topics: built-in";
+      const counts = total != null ? ` · showing ${shownIds.size} of ${total}` : ` · ${shownIds.size} shown`;
+      if (srcLabel) srcLabel.textContent = src + counts;
+      if (total != null && shownIds.size < total && days < 36500) {
+        const hidden = total - shownIds.size;
+        if (srcLabel) srcLabel.title = `${hidden} older item${hidden === 1 ? " is" : "s are"} outside this window; choose All time in Look back to see them`;
+      } else if (srcLabel) {
+        srcLabel.title = "";
+      }
+      if (shownIds.size === 0 && total) {
+        infoContent.innerHTML = `<p class="hint">Nothing captured in this window. ${total} item${total === 1 ? "" : "s"} are older: choose <b>All time</b> in Look back.</p>`;
+      }
       // Recluster belongs to the built-in topics; the orchard tree rebuilds itself
       const reclusterBtnEl = document.getElementById("reclusterBtn");
       if (reclusterBtnEl) reclusterBtnEl.style.display = data.source === "orchard" ? "none" : "";
@@ -1549,6 +1580,7 @@
         // Add subtle blur to reduce fine lines and visual noise
         .style("filter", d => d.depth >= 3 ? "blur(0.5px)" : "blur(0.3px)")
         .on("mouseover", (event, d) => showTooltip(event, d))
+        .on("mousemove", (event) => positionTooltip(event))
         .on("mouseout", hideTooltip)
         .on("click", (event, d) => {
           event.stopPropagation();
@@ -1803,10 +1835,32 @@
     }
 
     const daysInput = document.getElementById("daysInput");
+    const daysSelect = document.getElementById("daysSelect");
+    (function initDays() {
+      let saved = null;
+      try { saved = localStorage.getItem("vb_days"); } catch (e) {}
+      const preset = saved && [...daysSelect.options].some(o => o.value === saved) ? saved : (saved ? "custom" : "36500");
+      daysSelect.value = preset;
+      daysInput.value = preset === "custom" ? (saved || "30") : preset;
+      daysInput.style.display = preset === "custom" ? "" : "none";
+    })();
+    function applyDays() {
+      const v = daysSelect.value === "custom" ? (parseInt(daysInput.value, 10) || 30) : parseInt(daysSelect.value, 10);
+      daysInput.value = v;
+      try { localStorage.setItem("vb_days", daysSelect.value === "custom" ? String(v) : daysSelect.value); } catch (e) {}
+      setScopeForNode(null);
+      renderBubbleMap(v);
+    }
+    daysSelect.addEventListener("change", () => {
+      daysInput.style.display = daysSelect.value === "custom" ? "" : "none";
+      if (daysSelect.value === "custom") daysInput.focus();
+      applyDays();
+    });
+    daysInput.addEventListener("change", applyDays);
     const reloadBtn = document.getElementById("reloadBtn");
     if (reloadBtn) {
       reloadBtn.addEventListener("click", async () => {
-        const days = parseInt(daysInput.value, 10) || 30;
+        const days = parseInt(daysInput.value, 10) || 36500;
         reloadBtn.disabled = true;
         reloadBtn.textContent = "Processing...";
         const reclusterBanner = document.getElementById("reclusterBanner");
@@ -1837,7 +1891,7 @@
     }
 
     // Initial topics load
-    renderBubbleMap(30);
+    renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
 
     // -------- SCOPED QUERY IN INFO PANEL --------
 
@@ -2322,7 +2376,7 @@
     // Handle recluster action
     if (runReclusterBtn) {
       runReclusterBtn.addEventListener("click", async () => {
-        const days = parseInt(daysInput.value, 10) || 30;
+        const days = parseInt(daysInput.value, 10) || 36500;
         const clearAssignments = clearAssignmentsCheckbox ? clearAssignmentsCheckbox.checked : false;
         
         // Disable button and show loading state
