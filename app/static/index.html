@@ -518,6 +518,26 @@
     }
 
     #vaultSelect { margin-left: 0.5rem; max-width: 16rem; }
+
+    /* Hopper (batch28) */
+    #hopper-panel { border-top: 1px solid #1f2937; margin-top: 0.75rem; padding-top: 0.6rem; }
+    .hopper-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+    .hopper-head h3 { margin: 0; font-size: 0.95rem; }
+    #hopperCount { display: inline-block; min-width: 1.4rem; padding: 0 0.35rem; margin-left: 0.3rem; border-radius: 999px;
+                   background: #C66A32; color: #F8FAFC; font-size: 0.75rem; text-align: center; }
+    #hopperList { list-style: none; margin: 0.4rem 0; padding: 0; max-height: 11rem; overflow-y: auto; font-size: 0.8rem; }
+    #hopperList li { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; padding: 0.15rem 0;
+                     border-bottom: 1px solid #111827; }
+    #hopperList li a { color: #e2e8f0; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #hopperList li a:hover { text-decoration: underline; }
+    #hopperList li button { background: none; border: none; color: #94a3b8; cursor: pointer; padding: 0 0.2rem; }
+    #hopperList li button:hover { color: #C66A32; }
+    .hopper-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .hopper-actions button { font-size: 0.75rem; padding: 0.25rem 0.5rem; }
+    .hopper-actions button:disabled { opacity: 0.45; cursor: default; }
+    #hopperResult { margin-top: 0.5rem; font-size: 0.8rem; line-height: 1.4; white-space: pre-wrap; color: #cbd5e1;
+                    max-height: 16rem; overflow-y: auto; }
+    .hopper-add-btn { margin-top: 0.4rem; font-size: 0.75rem; padding: 0.2rem 0.5rem; }
     .vault-kind-badge { font-size: 0.75rem; color: #C66A32; margin-left: 0.35rem; }
 
     #tooltip.rich {
@@ -1010,6 +1030,24 @@
         </div>
         <div id="info-content"></div>
 
+        <div id="hopper-panel">
+          <div class="hopper-head">
+            <h3>Hopper<span id="hopperCount">0</span></h3>
+            <button id="hopperClear" type="button" title="Empty the hopper">Clear</button>
+          </div>
+          <div class="hint" id="hopperHint">Shift+click documents, or "Add to hopper" on a selected document or topic.</div>
+          <ul id="hopperList"></ul>
+          <div class="hopper-actions">
+            <button id="hopperAsk" type="button" title="Scope Ask your Vault to the hopper items">Ask about these</button>
+            <button id="hopperSummarize" type="button">Summarise</button>
+            <button id="hopperCopy" type="button" title="Copy one Markdown bundle (titles, links, text) to paste into Claude">Copy for Claude</button>
+            <button id="hopperDownload" type="button" title="Download the same bundle as a .md file">.md</button>
+            <button id="hopperSave" type="button" title="Copy these items into a new collection with its own tree">Save as collection…</button>
+            <button id="hopperPromote" type="button" style="display: none;" title="Copy these collection items into your personal vault (provenance kept)">Copy to my vault</button>
+          </div>
+          <div id="hopperResult"></div>
+        </div>
+
         <div id="scope-query-panel">
           <h3>Ask your Vault</h3>
           <div id="scope-label" class="meta">Scope: All documents</div>
@@ -1124,6 +1162,7 @@
             sel.value = currentVaultId || "";
           }
           updateVaultBadge();
+          if (typeof hopperLoad === "function") hopperLoad();
           console.log('Current vault:', currentVaultId);
           if (renderedVaultId !== undefined && renderedVaultId !== currentVaultId) {
             renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
@@ -1138,6 +1177,7 @@
       try { localStorage.setItem("vb_vault_id", currentVaultId || ""); } catch (err) {}
       updateVaultBadge();
       setScopeForNode(null);
+      hopperLoad();
       renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
     });
 
@@ -1320,6 +1360,27 @@
         }
 
         el.appendChild(meta);
+      }
+
+      // Hopper buttons: one document, or every document under a topic
+      if (data.doc_id) {
+        const b = document.createElement("button");
+        b.className = "hopper-add-btn";
+        b.type = "button";
+        const inH = hopperHas(data.doc_id);
+        b.textContent = inH ? "Remove from hopper" : "Add to hopper";
+        b.addEventListener("click", () => { hopperToggle(docItem(d)); updateInfoPanel(d); });
+        el.appendChild(b);
+      } else if (data.type === "topic") {
+        const items = hopperItemsUnder(d);
+        const missing = items.filter(it => !hopperHas(it.doc_id)).length;
+        const b = document.createElement("button");
+        b.className = "hopper-add-btn";
+        b.type = "button";
+        b.textContent = missing ? `Add ${missing} to hopper` : "All in hopper";
+        b.disabled = !missing;
+        b.addEventListener("click", () => { hopperAddMany(items); updateInfoPanel(d); });
+        el.appendChild(b);
       }
 
       infoContent.appendChild(el);
@@ -1584,6 +1645,10 @@
         .on("mouseout", hideTooltip)
         .on("click", (event, d) => {
           event.stopPropagation();
+          if (event.shiftKey && d.data && d.data.doc_id) {  // Shift+click: toggle in the hopper
+            hopperToggle(docItem(d));
+            return;
+          }
           const hasChildren = !!d.children && d.children.length > 0;
 
           // Topic / subtopic: just zoom + update panel, clear doc selection
@@ -1802,6 +1867,7 @@
 
       // Initial zoom
       zoomTo([rootNode.x, rootNode.y, rootNode.r * 2]);
+      if (typeof markHopper === "function") markHopper();  // outline hopper items in the new drawing
       infoContent.innerHTML = "";
       
       // Hide all background rectangles initially - they only appear on zoom out
@@ -1889,6 +1955,149 @@
         }
       });
     }
+
+    // -------- HOPPER (batch28): a hand-picked set of documents from the current vault --------
+    // Kept in this browser per vault (v1). Actions call /hopper/*, which check vault access.
+    let hopperItems = [];
+    const hopperEls = {
+      count: document.getElementById("hopperCount"), list: document.getElementById("hopperList"),
+      hint: document.getElementById("hopperHint"), result: document.getElementById("hopperResult"),
+      ask: document.getElementById("hopperAsk"), sum: document.getElementById("hopperSummarize"),
+      copy: document.getElementById("hopperCopy"), dl: document.getElementById("hopperDownload"),
+      save: document.getElementById("hopperSave"), promote: document.getElementById("hopperPromote"),
+      clear: document.getElementById("hopperClear"),
+    };
+    function hopperKey() { return `vb_hopper_${currentVaultId || "none"}`; }
+    function hopperHas(id) { return hopperItems.some(it => it.doc_id === id); }
+    function docItem(d) { return { doc_id: d.data.doc_id, title: d.data.name || "(no title)", url: d.data.url || "" }; }
+    function hopperItemsUnder(node) {
+      const out = [];
+      (function walk(n) { if (!n) return; if (n.data && n.data.doc_id) out.push(docItem(n)); (n.children || []).forEach(walk); })(node);
+      return out;
+    }
+    function hopperLoad() {
+      try { hopperItems = JSON.parse(localStorage.getItem(hopperKey()) || "[]"); } catch (e) { hopperItems = []; }
+      hopperEls.result.textContent = "";
+      hopperRender();
+    }
+    function hopperStore() {
+      try { localStorage.setItem(hopperKey(), JSON.stringify(hopperItems)); } catch (e) {}
+      hopperRender();
+    }
+    function hopperToggle(item) {
+      hopperItems = hopperHas(item.doc_id) ? hopperItems.filter(it => it.doc_id !== item.doc_id) : [...hopperItems, item];
+      hopperStore();
+    }
+    function hopperAddMany(items) {
+      const add = items.filter(it => !hopperHas(it.doc_id));
+      hopperItems = [...hopperItems, ...add];
+      hopperStore();
+    }
+    function markHopper() {
+      if (!circle) return;
+      circle.attr("stroke", d => (d.data && d.data.doc_id && hopperHas(d.data.doc_id)) ? "#C66A32" : "#020617")
+            .attr("stroke-width", d => (d.data && d.data.doc_id && hopperHas(d.data.doc_id)) ? 2.5 : 0.4);
+    }
+    function hopperRender() {
+      hopperEls.count.textContent = hopperItems.length;
+      hopperEls.list.innerHTML = "";
+      hopperItems.forEach(it => {
+        const li = document.createElement("li");
+        const a = document.createElement("a");
+        a.href = `/static/document.html?id=${encodeURIComponent(it.doc_id)}`;
+        a.target = "_blank";
+        a.textContent = it.title;
+        a.title = it.title;
+        const x = document.createElement("button");
+        x.type = "button";
+        x.textContent = "×";
+        x.title = "Remove from hopper";
+        x.addEventListener("click", () => hopperToggle(it));
+        li.appendChild(a);
+        li.appendChild(x);
+        hopperEls.list.appendChild(li);
+      });
+      const empty = hopperItems.length === 0;
+      hopperEls.hint.style.display = empty ? "" : "none";
+      [hopperEls.ask, hopperEls.sum, hopperEls.copy, hopperEls.dl, hopperEls.save, hopperEls.promote, hopperEls.clear]
+        .forEach(b => { if (b) b.disabled = empty; });
+      const v = vaultsById[currentVaultId];
+      hopperEls.promote.style.display = v && v.kind === "collection" ? "" : "none";
+      markHopper();
+    }
+    async function hopperCall(path, extra = {}) {
+      const res = await authFetch(`${API_BASE}/hopper/${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vault_id: currentVaultId, doc_ids: hopperItems.map(it => it.doc_id), ...extra }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : `HTTP ${res.status}`);
+      return data;
+    }
+    function hopperSay(msg) { hopperEls.result.textContent = msg; }
+    async function hopperBusy(btn, label, fn) {
+      const old = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = label;
+      try { await fn(); } catch (e) { hopperSay(`Could not finish: ${e.message}`); }
+      finally { btn.textContent = old; btn.disabled = hopperItems.length === 0; }
+    }
+    function hopperDownloadText(name, textBody) {
+      const blob = new Blob([textBody], { type: "text/markdown;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }
+    hopperEls.clear.addEventListener("click", () => { hopperItems = []; hopperStore(); hopperSay(""); });
+    hopperEls.ask.addEventListener("click", () => {
+      const ids = hopperItems.map(it => it.doc_id);
+      currentScope = { type: "hopper", label: `Hopper: ${ids.length} item${ids.length === 1 ? "" : "s"}`, docIds: ids };
+      if (scopeLabel) scopeLabel.textContent = `Scope: ${currentScope.label}`;
+      if (scopeQueryInput) scopeQueryInput.focus();
+    });
+    hopperEls.sum.addEventListener("click", () => hopperBusy(hopperEls.sum, "Summarising…", async () => {
+      hopperSay("Summarising…");
+      const r = await hopperCall("summarize");
+      hopperSay(r.summary);
+    }));
+    hopperEls.copy.addEventListener("click", () => hopperBusy(hopperEls.copy, "Copying…", async () => {
+      const r = await hopperCall("bundle");
+      try {
+        await navigator.clipboard.writeText(r.markdown);
+        hopperSay(`Copied ${r.items.length} item${r.items.length === 1 ? "" : "s"} (${r.markdown.length.toLocaleString()} characters) as Markdown. Paste it into Claude.`);
+      } catch (e) {
+        hopperDownloadText(r.filename, r.markdown);
+        hopperSay(`The clipboard is not available here, so the bundle was downloaded as ${r.filename}.`);
+      }
+    }));
+    hopperEls.dl.addEventListener("click", () => hopperBusy(hopperEls.dl, "…", async () => {
+      const r = await hopperCall("bundle");
+      hopperDownloadText(r.filename, r.markdown);
+      hopperSay(`Downloaded ${r.filename}.`);
+    }));
+    hopperEls.save.addEventListener("click", () => {
+      const v = vaultsById[currentVaultId];
+      const name = window.prompt("Name for the new collection:", `${v ? v.name : "Vault"} picks`);
+      if (!name) return;
+      hopperBusy(hopperEls.save, "Saving…", async () => {
+        const r = await hopperCall("save", { name });
+        hopperSay(`Saved ${r.copied} item${r.copied === 1 ? "" : "s"} as the collection "${r.name}". Its tree appears in the vault picker within a minute.`);
+        await fetchCurrentVault();
+      });
+    });
+    hopperEls.promote.addEventListener("click", () => {
+      if (!window.confirm(`Copy ${hopperItems.length} item(s) from this collection into your personal vault? They keep a link to where they came from.`)) return;
+      hopperBusy(hopperEls.promote, "Copying…", async () => {
+        const r = await hopperCall("promote");
+        const skipped = r.skipped.length ? ` ${r.skipped.length} skipped (already in your vault): ${r.skipped.map(s => s.title).join("; ")}` : "";
+        hopperSay(`Copied ${r.copied} item${r.copied === 1 ? "" : "s"} into your vault.${skipped}`);
+      });
+    });
+    hopperLoad();
 
     // Initial topics load
     renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
