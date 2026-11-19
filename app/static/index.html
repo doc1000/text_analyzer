@@ -790,6 +790,16 @@
       <button id="reloadBtn">Reload</button>
       <select id="vaultSelect" title="Vault or collection to show" aria-label="Vault or collection"></select>
       <span id="vaultKindBadge" class="vault-kind-badge"></span>
+      <select id="viewSelect" title="Topics: the semantic tree. Projects: todo items grouped by +project" aria-label="View">
+        <option value="topics">Topics</option>
+        <option value="projects">Projects</option>
+      </select>
+      <select id="sourceSelect" title="Which sources the topic tree shows" aria-label="Sources">
+        <option value="all">All sources</option>
+        <option value="captures">Captures</option>
+        <option value="vault_files">Vault files</option>
+        <option value="todos">Todos</option>
+      </select>
 
       <div style="flex: 1;"></div>
 
@@ -1192,6 +1202,20 @@
         console.error('Failed to fetch vaults:', e);
       }
     }
+    // View (Topics / Projects) and source filter (batch31), remembered per browser
+    ["viewSelect", "sourceSelect"].forEach((id) => {
+      const el = document.getElementById(id);
+      const key = id === "viewSelect" ? "vb_view" : "vb_sources";
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved && [...el.options].some(o => o.value === saved)) el.value = saved;
+      } catch (e) {}
+      el.addEventListener("change", () => {
+        try { localStorage.setItem(key, el.value); } catch (e) {}
+        setScopeForNode(null);
+        renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
+      });
+    });
     document.getElementById("vaultSelect").addEventListener("change", (e) => {
       currentVaultId = e.target.value || null;
       try { localStorage.setItem("vb_vault_id", currentVaultId || ""); } catch (err) {}
@@ -1602,7 +1626,13 @@
 
       renderedVaultId = currentVaultId;
       const vaultParam = currentVaultId ? `&vault_id=${encodeURIComponent(currentVaultId)}` : "";
-      const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}${vaultParam}`);
+      const viewSel = document.getElementById("viewSelect");
+      const sourceSel = document.getElementById("sourceSelect");
+      const view = viewSel ? viewSel.value : "topics";
+      const srcFilter = sourceSel ? sourceSel.value : "all";
+      if (sourceSel) sourceSel.style.display = view === "projects" ? "none" : "";
+      const viewParam = `&view=${encodeURIComponent(view)}` + (view === "topics" && srcFilter !== "all" ? `&sources=${encodeURIComponent(srcFilter)}` : "");
+      const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}${vaultParam}${viewParam}`);
       const data = await res.json();
       if (mySeq !== renderSeq) return;  // a newer render (e.g. the saved vault after sign-in) took over
       svg.selectAll("*").remove();      // clear again: nothing older may remain under this drawing
@@ -1612,16 +1642,22 @@
       (function walk(n) { if (!n) return; if (n.type === "document" && n.doc_id) shownIds.add(n.doc_id); (n.children || []).forEach(walk); })(data);
       const vInfo = vaultsById[currentVaultId];
       const total = vInfo && vInfo.document_count != null ? vInfo.document_count : null;
-      const src = data.source === "orchard" ? "Topics: Data Orchard" : "Topics: built-in";
-      const counts = total != null ? ` · showing ${shownIds.size} of ${total}` : ` · ${shownIds.size} shown`;
+      const src = data.source === "projects" ? "Projects: todo items by +project"
+        : (data.source === "orchard" ? "Topics: Data Orchard" : "Topics: built-in") + (srcFilter !== "all" ? ` (${sourceSel.options[sourceSel.selectedIndex].text.toLowerCase()} only)` : "");
+      const filtered = data.source === "projects" || srcFilter !== "all";
+      const counts = total != null && !filtered ? ` · showing ${shownIds.size} of ${total}` : ` · ${shownIds.size} shown`;
       if (srcLabel) srcLabel.textContent = src + counts;
-      if (total != null && shownIds.size < total && days < 36500) {
+      if (!filtered && total != null && shownIds.size < total && days < 36500) {
         const hidden = total - shownIds.size;
         if (srcLabel) srcLabel.title = `${hidden} older item${hidden === 1 ? " is" : "s are"} outside this window; choose All time in Look back to see them`;
       } else if (srcLabel) {
         srcLabel.title = "";
       }
-      if (shownIds.size === 0 && total) {
+      if (shownIds.size === 0 && data.source === "projects") {
+        infoContent.innerHTML = `<p class="hint">No todo items in this vault${days < 36500 ? " in this window" : ""}. Todo items come from the todo.txt files and live in your personal vault.</p>`;
+      } else if (shownIds.size === 0 && filtered) {
+        infoContent.innerHTML = `<p class="hint">No items from this source in this vault${days < 36500 ? " in this window" : ""}.</p>`;
+      } else if (shownIds.size === 0 && total) {
         infoContent.innerHTML = `<p class="hint">Nothing captured in this window. ${total} item${total === 1 ? "" : "s"} are older: choose <b>All time</b> in Look back.</p>`;
       }
       // Recluster belongs to the built-in topics; the orchard tree rebuilds itself

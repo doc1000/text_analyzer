@@ -1276,6 +1276,20 @@ ${content}
             : `From your vault: ${doc.source_ref}. Edits to the file replace the text here; tags stay.`;
           srcNote.style.color = missing ? "#C66A32" : "";
           srcNote.style.display = "";
+        } else if (doc.source_kind === "todo") {
+          const m = doc.source_meta || {};
+          const file = (doc.source_ref || "").split("#")[0];
+          const bits = [m.status === "done" ? `done${m.completed ? " " + m.completed : ""}` : "open"];
+          if (m.priority) bits.push(`priority ${m.priority}`);
+          if (m.due) bits.push(`due ${m.due}`);
+          (m.projects || []).forEach(p => bits.push("+" + p));
+          (m.contexts || []).forEach(c => bits.push("@" + c));
+          const missing = doc.source_status === "missing";
+          srcNote.textContent = missing
+            ? `Todo line no longer in ${file} (removed or edited away). The item is kept.`
+            : `Todo from ${file}${m.line ? ", line " + m.line : ""}: ${bits.join(" · ")}. Edits to the line replace the text here; tags stay.`;
+          srcNote.style.color = missing ? "#C66A32" : "";
+          srcNote.style.display = "";
         } else {
           srcNote.style.display = "none";
         }

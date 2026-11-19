@@ -353,7 +353,7 @@ def _doc_vault_fields(db, doc) -> dict:
     kind = _vault_kind(db, doc.vault_id)
     return {"vault_kind": kind, "read_only": kind == "collection",
             "source_kind": doc.source_kind, "source_ref": doc.source_ref,
-            "source_status": doc.source_status}
+            "source_status": doc.source_status, "source_meta": doc.source_meta}
 
 
 def clean_tags(tags) -> list:
@@ -573,6 +573,8 @@ def _personal_vault_id(user, db):
 def get_topics_hierarchy(
     days: int = 30, 
     vault_id: str | None = None,
+    view: str = "topics",            # topics | projects (todo items by +project, batch31)
+    sources: str | None = None,      # all | captures,vault_files,todos (prunes the topic tree)
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
     _: HTTPAuthorizationCredentials = Depends(bearer_scheme),
@@ -603,12 +605,18 @@ def get_topics_hierarchy(
         target = _personal_vault_id(user, db)
     # TOPIC_SOURCE=orchard: the Data Orchard tree for that vault (vb-orchard service), same shape;
     # falls back to the built-in topics if orchard is off, unreachable or has no tree for it.
+    from .views import kinds_for, projects_tree, prune_by_source
+
+    if view == "projects" and target is not None:
+        return projects_tree(db, target, days)
+    kinds = kinds_for(sources)
+    tree = None
     if target is not None and orchard_bridge.covers(target):
         tree = orchard_bridge.hierarchy(days, target)
-        if tree is not None:
-            return tree
-    vault_ids = [target] if vault_id else get_user_accessible_vault_ids(user, db)
-    return build_hierarchical_topics_for_d3(db, days=days, vault_ids=vault_ids)
+    if tree is None:
+        vault_ids = [target] if vault_id else get_user_accessible_vault_ids(user, db)
+        tree = build_hierarchical_topics_for_d3(db, days=days, vault_ids=vault_ids)
+    return prune_by_source(db, tree, kinds) if kinds else tree
 
 @app.get("/topics/clear_cache")
 def clear_cache():

@@ -220,7 +220,15 @@ def _loop(cfg: dict) -> None:
     from .db import get_db
 
     dsn = os.environ.get("DATABASE_URL", "").replace("postgresql+psycopg2://", "postgresql://")
-    src = VaultFolderSource(cfg["root"], cfg["folders"], cfg["vault_id"])
+    from .todo_source import TodoSource
+    from .todo_source import settings as todo_settings
+
+    sources = []
+    if cfg["enabled"]:
+        sources.append(("vault source", VaultFolderSource(cfg["root"], cfg["folders"], cfg["vault_id"])))
+    tcfg = todo_settings()
+    if tcfg["enabled"] and tcfg["files"]:
+        sources.append(("todo source", TodoSource(tcfg["files"], cfg["vault_id"])))
     lock_con = None
     while True:
         try:
@@ -236,33 +244,40 @@ def _loop(cfg: dict) -> None:
             _say(f"lock connection failed ({exc}); retrying")
             lock_con = None
         time.sleep(cfg["interval"])
-    _say(f"on: {cfg['root']} {cfg['folders']} -> vault {cfg['vault_id']}, every {cfg['interval']:.0f} s")
+    if cfg["enabled"]:
+        _say(f"on: {cfg['root']} {cfg['folders']} -> vault {cfg['vault_id']}, every {cfg['interval']:.0f} s")
+    if tcfg["enabled"]:
+        _say(f"todo files on: {[str(p) for p in tcfg['files']]}")
     while True:
-        t0 = time.perf_counter()
-        gen = get_db()
-        db = next(gen)
-        try:
-            c = src.scan_once(db)
-            if any(c.values()):
-                _say(", ".join(f"{v} {k}" for k, v in c.items() if v) + f" in {time.perf_counter() - t0:.1f} s")
-        except Exception as exc:  # noqa: BLE001
-            db.rollback()
-            _say(f"scan failed: {type(exc).__name__}: {exc}")
-        finally:
+        for name, src in sources:
+            t0 = time.perf_counter()
+            gen = get_db()
+            db = next(gen)
             try:
-                next(gen)
-            except StopIteration:
-                pass
+                c = src.scan_once(db)
+                if any(c.values()):
+                    _say(f"{name}: " + ", ".join(f"{v} {k}" for k, v in c.items() if v)
+                         + f" in {time.perf_counter() - t0:.1f} s")
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                _say(f"{name} scan failed: {type(exc).__name__}: {exc}")
+            finally:
+                try:
+                    next(gen)
+                except StopIteration:
+                    pass
         time.sleep(cfg["interval"])
 
 
 def start_background() -> bool:
     global _thread
+    from .todo_source import settings as todo_settings
+
     cfg = settings()
-    if not cfg["enabled"]:
+    if not cfg["enabled"] and not todo_settings()["enabled"]:
         return False
     if not cfg["vault_id"]:
-        _say("VB_VAULT_SOURCE=1 but VB_VAULT_TARGET_VAULT is not set; off")
+        _say("a source is on but VB_VAULT_TARGET_VAULT is not set; off")
         return False
     if _thread is None:
         _thread = threading.Thread(target=_loop, args=(cfg,), name="vault-source", daemon=True)
