@@ -157,6 +157,8 @@ class Document(BaseModel):
     # Vault-folder source (migration 010): file hash at last import; ok | missing (soft broken link)
     source_hash = Column(Text, nullable=True)
     source_status = Column(Text, nullable=True)
+    # Parsed source fields (migration 012), e.g. a todo line's status/priority/projects/contexts/dates
+    source_meta = Column(JSONB, nullable=True)
 
 
 class IngestQueue(BaseModel):

@@ -205,6 +205,7 @@ class DocumentDetailResponse(BaseModel):
     source_kind: Optional[str] = None
     source_ref: Optional[str] = None
     source_status: Optional[str] = None  # vault files: ok | missing
+    source_meta: Optional[dict] = None    # todo items: status, priority, projects, contexts, dates
 
 class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None
