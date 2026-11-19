@@ -62,6 +62,9 @@ from .models import IngestQueue
 
 
 
+BACKGROUND_IN_WORKER = os.environ.get("VB_BACKGROUND", "").strip().lower() == "worker"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup is intentionally minimal for fast Fly boots
@@ -69,9 +72,12 @@ async def lifespan(app: FastAPI):
     # - Embedding tables are lazy-initialized on first use (via __getattr__ in db.py)
     # - Background fill moved to /admin/backfill endpoint
     
-    # Initialize scheduler (ingest queue always; deduplication when enabled)
+    # VB_BACKGROUND=worker (batch33): the ingest queue, deduplication and the vault/todo sources run
+    # in a separate worker process (python -m app.worker), so embedding never slows page requests.
+    # Default (unset / inprocess): they run here, as before.
     from .scheduler import init_scheduler, shutdown_scheduler
-    init_scheduler(schedule_times=PREFERENCES.deduplication.schedule_times)
+    if not BACKGROUND_IN_WORKER:
+        init_scheduler(schedule_times=PREFERENCES.deduplication.schedule_times)
 
     # In-process MiniLM: load it in the background now, so the first capture is not slow.
     if PREFERENCES.models.embedding_provider == "local":
@@ -80,13 +86,14 @@ async def lifespan(app: FastAPI):
         threading.Thread(target=warm_local_encoder, name="warm-minilm", daemon=True).start()
 
     # The vault folder as a source (batch30): scans every VB_VAULT_SCAN_SECONDS when VB_VAULT_SOURCE=1
-    from .vault_source import start_background
-    start_background()
+    if not BACKGROUND_IN_WORKER:
+        from .vault_source import start_background
+        start_background()
 
     yield
     
     # Shutdown scheduler gracefully
-    if PREFERENCES.deduplication.enabled:
+    if PREFERENCES.deduplication.enabled and not BACKGROUND_IN_WORKER:
         shutdown_scheduler()
 
 app = FastAPI(lifespan=lifespan)
@@ -294,8 +301,9 @@ def ingest(
     db.commit()
     db.refresh(queue_row)
 
-    # Process in background
-    background_tasks.add_task(process_ingest_item, str(queue_row.id))
+    # Process in background (with VB_BACKGROUND=worker the worker process picks it up within seconds)
+    if not BACKGROUND_IN_WORKER:
+        background_tasks.add_task(process_ingest_item, str(queue_row.id))
 
     # Response mask: same shape as sync response for extension compatibility (no extension changes)
     linked_pdfs = payload.linked_pdf_urls or payload.pdf_urls or []
@@ -891,15 +899,12 @@ def update_document(
         doc.captured_text = payload.text
         doc.full_text = payload.text  # Keep deprecated field in sync
         
-        # Delete old chunks (CASCADE will delete sentences automatically)
-        db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == doc.id).delete()
         db.commit()
-        
-        # Re-chunk and re-embed. embed_doc_chunks(chunk_type="chunk") also embeds each new
-        # chunk's sentences and refreshes the document record; embedding sentences again here
-        # stored every sentence twice.
-        from .helpers import embed_doc_chunks
-        embed_doc_chunks(doc, chunk_type="chunk")
+
+        # Re-chunk; only chunks whose text changed are embedded again (batch33), with their
+        # sentences, and the document record is refreshed. Same rows as a full re-embed.
+        from .helpers import reembed_docs_incremental
+        reembed_docs_incremental([doc], db)
 
     db.commit()
     

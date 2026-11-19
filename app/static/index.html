@@ -1194,7 +1194,8 @@
           updateVaultBadge();
           if (typeof hopperLoad === "function") hopperLoad();
           console.log('Current vault:', currentVaultId);
-          if (renderedVaultId !== undefined && renderedVaultId !== currentVaultId) {
+          // the first draw waits for the vault list (batch33: one tree request on load, not two)
+          if (renderedVaultId !== currentVaultId) {
             renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
           }
         }
@@ -1249,6 +1250,7 @@
         console.error('Auth check failed:', e);
       }
       updateAuthUI();
+      if (renderedVaultId === undefined) renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
     }
 
     // Update UI based on auth state
@@ -2161,8 +2163,8 @@
     });
     hopperLoad();
 
-    // Initial topics load
-    renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
+    // Initial topics load; signed in, it waits for the vault list (checkAuthStatus draws it)
+    if (!AUTH_TOKEN) renderBubbleMap(parseInt(daysInput.value, 10) || 36500);
 
     // -------- SCOPED QUERY IN INFO PANEL --------
 

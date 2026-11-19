@@ -7,11 +7,14 @@ One-way: files -> VB. VB never writes, moves or deletes anything in the vault fo
     VB_VAULT_ROOT=~/Vault              the vault folder; source_ref is a path relative to it
     VB_VAULT_FOLDERS=inbox             comma-separated folders under the root that are watched
     VB_VAULT_SCAN_SECONDS=30           seconds between scans (a scan stats files; it reads only changed ones)
+    VB_VAULT_QUIET_SECONDS=300         a new or changed file is read only once it has not changed for
+                                       this long (conversation captures are appended live; batch33)
 
 Rules (nothing in VB is erased by the folder):
   - a new file -> a new document (source_kind vault_file), chunk and sentence embeddings
   - a file edited in place (its hash changed) -> the document's title and text are updated and
-    re-embedded; tags, captured date and id are kept
+    re-embedded; tags, captured date and id are kept. Only changed chunks are embedded again: a
+    chunk whose text is unchanged keeps its embedding (batch33)
   - a file moved or renamed (the same bytes show up at another path, inside the watched folders or,
     by file name, anywhere under the root) -> the document's source_ref and url follow it
   - a file deleted, or moved where it cannot be found -> the document and its text stay, marked
@@ -46,6 +49,7 @@ def settings() -> dict:
         "root": Path(os.environ.get("VB_VAULT_ROOT") or Path.home() / "Vault").expanduser(),
         "folders": [f.strip().strip("/\\") for f in os.environ.get("VB_VAULT_FOLDERS", "inbox").split(",") if f.strip()],
         "interval": max(5.0, float(os.environ.get("VB_VAULT_SCAN_SECONDS", "30"))),
+        "quiet": max(0.0, float(os.environ.get("VB_VAULT_QUIET_SECONDS", "300"))),
     }
 
 
@@ -70,10 +74,11 @@ def _naive_utc(dt: datetime) -> datetime:
 
 
 class VaultFolderSource:
-    def __init__(self, root: Path, folders: list, vault_id: str):
+    def __init__(self, root: Path, folders: list, vault_id: str, quiet_seconds: float = 0.0):
         self.root = Path(root).resolve()
         self.folders = folders
         self.vault_id = vault_id
+        self.quiet_ns = int(quiet_seconds * 1e9)
         self._stat: dict = {}  # rel -> (mtime_ns, size) as of the last successful scan
 
     def rel(self, p: Path) -> str:
@@ -102,8 +107,7 @@ class VaultFolderSource:
         from sqlalchemy import text as sql
 
         from .collections import read_item
-        from .db import EMBED_TABLE
-        from .helpers import embed_docs_bulk
+        from .helpers import embed_docs_bulk, reembed_docs_incremental
         from .models import Document, Vault
 
         vault = db.query(Vault).filter(Vault.id == self.vault_id).first()
@@ -128,13 +132,18 @@ class VaultFolderSource:
                     st = p.stat()
                     current[ref] = (st.st_mtime_ns, st.st_size)
 
-        counts = {"new": 0, "updated": 0, "moved": 0, "missing": 0, "restored": 0, "skipped": 0}
+        counts = {"new": 0, "updated": 0, "moved": 0, "missing": 0, "restored": 0, "skipped": 0, "waiting": 0}
         reembed, fresh = [], []
         now = datetime.now(timezone.utc)
+        now_ns = time.time_ns()
         new_files = {}  # rel -> sha, not tracked yet
+        waiting = set()  # changed but still being written: read on a later scan (batch33)
         for rel, st in current.items():
             if self._stat.get(rel) == st:
                 continue  # unchanged since the last scan (tracked, tombstoned or skipped)
+            if self.quiet_ns and now_ns - st[0] < self.quiet_ns:
+                waiting.add(rel)
+                continue
             try:
                 h = _sha(self.root / rel)
             except OSError:
@@ -196,13 +205,13 @@ class VaultFolderSource:
             fresh.append(d)
             counts["new"] += 1
 
-        if reembed:
-            db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id.in_([d.id for d in reembed])).delete(
-                synchronize_session=False)  # sentences cascade
         db.commit()
-        for i in range(0, len(fresh + reembed), 25):
-            embed_docs_bulk((fresh + reembed)[i:i + 25])
-        self._stat = {k: v for k, v in current.items()}
+        for i in range(0, len(fresh), 25):
+            embed_docs_bulk(fresh[i:i + 25])
+        if reembed:
+            reembed_docs_incremental(reembed, db)  # unchanged chunks keep their embeddings
+        counts["waiting"] = len(waiting)
+        self._stat = {k: v for k, v in current.items() if k not in waiting}
         return counts
 
     def _relink(self, d, rel: str) -> None:
@@ -225,7 +234,8 @@ def _loop(cfg: dict) -> None:
 
     sources = []
     if cfg["enabled"]:
-        sources.append(("vault source", VaultFolderSource(cfg["root"], cfg["folders"], cfg["vault_id"])))
+        sources.append(("vault source", VaultFolderSource(cfg["root"], cfg["folders"], cfg["vault_id"],
+                                                         quiet_seconds=cfg["quiet"])))
     tcfg = todo_settings()
     if tcfg["enabled"] and tcfg["files"]:
         sources.append(("todo source", TodoSource(tcfg["files"], cfg["vault_id"])))
@@ -245,7 +255,8 @@ def _loop(cfg: dict) -> None:
             lock_con = None
         time.sleep(cfg["interval"])
     if cfg["enabled"]:
-        _say(f"on: {cfg['root']} {cfg['folders']} -> vault {cfg['vault_id']}, every {cfg['interval']:.0f} s")
+        _say(f"on: {cfg['root']} {cfg['folders']} -> vault {cfg['vault_id']}, every {cfg['interval']:.0f} s"
+             f" (files read after {cfg['quiet']:.0f} s quiet)")
     if tcfg["enabled"]:
         _say(f"todo files on: {[str(p) for p in tcfg['files']]}")
     while True:
@@ -255,7 +266,7 @@ def _loop(cfg: dict) -> None:
             db = next(gen)
             try:
                 c = src.scan_once(db)
-                if any(c.values()):
+                if any(v for k, v in c.items() if k != "waiting"):
                     _say(f"{name}: " + ", ".join(f"{v} {k}" for k, v in c.items() if v)
                          + f" in {time.perf_counter() - t0:.1f} s")
             except Exception as exc:  # noqa: BLE001

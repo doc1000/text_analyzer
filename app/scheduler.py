@@ -93,7 +93,7 @@ def run_pending_ingest_queue():
         logger.error(f"Error in ingest queue processing: {e}", exc_info=True)
 
 
-def init_scheduler(schedule_times: list[str] = None):
+def init_scheduler(schedule_times: list[str] = None, ingest: bool = True):
     """
     Initialize and start the background scheduler.
     
@@ -126,15 +126,16 @@ def init_scheduler(schedule_times: list[str] = None):
         }
     )
     
-    # Always add ingest queue job (every 2 minutes)
-    _scheduler.add_job(
-        func=run_pending_ingest_queue,
-        trigger=IntervalTrigger(minutes=2),
-        id="ingest_queue",
-        name="Process ingest queue",
-        replace_existing=True,
-    )
-    logger.info("Scheduled ingest queue processing every 2 minutes")
+    # Ingest queue job (every 2 minutes); the worker process (batch33) polls the queue itself
+    if ingest:
+        _scheduler.add_job(
+            func=run_pending_ingest_queue,
+            trigger=IntervalTrigger(minutes=2),
+            id="ingest_queue",
+            name="Process ingest queue",
+            replace_existing=True,
+        )
+        logger.info("Scheduled ingest queue processing every 2 minutes")
 
     # Schedule deduplication jobs (only when enabled)
     from .config import PREFERENCES

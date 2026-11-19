@@ -1,5 +1,6 @@
 # Redeploy the local Vault Bubbles services from this checkout:
-# stop the three sign-in tasks, refresh the app environment (uv sync), reinstall the vb-orchard
+# stop the sign-in tasks (vb-orchard sync and serve, vaultbubbles app and worker), refresh the app
+# environment (uv sync), reinstall the vb-orchard
 # command (uv tool install), then re-register and start the tasks.
 #   powershell -File services/update-windows.ps1
 $ErrorActionPreference = "Stop"

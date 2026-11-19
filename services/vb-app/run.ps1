@@ -2,7 +2,8 @@
 # Settings: ~/.vaultbubbles/config.env (KEY=VALUE; or $env:VB_APP_CONFIG). The file wins over the
 # inherited environment (VB_APP_ENV_WINS=1 reverses that).
 # Needs: uv, local badgerdb (docker compose up -d db), `uv sync` once in the repo root.
-param([int]$Port = 8000)
+# -Worker: run the background worker (python -m app.worker) instead of the web app (batch33).
+param([int]$Port = 8000, [switch]$Worker)
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $cfg = if ($env:VB_APP_CONFIG) { $env:VB_APP_CONFIG } else { Join-Path $HOME ".vaultbubbles\config.env" }
@@ -22,4 +23,13 @@ $env:HF_HUB_OFFLINE = "1"; $env:TRANSFORMERS_OFFLINE = "1"; $env:PYTHONUNBUFFERE
 # UTF-8 stdout: the app prints non-ASCII (e.g. a check mark) and cp1252 would raise mid-insert
 $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
 Set-Location $repo
-& uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port $Port
+if ($Worker) {
+  & uv run --no-sync python -m app.worker
+} else {
+  # With the worker task installed, the web app leaves the background jobs to it (unless
+  # config.env sets VB_BACKGROUND itself, e.g. VB_BACKGROUND=inprocess).
+  if (-not $env:VB_BACKGROUND -and (Get-ScheduledTask -TaskName "vaultbubbles worker" -ErrorAction SilentlyContinue)) {
+    $env:VB_BACKGROUND = "worker"
+  }
+  & uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port $Port
+}

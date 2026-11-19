@@ -809,8 +809,11 @@ _local_encoder_lock = __import__("threading").Lock()
 
 
 def warm_local_encoder() -> None:
-    """Load the in-process MiniLM once (about 15-20 s); later calls are fast."""
+    """Load the in-process MiniLM once (about 15-20 s); later calls are fast. The model itself is
+    loaded too: "warm up" is usually in orchard's disk cache, which skips loading it."""
     _local_embed_batch(["warm up"])
+    from .resident_minilm import _load
+    _load()
 
 
 def _local_embed_batch(texts: List[str]) -> List[List[float]]:
@@ -1353,6 +1356,96 @@ def embed_docs_bulk(docs, db: Session | None = None) -> dict:
             except StopIteration:
                 pass
 
+
+def reembed_docs_incremental(docs, db: Session | None = None) -> dict:
+    """Re-embed documents whose text changed, reusing every chunk whose text is unchanged (batch33).
+
+    The new text is chunked as usual; a chunk row with the same text keeps its embedding and its
+    sentence rows (only its chunk_index follows the new position); new chunks are embedded (with
+    their sentences) in one batch; chunk rows no longer in the text are deleted (sentences
+    cascade); the document vector is the mean of the new chunk set. The rows equal a full
+    re-embed. A conversation capture that grew re-embeds only its last chunk(s).
+    Returns {"docs", "kept", "chunks", "sentences", "deleted"}."""
+    from .mmr import l2_normalize_vector
+
+    own = db is None
+    if own:
+        db_gen = get_db()
+        db = next(db_gen)
+    out = {"docs": 0, "kept": 0, "chunks": 0, "sentences": 0, "deleted": 0}
+    try:
+        plan = []  # (doc, new chunk texts, {idx: kept row}, [rows to delete])
+        for d in docs:
+            text_input = getattr(d, "extracted_text", None) or getattr(d, "captured_text", None) or d.full_text
+            chunks = chunk_text(text_input or "", max_char=MAX_CHARS_PER_CHUNK)
+            rows = db.query(EMBED_TABLE).filter(EMBED_TABLE.document_id == d.id).order_by(EMBED_TABLE.chunk_index).all()
+            pool: dict = {}
+            for r in rows:
+                pool.setdefault(r.chunk_text, []).append(r)
+            kept = {}
+            for i, c in enumerate(chunks):
+                if pool.get(c):
+                    kept[i] = pool[c].pop(0)
+            drop = [r for rs in pool.values() for r in rs]
+            plan.append((d, chunks, kept, drop))
+        # embed the new chunks of all documents at once, and their sentences
+        new_refs = [(pi, i) for pi, (_, cs, kept, _) in enumerate(plan) for i in range(len(cs)) if i not in kept]
+        new_texts = [plan[pi][1][i] for pi, i in new_refs]
+        vecs = get_embeddings_batch(new_texts) if new_texts else []
+        sents = [chunk_text(c, max_char=MAX_CHARS_PER_SENTENCE) for c in new_texts]
+        flat = [x for ss in sents for x in ss]
+        svecs = get_embeddings_batch(flat) if flat else []
+        if len(vecs) != len(new_texts) or len(svecs) != len(flat):
+            raise RuntimeError("embedding count mismatch")
+        new_vec = {ref: (vecs[k], sents[k]) for k, ref in enumerate(new_refs)}
+        si = 0
+        for pi, (d, cs, kept, drop) in enumerate(plan):
+            for r in drop:
+                db.delete(r)
+            db.flush()
+            # chunk_index has no unique constraint, so kept rows can be renumbered in place
+            all_vecs = []
+            added = []
+            for i, c in enumerate(cs):
+                if i in kept:
+                    kept[i].chunk_index = i
+                    all_vecs.append(np.array(kept[i].embedding, dtype=float))
+                else:
+                    v, ss = new_vec[(pi, i)]
+                    row = EMBED_TABLE(document_id=d.id, chunk_index=i, chunk_text=c, embedding=v)
+                    db.add(row)
+                    added.append((row, ss))
+                    all_vecs.append(np.array(v, dtype=float))
+            db.flush()
+            for row, ss in added:
+                for j, st in enumerate(ss):
+                    db.add(SENTENCE_TABLE(chunk_id=row.id, sent_index=j, sent_text=st, embedding=svecs[si]))
+                    si += 1
+                    out["sentences"] += 1
+            existing = db.query(DOCUMENT_TABLE).filter(DOCUMENT_TABLE.document_id == d.id).first()
+            if all_vecs:
+                avg = l2_normalize_vector(np.mean(np.array(all_vecs), axis=0)).tolist()
+                if existing:
+                    existing.embedding = avg
+                else:
+                    db.add(DOCUMENT_TABLE(document_id=d.id, summary_text=None, embedding=avg))
+            elif existing:
+                db.delete(existing)
+            out["docs"] += 1
+            out["kept"] += len(kept)
+            out["chunks"] += len(added)
+            out["deleted"] += len(drop)
+        db.commit()
+        return out
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if own:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
 
 def _create_document_embedding_record(
     db: Session,
