@@ -132,7 +132,7 @@ def _owner(db, email):
 
 def cmd_new(args) -> None:
     from .db import get_db
-    from .helpers import embed_doc_chunks
+    from .helpers import embed_docs_bulk
     from .models import Document, Vault, VaultMembership
 
     folder = Path(args.folder).expanduser().resolve()
@@ -180,11 +180,15 @@ def cmd_new(args) -> None:
     # 2) chunk + sentence embeddings for Ask / sentence search (local MiniLM when EMBEDDING_PROVIDER=local)
     if args.no_embed:
         return
+    from .helpers import PREFERENCES, warm_local_encoder
+
+    if getattr(PREFERENCES.models, "embedding_provider", "") == "local":
+        warm_local_encoder()
     t0 = time.perf_counter()
-    for n, doc in enumerate(docs, 1):
-        embed_doc_chunks(doc, "chunk", generate_summaries=False)
-        if n % 25 == 0 or n == len(docs):
-            print(f"  embedded {n}/{len(docs)} in {time.perf_counter() - t0:.0f} s", flush=True)
+    step = 25  # documents per batch: one encode call for their chunks, one for their sentences
+    for i in range(0, len(docs), step):
+        embed_docs_bulk(docs[i:i + step])
+        print(f"  embedded {min(i + step, len(docs))}/{len(docs)} in {time.perf_counter() - t0:.0f} s", flush=True)
 
 
 def cmd_list(args) -> None:

@@ -79,6 +79,10 @@ async def lifespan(app: FastAPI):
         from .helpers import warm_local_encoder
         threading.Thread(target=warm_local_encoder, name="warm-minilm", daemon=True).start()
 
+    # The vault folder as a source (batch30): scans every VB_VAULT_SCAN_SECONDS when VB_VAULT_SOURCE=1
+    from .vault_source import start_background
+    start_background()
+
     yield
     
     # Shutdown scheduler gracefully
@@ -348,7 +352,8 @@ def _vault_kind(db, vault_id) -> str | None:
 def _doc_vault_fields(db, doc) -> dict:
     kind = _vault_kind(db, doc.vault_id)
     return {"vault_kind": kind, "read_only": kind == "collection",
-            "source_kind": doc.source_kind, "source_ref": doc.source_ref}
+            "source_kind": doc.source_kind, "source_ref": doc.source_ref,
+            "source_status": doc.source_status}
 
 
 def clean_tags(tags) -> list:
@@ -926,6 +931,15 @@ def delete_document(
     # Store document info for response
     doc_title = doc.title or "Untitled"
     
+    # A file from the vault folder: remember it, so the next scan does not import it again
+    if doc.source_kind == "vault_file" and doc.source_ref and doc.vault_id:
+        from sqlalchemy import text as _sql
+        db.execute(_sql("""INSERT INTO source_tombstones (vault_id, source_kind, source_ref, source_hash)
+                           VALUES (:v, 'vault_file', :r, :h)
+                           ON CONFLICT (vault_id, source_kind, source_ref)
+                           DO UPDATE SET source_hash = EXCLUDED.source_hash, deleted_at = now()"""),
+                   {"v": doc.vault_id, "r": doc.source_ref, "h": doc.source_hash})
+
     # Delete the document (CASCADE will delete chunks and sentences automatically)
     db.delete(doc)
     db.commit()

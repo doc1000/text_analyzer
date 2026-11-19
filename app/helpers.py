@@ -824,9 +824,9 @@ def _local_embed_batch(texts: List[str]) -> List[List[float]]:
         if _local_encoder is None:
             os.environ.setdefault("HF_HUB_OFFLINE", "1")
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-            from orchard.backends.minilm import MiniLMEmbeddingBackend
+            from .resident_minilm import backend
 
-            _local_encoder = MiniLMEmbeddingBackend(local_files_only=True)
+            _local_encoder = backend()  # model stays loaded (the stock backend reloads it per call)
         vecs = _local_encoder.encode([_clean_embed_input(t) for t in texts])
     from .mmr import l2_normalize_vector
     return [l2_normalize_vector(normalize_embedding(v)).tolist() for v in vecs]
@@ -1287,6 +1287,71 @@ def embed_doc_chunks(
             next(db_gen)
         except StopIteration:
             pass
+
+
+def embed_docs_bulk(docs, db: Session | None = None) -> dict:
+    """Chunk + sentence embeddings for many documents at once (batch30): every chunk of every
+    document in one encode call, every sentence in another, all rows in one transaction.
+    Same rows as embed_doc_chunks(doc, "chunk", generate_summaries=False) per document; documents
+    that already have chunk rows are skipped. Returns {"docs", "chunks", "sentences"}."""
+    from .mmr import l2_normalize_vector
+
+    own = db is None
+    if own:
+        db_gen = get_db()
+        db = next(db_gen)
+    try:
+        ids = [d.id for d in docs]
+        have = {r[0] for r in db.query(EMBED_TABLE.document_id).filter(EMBED_TABLE.document_id.in_(ids)).distinct()} if ids else set()
+        todo = []  # (doc, [chunk texts])
+        for d in docs:
+            if d.id in have:
+                continue
+            text_input = getattr(d, "extracted_text", None) or getattr(d, "captured_text", None) or d.full_text
+            chunks = chunk_text(text_input or "", max_char=MAX_CHARS_PER_CHUNK)
+            if chunks:
+                todo.append((d, chunks))
+        flat_chunks = [c for _, cs in todo for c in cs]
+        if not flat_chunks:
+            return {"docs": 0, "chunks": 0, "sentences": 0}
+        chunk_vecs = get_embeddings_batch(flat_chunks)
+        sents_per_chunk = [chunk_text(c, max_char=MAX_CHARS_PER_SENTENCE) for c in flat_chunks]
+        flat_sents = [s_ for ss in sents_per_chunk for s_ in ss]
+        sent_vecs = get_embeddings_batch(flat_sents) if flat_sents else []
+        if len(chunk_vecs) != len(flat_chunks) or len(sent_vecs) != len(flat_sents):
+            raise RuntimeError("embedding count mismatch")
+        ci = si = 0
+        n_sent = 0
+        for d, cs in todo:
+            rows = []
+            for idx, c in enumerate(cs):
+                row = EMBED_TABLE(document_id=d.id, chunk_index=idx, chunk_text=c, embedding=chunk_vecs[ci + idx])
+                db.add(row)
+                rows.append((row, ci + idx))
+            db.flush()  # chunk ids for the sentence rows
+            for row, k in rows:
+                for j, st in enumerate(sents_per_chunk[k]):
+                    db.add(SENTENCE_TABLE(chunk_id=row.id, sent_index=j, sent_text=st, embedding=sent_vecs[si]))
+                    si += 1
+                    n_sent += 1
+            avg = l2_normalize_vector(np.mean(np.array(chunk_vecs[ci:ci + len(cs)]), axis=0)).tolist()
+            existing = db.query(DOCUMENT_TABLE).filter(DOCUMENT_TABLE.document_id == d.id).first()
+            if existing:
+                existing.embedding = avg
+            else:
+                db.add(DOCUMENT_TABLE(document_id=d.id, summary_text=None, embedding=avg))
+            ci += len(cs)
+        db.commit()
+        return {"docs": len(todo), "chunks": len(flat_chunks), "sentences": n_sent}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if own:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
 
 
 def _create_document_embedding_record(

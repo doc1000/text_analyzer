@@ -543,6 +543,7 @@
       <input type="text" id="tagInput" placeholder="Add tag, press Enter" maxlength="60" aria-label="Add tag" />
       <span id="tagStatus"></span>
     </div>
+    <div id="sourceNote" class="meta" style="display: none; margin: -0.5rem 0 0.75rem; font-size: 0.8rem;"></div>
     <div id="readOnlyNote" class="meta" style="display: none; color: #C66A32; margin: -0.5rem 0 0.75rem; font-size: 0.8rem;">
       Read-only collection document: tags can be edited, the title and text cannot.
     </div>
@@ -1265,6 +1266,20 @@ ${content}
       saveBtn.style.display = isReadOnly ? "none" : "";
       const roNote = document.getElementById("readOnlyNote");
       if (roNote) roNote.style.display = isReadOnly ? "" : "none";
+      // Vault-folder items (batch30): where the file is, or a soft broken link if it is gone
+      const srcNote = document.getElementById("sourceNote");
+      if (srcNote) {
+        if (doc.source_kind === "vault_file" && doc.source_ref) {
+          const missing = doc.source_status === "missing";
+          srcNote.textContent = missing
+            ? `Source file not found: ${doc.source_ref} (moved or deleted). The text here is kept.`
+            : `From your vault: ${doc.source_ref}. Edits to the file replace the text here; tags stay.`;
+          srcNote.style.color = missing ? "#C66A32" : "";
+          srcNote.style.display = "";
+        } else {
+          srcNote.style.display = "none";
+        }
+      }
     }
 
     // -------- TAGS (saved immediately; topic editing is switched off for now) --------
