@@ -154,6 +154,9 @@ class Document(BaseModel):
     source_vault_id = Column(UUID(as_uuid=True), nullable=True)
     source_document_id = Column(UUID(as_uuid=True), nullable=True)
     imported_at = Column(DateTime(timezone=True), nullable=True)
+    # Vault-folder source (migration 010): file hash at last import; ok | missing (soft broken link)
+    source_hash = Column(Text, nullable=True)
+    source_status = Column(Text, nullable=True)
 
 
 class IngestQueue(BaseModel):

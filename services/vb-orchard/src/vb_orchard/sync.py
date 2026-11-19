@@ -51,13 +51,9 @@ def get_encoder(kind: str = "minilm"):
         from .fake_encoder import FakeEncoder
 
         return FakeEncoder()
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    from orchard.backends.minilm import MiniLMEmbeddingBackend
+    from .resident import backend
 
-    enc = MiniLMEmbeddingBackend(local_files_only=True)
-    enc.encode(["warm up"])  # load the model now, not on the first capture
-    return enc
+    return backend()  # loads the model once, now, not on every capture
 
 
 # ---------------------------------------------------------------- orchard-db side state

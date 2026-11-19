@@ -204,6 +204,7 @@ class DocumentDetailResponse(BaseModel):
     read_only: bool = False          # collection documents: tags only, no title/text edits
     source_kind: Optional[str] = None
     source_ref: Optional[str] = None
+    source_status: Optional[str] = None  # vault files: ok | missing
 
 class DocumentUpdateRequest(BaseModel):
     title: Optional[str] = None
