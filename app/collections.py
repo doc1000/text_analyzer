@@ -208,7 +208,7 @@ def cmd_list(args) -> None:
 
 def cmd_delete(args) -> None:
     from .db import get_db
-    from .models import Vault
+    from .models import Document, Vault
 
     db = next(get_db())
     v = db.query(Vault).filter(Vault.id == args.vault_id).first()
@@ -218,8 +218,12 @@ def cmd_delete(args) -> None:
         raise SystemExit(f"refusing: vault {v.name!r} is kind {v.kind!r}, not a collection")
     if not args.yes:
         raise SystemExit(f"would delete collection {v.name!r} and all its documents; add --yes")
-    db.delete(v)  # documents, chunks, sentences and memberships cascade
+    # documents.vault_id has no foreign key in the live schema, so delete the documents explicitly
+    # (their chunks, sentences and doc vectors cascade from documents)
+    n = db.query(Document).filter(Document.vault_id == v.id).delete(synchronize_session=False)
+    db.delete(v)  # memberships cascade
     db.commit()
+    print(f"removed {n} documents")
     print(f"deleted collection {v.name!r} ({args.vault_id}); its orchard tree file goes on the next sync pass")
 
 
