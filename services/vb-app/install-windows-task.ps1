@@ -43,8 +43,10 @@ function Register-VbTask([string]$name, [string]$runArgs, [string]$logName, [str
   # supervise.ps1 restarts run.ps1 whenever it exits and logs in plain UTF-8.
   $sup = Join-Path $PSScriptRoot "supervise.ps1"
   foreach ($m in $patterns) { Stop-TaskTree $name $m }
-  $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$sup`" -Command `"powershell -NoProfile -ExecutionPolicy Bypass -File \`"$run\`"$runArgs`" -Log `"$log`""
+  # conhost --headless: no console window at all. A plain "powershell -WindowStyle Hidden" still
+  # pops up a window when Windows Terminal is the default terminal (Windows 11).
+  $action = New-ScheduledTaskAction -Execute "conhost.exe" `
+    -Argument "--headless powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$sup`" -Command `"powershell -NoProfile -ExecutionPolicy Bypass -File \`"$run\`"$runArgs`" -Log `"$log`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `

@@ -43,8 +43,10 @@ foreach ($cmd in @("sync", "serve")) {
   $sup = Join-Path $PSScriptRoot "supervise.ps1"
   Stop-TaskTree "vb-orchard $cmd" "logs\$cmd.log"
   Stop-TaskTree "vb-orchard $cmd" "run-$cmd.cmd"
-  $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$sup`" -Command `"\`"$exe\`" $cmd`" -Log `"$log`""
+  # conhost --headless: no console window at all. A plain "powershell -WindowStyle Hidden" still
+  # pops up a window when Windows Terminal is the default terminal (Windows 11).
+  $action = New-ScheduledTaskAction -Execute "conhost.exe" `
+    -Argument "--headless powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$sup`" -Command `"\`"$exe\`" $cmd`" -Log `"$log`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
