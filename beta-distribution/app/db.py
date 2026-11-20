@@ -56,7 +56,8 @@ def _update_schema_doc():
                 [sys.executable, str(script_path)],
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if result.returncode == 0:
                 print("✓ Schema documentation updated")

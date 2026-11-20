@@ -141,7 +141,8 @@ def test_writer_flushes_at_exit_without_close(tmp_path):
         "    w.submit({'url': 'https://a.b/%d' % i, 'full_text': 't'})\n"
         "# exit without flush() or close()\n"
     )
-    r = subprocess.run([sys.executable, "-c", code, str(out)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-c", code, str(out)], capture_output=True, text=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert r.returncode == 0, r.stderr
     assert len(out.read_text(encoding="utf-8").split()) == 5
 

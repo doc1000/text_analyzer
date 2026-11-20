@@ -69,9 +69,9 @@ def main():
                 con.execute(ins, [u + "#lat", t, f, vault])
             cmd = [sys.executable, "-m", "vb_orchard.cli"]
             procs.append(subprocess.Popen(cmd + ["sync"], env=env, stdout=open(work / "sync.log", "w"),
-                                          stderr=subprocess.STDOUT))
+                                          stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
             procs.append(subprocess.Popen(cmd + ["serve"], env=env, stdout=open(work / "serve.log", "w"),
-                                          stderr=subprocess.STDOUT))
+                                          stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
             boot = wait_count(a.port, a.seed, 180)
             print(f"startup (model load + first build of {a.seed}): {boot:.1f} s" if boot else "startup timed out")
             time.sleep(2)

@@ -240,7 +240,7 @@ def run_readback_subprocess(path) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "rb.json"
         r = subprocess.run([sys.executable, "-m", "vb_orchard.bars", "readback", str(path), str(out)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if r.returncode:
             raise RuntimeError(r.stderr[-2000:])
         return json.loads(out.read_text(encoding="utf-8"))
@@ -363,7 +363,8 @@ def _child_reader(db, seconds):
 def two_process(db_path, *, seconds: float = 25, pause: float = 0.3) -> dict:
     env = dict(os.environ)
     procs = [subprocess.Popen([sys.executable, "-m", "vb_orchard.bars", role, str(db_path), str(seconds), str(pause)],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
              for role in ("writer", "reader")]
     res = {}
     for p in procs:
