@@ -582,9 +582,10 @@
   </main>
 
   <script>
-    // Auto-detect local vs cloud
+    // Auto-detect local vs cloud. Locally, call the API on the same origin the page came from:
+    // a page opened as 127.0.0.1 calling localhost is cross-origin and its calls fail (CORS).
     const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-      ? "http://localhost:8000"
+      ? window.location.origin
       : "https://vaultbubbles.fly.dev";
 
     // -------- AUTH HANDLING --------

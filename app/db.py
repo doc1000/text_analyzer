@@ -15,7 +15,9 @@ DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+psycopg2://", 1)
 if "postgresql://" in DATABASE_URL and "+psycopg2" not in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-engine = create_engine(DATABASE_URL)
+# pool_pre_ping: test each pooled connection before use, so a Postgres restart (e.g. Docker
+# restarting) does not hand the next request a dead connection and a 500.
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def ensure_schemas():
     # Use AUTOCOMMIT so a failed extension install doesn't poison the transaction

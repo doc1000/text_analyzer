@@ -1099,9 +1099,10 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <script>
-    // Auto-detect local vs cloud
+    // Auto-detect local vs cloud. Locally, call the API on the same origin the page came from:
+    // a page opened as 127.0.0.1 calling localhost is cross-origin and its calls fail (CORS).
     const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-      ? "http://localhost:8000"
+      ? window.location.origin
       : "https://vaultbubbles.fly.dev";
 
     // -------- AUTH HANDLING --------
@@ -1630,10 +1631,11 @@
       const vaultParam = currentVaultId ? `&vault_id=${encodeURIComponent(currentVaultId)}` : "";
       const viewSel = document.getElementById("viewSelect");
       const sourceSel = document.getElementById("sourceSelect");
-      const view = viewSel ? viewSel.value : "topics";
+      // viewMode, not view: "view" is the page-wide zoom window assigned below
+      const viewMode = viewSel ? viewSel.value : "topics";
       const srcFilter = sourceSel ? sourceSel.value : "all";
-      if (sourceSel) sourceSel.style.display = view === "projects" ? "none" : "";
-      const viewParam = `&view=${encodeURIComponent(view)}` + (view === "topics" && srcFilter !== "all" ? `&sources=${encodeURIComponent(srcFilter)}` : "");
+      if (sourceSel) sourceSel.style.display = viewMode === "projects" ? "none" : "";
+      const viewParam = `&view=${encodeURIComponent(viewMode)}` + (viewMode === "topics" && srcFilter !== "all" ? `&sources=${encodeURIComponent(srcFilter)}` : "");
       const res = await authFetch(`${API_BASE}/topics/hierarchy?days=${days}${vaultParam}${viewParam}`);
       const data = await res.json();
       if (mySeq !== renderSeq) return;  // a newer render (e.g. the saved vault after sign-in) took over
